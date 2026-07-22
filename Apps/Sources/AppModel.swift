@@ -57,6 +57,7 @@ final class AppModel {
     private var socketTask: Task<Void, Never>?
 
     init() {
+        NotificationManager.shared.activate()
         if let saved = UserDefaults.standard.string(forKey: "serverURL"),
            let url = URL(string: saved) {
             api.baseURL = url
@@ -138,6 +139,10 @@ final class AppModel {
 
     func refreshBuddies() async throws {
         buddies = try await api.buddies()
+        // Contextual, never at launch (spec §7): ask only once buddies exist.
+        if !buddies.isEmpty {
+            NotificationManager.shared.requestPermissionIfNeeded()
+        }
     }
 
     /// Ascending by the requester's open-request count, so people who
@@ -320,6 +325,10 @@ final class AppModel {
             presences[userID] = presence
             let hasConversation = !(transcripts[userID] ?? []).isEmpty
                 || activeConversations.contains(userID)
+            if let handle = buddy(withID: userID)?.user.handle, wasOffline,
+               presence.state != .offline {
+                NotificationManager.shared.buddySignedOn(userID, handle: handle)
+            }
             if let handle = buddy(withID: userID)?.user.handle, hasConversation {
                 let nowOffline = presence.state == .offline
                 if wasOffline != nowOffline {
