@@ -55,17 +55,28 @@ struct ConversationView: View {
     }
 
     private var transcript: some View {
-        let transcript = model.messages[peerID] ?? []
+        let transcript = model.transcripts[peerID] ?? []
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(transcript.enumerated()), id: \.element.id) { index, message in
-                        MessageRow(
-                            message: message,
-                            isMine: message.senderID == model.currentUser?.id,
-                            recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
-                        )
-                        .id(message.id)
+                    ForEach(Array(transcript.enumerated()), id: \.element.id) { index, item in
+                        Group {
+                            switch item {
+                            case .message(let message):
+                                MessageRow(
+                                    message: message,
+                                    isMine: message.senderID == model.currentUser?.id,
+                                    recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
+                                )
+                            case .notice(_, let text):
+                                Text(text)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.vertical, 8)
+                            }
+                        }
+                        .id(item.id)
                     }
                 }
                 .padding(12)

@@ -10,9 +10,23 @@ final class AppModel {
     var presences: [UUID: Presence] = [:]
     var machine = PresenceStateMachine()
 
+    /// A transcript mixes real messages with centered system notices
+    /// (away-status changes), iMessage-group-event style.
+    enum TranscriptItem: Identifiable, Hashable {
+        case message(ChatMessage)
+        case notice(id: UUID, text: String)
+
+        var id: UUID {
+            switch self {
+            case .message(let message): message.id
+            case .notice(let id, _): id
+            }
+        }
+    }
+
     /// Transcripts keyed by peer user ID, session-scoped: cleared when a new
     /// session starts after the old one was archived.
-    var messages: [UUID: [ChatMessage]] = [:]
+    var transcripts: [UUID: [TranscriptItem]] = [:]
     /// Peers whose session ended (either side signed off) — transcript is
     /// showing archived state until the next message starts a fresh session.
     var endedConversations: Set<UUID> = []
@@ -97,7 +111,7 @@ final class AppModel {
         api.token = nil
         buddies = []
         presences = [:]
-        messages = [:]
+        transcripts = [:]
         endedConversations = []
         unreadPeers = []
         UserDefaults.standard.removeObject(forKey: "authToken")
@@ -155,7 +169,7 @@ final class AppModel {
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
-        endedConversations.formUnion(messages.keys)
+        endedConversations.formUnion(transcripts.keys)
         typingUntil = [:]
     }
 
@@ -190,7 +204,7 @@ final class AppModel {
 
     private func startFreshSessionIfEnded(with peerID: UUID) {
         if endedConversations.remove(peerID) != nil {
-            messages[peerID] = []
+            transcripts[peerID] = []
         }
     }
 
@@ -265,8 +279,15 @@ final class AppModel {
                 UUID(uuidString: key).map { ($0, value) }
             })
         case .presence(let userID, let presence):
-            let wasOffline = (presences[userID]?.state ?? .offline) == .offline
+            let previous = presences[userID]
+            let wasOffline = (previous?.state ?? .offline) == .offline
             presences[userID] = presence
+            if let away = presence.awayMessage, away != previous?.awayMessage,
+               let handle = buddy(withID: userID)?.user.handle,
+               !(transcripts[userID] ?? []).isEmpty || activeConversations.contains(userID) {
+                transcripts[userID, default: []].append(
+                    .notice(id: UUID(), text: "\(handle) is away: \"\(away)\""))
+            }
             // Presence for someone not yet an accepted buddy means the list
             // changed server-side (e.g. our request was just accepted).
             if !buddies.contains(where: { $0.user.id == userID && $0.status == .accepted }) {
@@ -281,7 +302,7 @@ final class AppModel {
             let peerID = message.senderID
             sessionPeers[message.sessionID] = peerID
             startFreshSessionIfEnded(with: peerID)
-            messages[peerID, default: []].append(message)
+            transcripts[peerID, default: []].append(.message(message))
             typingUntil[peerID] = nil
             if !activeConversations.contains(peerID) {
                 unreadPeers.insert(peerID)
@@ -290,7 +311,7 @@ final class AppModel {
         case .messageSent(let clientMessageID, let message):
             if let peerID = pendingSends.removeValue(forKey: clientMessageID) {
                 sessionPeers[message.sessionID] = peerID
-                messages[peerID, default: []].append(message)
+                transcripts[peerID, default: []].append(.message(message))
                 SoundPlayer.play(.messageSent)
             }
         case .typing(let userID):
