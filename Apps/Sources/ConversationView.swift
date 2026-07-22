@@ -78,9 +78,9 @@ struct ConversationView: View {
                         }
                         .id(item.id)
                         .modifier(PopInEffect(
-                            // Only genuinely-new items pop; older ones scrolling
-                            // back into view render statically.
-                            enabled: model.isNewlyAppended(item.id),
+                            // Only genuinely-new messages pop; notices appear
+                            // immediately and older items render statically.
+                            enabled: popInEnabled(item),
                             anchor: anchor(for: item)
                         ))
                     }
@@ -111,6 +111,11 @@ struct ConversationView: View {
     private static func recencyFraction(index: Int, count: Int) -> Double {
         let distanceFromEnd = Double(count - 1 - index)
         return max(0, 1 - distanceFromEnd / 25)
+    }
+
+    private func popInEnabled(_ item: AppModel.TranscriptItem) -> Bool {
+        if case .message = item { return model.isNewlyAppended(item.id) }
+        return false
     }
 
     private func anchor(for item: AppModel.TranscriptItem) -> UnitPoint {
