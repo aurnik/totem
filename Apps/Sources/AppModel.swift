@@ -191,6 +191,18 @@ final class AppModel {
         }
     }
 
+    /// Termination path: mark signed off and hand the socket to the caller,
+    /// which flushes the sign-off frame outside the main actor while the
+    /// process winds down. UI cleanup is skipped — the process is dying.
+    func detachSocketForTermination() -> SocketClient? {
+        guard isSignedOn else { return nil }
+        machine.handle(.signOff(at: Date()))
+        socketTask?.cancel()
+        let detached = socket
+        socket = nil
+        return detached
+    }
+
     func conversationOpened(_ peerID: UUID) {
         activeConversations.insert(peerID)
         unreadPeers.remove(peerID)

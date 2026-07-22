@@ -1,10 +1,63 @@
 import SwiftUI
 import TotemKit
 
+#if os(macOS)
+/// Quitting signs off (spec §7): termination waits for the sign-off frame so
+/// buddies see the door close immediately instead of after the 90s timeout.
+@MainActor
+final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    static weak var model: AppModel?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let socket = Self.model?.detachSocketForTermination() else { return .terminateNow }
+        Task.detached {
+            await socket.close()
+            await MainActor.run { sender.reply(toApplicationShouldTerminate: true) }
+        }
+        return .terminateLater
+    }
+}
+#else
+/// Best-effort immediate sign-off when the app is killed while running.
+/// (No code runs when an already-suspended app is swiped away — the server's
+/// liveness sweep covers that case.)
+final class PhoneAppDelegate: NSObject, UIApplicationDelegate {
+    static weak var model: AppModel?
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        let socket = MainActor.assumeIsolated { Self.model?.detachSocketForTermination() }
+        guard let socket else { return }
+        // The socket actor runs off the main thread, so a short main-thread
+        // wait lets the sign-off frame flush before the process dies.
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached {
+            await socket.close()
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 1.5)
+    }
+}
+#endif
+
 @main
 struct TotemApp: App {
-    @State private var model = AppModel()
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
+    #else
+    @UIApplicationDelegateAdaptor(PhoneAppDelegate.self) private var appDelegate
+    #endif
+    @State private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let model = AppModel()
+        _model = State(initialValue: model)
+        #if os(macOS)
+        MacAppDelegate.model = model
+        #else
+        PhoneAppDelegate.model = model
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {

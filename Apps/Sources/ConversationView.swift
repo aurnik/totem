@@ -64,6 +64,10 @@ struct ConversationView: View {
         }
     }
 
+    private var canSend: Bool {
+        !draft.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
@@ -74,6 +78,36 @@ struct ConversationView: View {
                         .padding(.horizontal, 12)
                 }
             }
+            #if os(iOS)
+            HStack(alignment: .bottom, spacing: 0) {
+                TextField("Message", text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .padding(.leading, 14)
+                    .padding(.trailing, 6)
+                    .padding(.vertical, 8)
+                    .onChange(of: draft) { _, newValue in
+                        if !newValue.isEmpty { model.sendTyping(to: peerID) }
+                    }
+                    .onSubmit(send)
+                Button(action: send) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 29))
+                        .foregroundStyle(Color.white, canSend ? Color.blue : Color(.systemGray3))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .padding(.trailing, 4)
+                .padding(.bottom, 4)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 21)
+                    .fill(Color(.systemBackground))
+                    .strokeBorder(Color(.systemGray4), lineWidth: 1)
+            )
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+            #else
             HStack {
                 TextField("Message", text: $draft)
                     .textFieldStyle(.roundedBorder)
@@ -83,9 +117,10 @@ struct ConversationView: View {
                     .onSubmit(send)
                 Button("Send", action: send)
                     .buttonStyle(.borderedProminent)
-                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!canSend)
             }
             .padding(12)
+            #endif
         }
     }
 
