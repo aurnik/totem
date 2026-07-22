@@ -13,6 +13,19 @@ struct NewChatSheet: View {
     @State private var selected: Set<UUID> = []
     @State private var busy = false
     @State private var errorMessage: String?
+    @State private var statusMessage: String?
+
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    /// Show "Add friend" whenever the typed text isn't an existing friend's
+    /// exact handle — no separate add-buddy flow.
+    private var showsAddFriendRow: Bool {
+        trimmedQuery.count >= 3 && !model.acceptedBuddies.contains {
+            $0.user.handle.lowercased() == trimmedQuery
+        }
+    }
 
     private var results: [Buddy] {
         let friends = model.acceptedBuddies
@@ -49,21 +62,39 @@ struct NewChatSheet: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
-            List(results) { buddy in
-                Button {
-                    toggle(buddy.user.id)
-                } label: {
-                    HStack {
-                        Image(systemName: selected.contains(buddy.user.id)
-                              ? "checkmark.square.fill" : "square")
-                            .foregroundStyle(selected.contains(buddy.user.id) ? Color.accentColor : .secondary)
-                        Text(buddy.user.handle)
-                        Spacer()
-                        StateDot(state: model.presence(of: buddy).state)
+            List {
+                if showsAddFriendRow {
+                    Button {
+                        addFriend()
+                    } label: {
+                        HStack {
+                            Image(systemName: "person.badge.plus")
+                                .foregroundStyle(Color.accentColor)
+                            Text("Add friend: \(trimmedQuery)")
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                ForEach(results) { buddy in
+                    Button {
+                        tapped(buddy.user.id)
+                    } label: {
+                        HStack {
+                            // Checkbox tap builds a group; a plain row tap with
+                            // nothing selected opens the chat in one step.
+                            Image(systemName: selected.contains(buddy.user.id)
+                                  ? "checkmark.square.fill" : "square")
+                                .foregroundStyle(selected.contains(buddy.user.id) ? Color.accentColor : .secondary)
+                                .onTapGesture { toggle(buddy.user.id) }
+                            Text(buddy.user.handle)
+                            Spacer()
+                            StateDot(state: model.presence(of: buddy).state)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .listStyle(.plain)
             .frame(minHeight: 180)
@@ -71,6 +102,11 @@ struct NewChatSheet: View {
                 Text(errorMessage)
                     .font(.footnote)
                     .foregroundStyle(.red)
+            }
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             HStack {
                 Button("Cancel") { dismiss() }
@@ -88,12 +124,39 @@ struct NewChatSheet: View {
         selected.count > 1 ? "Start Group Chat (\(selected.count))" : "Start Chat"
     }
 
+    /// Row tap: with an in-progress group selection it toggles membership;
+    /// otherwise it opens the 1:1 chat immediately — fewest taps to a chat.
+    private func tapped(_ id: UUID) {
+        if selected.isEmpty {
+            dismiss()
+            onOpen(id)
+        } else {
+            toggle(id)
+        }
+    }
+
     private func toggle(_ id: UUID) {
         if selected.contains(id) {
             selected.remove(id)
         } else {
             selected.insert(id)
             query = ""
+        }
+    }
+
+    private func addFriend() {
+        let handle = trimmedQuery
+        errorMessage = nil
+        Task {
+            do {
+                try await model.addBuddy(handle: handle)
+                statusMessage = "Request sent to \(handle)."
+                query = ""
+            } catch URLError.resourceUnavailable {
+                errorMessage = "No user with the handle \"\(handle)\"."
+            } catch {
+                errorMessage = "Couldn't reach the server."
+            }
         }
     }
 

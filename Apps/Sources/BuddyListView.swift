@@ -9,7 +9,6 @@ struct BuddyListView: View {
     @Environment(\.openWindow) private var openWindow
     #endif
     @State private var showingAwaySheet = false
-    @State private var showingAddSheet = false
     @State private var showingNewChat = false
     @State private var showingOffline = false
     @State private var path = NavigationPath()
@@ -48,12 +47,7 @@ struct BuddyListView: View {
             }
             .navigationTitle("Friends")
             .toolbar {
-                Menu {
-                    Button("New chat with…") { showingNewChat = true }
-                    Button("Add Buddy…") { showingAddSheet = true }
-                } label: {
-                    Label("New", systemImage: "plus")
-                }
+                Button("New Chat", systemImage: "plus") { showingNewChat = true }
                 if model.isSignedOn {
                     Button("Away…") { showingAwaySheet = true }
                     Button("Sign Off") { model.signOff() }
@@ -61,9 +55,6 @@ struct BuddyListView: View {
             }
             .sheet(isPresented: $showingAwaySheet) {
                 AwayMessageSheet()
-            }
-            .sheet(isPresented: $showingAddSheet) {
-                AddBuddySheet()
             }
             .sheet(isPresented: $showingNewChat) {
                 NewChatSheet { conversationID in
@@ -253,53 +244,6 @@ struct StateDot: View {
         Circle()
             .fill(color)
             .frame(width: 10, height: 10)
-    }
-}
-
-struct AddBuddySheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @State private var handle = ""
-    @State private var errorMessage: String?
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("Add Buddy")
-                .font(.headline)
-            Text("Buddies are found by exact handle. They'll need to accept before you see each other.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            TextField("Handle", text: $handle)
-                .textFieldStyle(.roundedBorder)
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                #endif
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
-            HStack {
-                Button("Cancel") { dismiss() }
-                Spacer()
-                Button("Send Request") {
-                    Task {
-                        do {
-                            try await model.addBuddy(handle: handle)
-                            dismiss()
-                        } catch URLError.resourceUnavailable {
-                            errorMessage = "No user with that handle."
-                        } catch {
-                            errorMessage = "Couldn't reach the server."
-                        }
-                    }
-                }
-                .disabled(handle.count < 3)
-            }
-        }
-        .padding()
-        .frame(minWidth: 300)
     }
 }
 
