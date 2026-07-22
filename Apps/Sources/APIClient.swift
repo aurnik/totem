@@ -6,12 +6,14 @@ struct APIClient {
     /// Simulator and macOS reach the dev server on loopback; a physical phone
     /// needs the Mac's Bonjour hostname (stable across DHCP renewals).
     /// 127.0.0.1 rather than localhost: the server binds IPv4 only, and
-    /// localhost resolves to ::1 first.
+    /// localhost resolves to ::1 first. Port 9047 rather than 8080: local
+    /// proxy/filter software inspects the well-known http-alt port and
+    /// corrupts inbound WebSocket frames.
     static var defaultServerURL: String {
         #if os(iOS) && !targetEnvironment(simulator)
-        "http://Aurniks-MacBook-Pro.local:8080"
+        "http://Aurniks-MacBook-Pro.local:9047"
         #else
-        "http://127.0.0.1:8080"
+        "http://127.0.0.1:9047"
         #endif
     }
 

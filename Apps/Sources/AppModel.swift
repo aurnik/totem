@@ -157,6 +157,8 @@ final class AppModel {
         case .message:
             // Chat UI is build-sequence step 4 (spec §9); presence dogfood comes first.
             SoundPlayer.play(.messageReceived)
+        case .buddyRequest:
+            Task { try? await refreshBuddies() }
         case .messageSent, .typing, .sessionClosed:
             break
         case .error(let message):

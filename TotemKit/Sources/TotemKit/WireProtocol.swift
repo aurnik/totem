@@ -21,6 +21,10 @@ public enum ServerFrame: Codable, Sendable {
     case messageSent(clientMessageID: UUID, message: ChatMessage)
     case typing(userID: UUID)
     case sessionClosed(sessionID: UUID)
+    /// A buddy request arrived (or one of yours was accepted — paired with a
+    /// `presence` push). Clients refetch the buddy list rather than patching
+    /// local state.
+    case buddyRequest(from: User)
     case error(String)
 }
 

@@ -69,6 +69,7 @@ struct BuddyController: RouteCollection {
         guard existing == nil else { throw Abort(.conflict, reason: "Request already exists.") }
 
         try await BuddyModel(userID: userID, buddyID: targetID, status: .pending).save(on: req.db)
+        await gateway.buddyRequestReceived(by: targetID, from: user.dto)
         return .created
     }
 

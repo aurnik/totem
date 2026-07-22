@@ -32,6 +32,12 @@ struct GatewayController {
         await signOn(userID: userID)
     }
 
+    /// A new request pushes to the target's socket so no client ever needs a
+    /// manual refresh to see it.
+    func buddyRequestReceived(by targetID: UUID, from user: User) async {
+        await connections.send(.buddyRequest(from: user), to: targetID)
+    }
+
     /// After a mutual accept, each party's welcome snapshot predates the
     /// buddyship — push each one's current presence to the other.
     func buddyshipFormed(_ a: UUID, _ b: UUID) async {
