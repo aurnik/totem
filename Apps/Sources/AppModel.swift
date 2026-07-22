@@ -282,11 +282,18 @@ final class AppModel {
             let previous = presences[userID]
             let wasOffline = (previous?.state ?? .offline) == .offline
             presences[userID] = presence
-            if let away = presence.awayMessage, away != previous?.awayMessage,
-               let handle = buddy(withID: userID)?.user.handle,
-               !(transcripts[userID] ?? []).isEmpty || activeConversations.contains(userID) {
-                transcripts[userID, default: []].append(
-                    .notice(id: UUID(), text: "\(handle) is away: \"\(away)\""))
+            let hasConversation = !(transcripts[userID] ?? []).isEmpty
+                || activeConversations.contains(userID)
+            if let handle = buddy(withID: userID)?.user.handle, hasConversation {
+                let nowOffline = presence.state == .offline
+                if wasOffline != nowOffline {
+                    transcripts[userID, default: []].append(
+                        .notice(id: UUID(), text: "\(handle) signed \(nowOffline ? "off" : "on")"))
+                }
+                if let away = presence.awayMessage, away != previous?.awayMessage {
+                    transcripts[userID, default: []].append(
+                        .notice(id: UUID(), text: "\(handle) is away: \"\(away)\""))
+                }
             }
             // Presence for someone not yet an accepted buddy means the list
             // changed server-side (e.g. our request was just accepted).
