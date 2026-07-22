@@ -1,0 +1,70 @@
+import Foundation
+import TotemKit
+
+/// Stateless HTTP: auth and buddy management (spec §4). The live channel is SocketClient.
+struct APIClient {
+    var baseURL = URL(string: "http://localhost:8080")!
+    var token: String?
+
+    struct LoginResponse: Codable {
+        let token: String
+        let user: User
+    }
+
+    func devLogin(handle: String) async throws -> LoginResponse {
+        try await post("auth/dev", body: ["handle": handle])
+    }
+
+    func buddies() async throws -> [Buddy] {
+        try await get("buddies")
+    }
+
+    func sendBuddyRequest(handle: String) async throws {
+        let _: EmptyResponse = try await post("buddies/requests", body: ["handle": handle])
+    }
+
+    func acceptBuddyRequest(id: UUID) async throws {
+        let _: EmptyResponse = try await post("buddies/requests/\(id.uuidString)/accept", body: [:])
+    }
+
+    var socketURL: URL {
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.scheme = components.scheme == "https" ? "wss" : "ws"
+        components.path = "/ws"
+        return components.url!
+    }
+
+    // MARK: - Plumbing
+
+    private struct EmptyResponse: Codable {}
+
+    private func request(_ path: String, method: String, body: [String: String]?) throws -> URLRequest {
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = method
+        if let token {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(body)
+        }
+        return request
+    }
+
+    private func run<T: Decodable>(_ request: URLRequest) async throws -> T {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        if T.self == EmptyResponse.self { return EmptyResponse() as! T }
+        return try WireCoder.decoder().decode(T.self, from: data)
+    }
+
+    private func get<T: Decodable>(_ path: String) async throws -> T {
+        try await run(request(path, method: "GET", body: nil))
+    }
+
+    private func post<T: Decodable>(_ path: String, body: [String: String]) async throws -> T {
+        try await run(request(path, method: "POST", body: body))
+    }
+}

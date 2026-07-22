@@ -1,0 +1,37 @@
+name: Totem
+options:
+  bundleIdPrefix: com.aurnik.totem
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+packages:
+  TotemKit:
+    path: ../TotemKit
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+targets:
+  Totem-iOS:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: TotemKit
+    info:
+      path: Generated/Info-iOS.plist
+      properties:
+        UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+  Totem-macOS:
+    type: application
+    platform: macOS
+    sources: [Sources]
+    dependencies:
+      - package: TotemKit
+    info:
+      path: Generated/Info-macOS.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        LSUIElement: false
