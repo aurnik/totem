@@ -120,6 +120,10 @@ struct NewChatSheet: View {
                 }
             }
         }
+        .onChange(of: query) {
+            errorMessage = nil
+            statusMessage = nil
+        }
     }
 
     private func friendRow(_ buddy: Buddy) -> some View {
@@ -129,10 +133,10 @@ struct NewChatSheet: View {
             toggle(buddy.user.id)
         } label: {
             HStack {
+                StateDot(state: model.presence(of: buddy).state)
                 Text(buddy.user.handle)
                     .foregroundStyle(.primary)
                 Spacer()
-                StateDot(state: model.presence(of: buddy).state)
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.5))
