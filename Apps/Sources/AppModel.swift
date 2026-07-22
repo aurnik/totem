@@ -16,6 +16,10 @@ final class AppModel {
     /// Peers whose session ended (either side signed off) — transcript is
     /// showing archived state until the next message starts a fresh session.
     var endedConversations: Set<UUID> = []
+    /// Peers with messages not yet seen. Local-only — never sent over the
+    /// wire; the spec's no-read-receipts rule is about the other party.
+    var unreadPeers: Set<UUID> = []
+    private var activeConversations: Set<UUID> = []
     private var typingUntil: [UUID: Date] = [:]
     private var pendingSends: [UUID: UUID] = [:]
     private var sessionPeers: [UUID: UUID] = [:]
@@ -24,6 +28,28 @@ final class AppModel {
     private var api = APIClient()
     private var socket: SocketClient?
     private var socketTask: Task<Void, Never>?
+
+    init() {
+        if let saved = UserDefaults.standard.string(forKey: "serverURL"),
+           let url = URL(string: saved) {
+            api.baseURL = url
+        }
+        if let token = UserDefaults.standard.string(forKey: "authToken"),
+           let data = UserDefaults.standard.data(forKey: "currentUser"),
+           let user = try? WireCoder.decoder().decode(User.self, from: data) {
+            api.token = token
+            currentUser = user
+            Task {
+                do {
+                    try await refreshBuddies()
+                } catch URLError.userAuthenticationRequired {
+                    logOut()
+                } catch {
+                    // Offline or server down; keep the session and let sign-on retry.
+                }
+            }
+        }
+    }
 
     var isSignedOn: Bool { machine.isSignedOn }
     var selfState: PresenceState { machine.displayState }
@@ -49,7 +75,30 @@ final class AppModel {
         let response = try await api.devLogin(handle: handle)
         api.token = response.token
         currentUser = response.user
+
+        let defaults = UserDefaults.standard
+        defaults.set(response.token, forKey: "authToken")
+        defaults.set(try? WireCoder.encoder().encode(response.user), forKey: "currentUser")
+        defaults.set(serverURL, forKey: "serverURL")
+        defaults.set(handle, forKey: "lastHandle")
+
         try await refreshBuddies()
+        // Signing in is already a deliberate act — flow straight into presence.
+        // The separate Sign On button is for subsequent launches.
+        signOn()
+    }
+
+    func logOut() {
+        if isSignedOn { signOff() }
+        currentUser = nil
+        api.token = nil
+        buddies = []
+        presences = [:]
+        messages = [:]
+        endedConversations = []
+        unreadPeers = []
+        UserDefaults.standard.removeObject(forKey: "authToken")
+        UserDefaults.standard.removeObject(forKey: "currentUser")
     }
 
     func refreshBuddies() async throws {
@@ -142,6 +191,15 @@ final class AppModel {
         }
     }
 
+    func conversationOpened(_ peerID: UUID) {
+        activeConversations.insert(peerID)
+        unreadPeers.remove(peerID)
+    }
+
+    func conversationClosed(_ peerID: UUID) {
+        activeConversations.remove(peerID)
+    }
+
     func setAwayMessage(_ message: String) {
         apply(machine.handle(.setAwayMessage(message, at: Date())))
     }
@@ -210,6 +268,9 @@ final class AppModel {
             startFreshSessionIfEnded(with: peerID)
             messages[peerID, default: []].append(message)
             typingUntil[peerID] = nil
+            if !activeConversations.contains(peerID) {
+                unreadPeers.insert(peerID)
+            }
             SoundPlayer.play(.messageReceived)
         case .messageSent(let clientMessageID, let message):
             if let peerID = pendingSends.removeValue(forKey: clientMessageID) {

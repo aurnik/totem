@@ -29,6 +29,8 @@ struct ConversationView: View {
             composer
         }
         .navigationTitle(handle)
+        .onAppear { model.conversationOpened(peerID) }
+        .onDisappear { model.conversationClosed(peerID) }
         .onChange(of: model.isSignedOn) { _, signedOn in
             if !signedOn { dismiss() }
         }

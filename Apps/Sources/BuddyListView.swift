@@ -71,6 +71,10 @@ struct BuddyListView: View {
                 .foregroundStyle(.secondary)
             Button("Sign On") { model.signOn() }
                 .buttonStyle(.borderedProminent)
+            Button("Log out of \(model.currentUser?.handle ?? "")") { model.logOut() }
+                .font(.footnote)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding()
@@ -153,7 +157,14 @@ struct BuddyRow: View {
         return HStack {
             StateDot(state: presence.state)
             VStack(alignment: .leading) {
-                Text(buddy.user.handle)
+                HStack(spacing: 6) {
+                    Text(buddy.user.handle)
+                    if model.unreadPeers.contains(buddy.user.id) {
+                        Circle()
+                            .fill(.blue)
+                            .frame(width: 8, height: 8)
+                    }
+                }
                 if let away = presence.awayMessage {
                     Text(away)
                         .font(.footnote)

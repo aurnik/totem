@@ -3,6 +3,7 @@ import SwiftUI
 struct SignInView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("serverURL") private var serverURL = APIClient.defaultServerURL
+    @AppStorage("lastHandle") private var lastHandle = ""
     @State private var handle = ""
     @State private var errorMessage: String?
     @State private var busy = false
@@ -38,6 +39,9 @@ struct SignInView: View {
             }
         }
         .padding()
+        .onAppear {
+            if handle.isEmpty { handle = lastHandle }
+        }
     }
 
     private func signIn() async {

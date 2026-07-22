@@ -68,6 +68,9 @@ struct APIClient {
     private func run<T: Decodable>(_ request: URLRequest) async throws -> T {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            if (response as? HTTPURLResponse)?.statusCode == 401 {
+                throw URLError(.userAuthenticationRequired)
+            }
             throw URLError(.badServerResponse)
         }
         if T.self == EmptyResponse.self { return EmptyResponse() as! T }
