@@ -139,9 +139,25 @@ struct BuddyRow: View {
     #endif
     let buddy: Buddy
 
+    private var unread: Bool {
+        model.unreadPeers.contains(buddy.user.id)
+    }
+
     var body: some View {
         #if os(iOS)
-        NavigationLink(value: buddy.user.id) { label }
+        // Custom chevron so it can darken with unread state — the system
+        // NavigationLink accessory color isn't styleable.
+        ZStack {
+            NavigationLink(value: buddy.user.id) { EmptyView() }
+                .opacity(0)
+            HStack {
+                label
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(unread ? Color.primary : Color(.tertiaryLabel))
+            }
+        }
         #else
         Button {
             openWindow(value: buddy.user.id)
@@ -158,7 +174,7 @@ struct BuddyRow: View {
             StateDot(state: presence.state)
             VStack(alignment: .leading) {
                 Text(buddy.user.handle)
-                    .fontWeight(model.unreadPeers.contains(buddy.user.id) ? .bold : .regular)
+                    .fontWeight(unread ? .bold : .regular)
                 if let away = presence.awayMessage {
                     Text(away)
                         .font(.footnote)
