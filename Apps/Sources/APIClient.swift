@@ -3,13 +3,15 @@ import TotemKit
 
 /// Stateless HTTP: auth and buddy management (spec §4). The live channel is SocketClient.
 struct APIClient {
-    /// Simulator and macOS reach the dev server on localhost; a physical phone
+    /// Simulator and macOS reach the dev server on loopback; a physical phone
     /// needs the Mac's Bonjour hostname (stable across DHCP renewals).
+    /// 127.0.0.1 rather than localhost: the server binds IPv4 only, and
+    /// localhost resolves to ::1 first.
     static var defaultServerURL: String {
         #if os(iOS) && !targetEnvironment(simulator)
         "http://Aurniks-MacBook-Pro.local:8080"
         #else
-        "http://localhost:8080"
+        "http://127.0.0.1:8080"
         #endif
     }
 
