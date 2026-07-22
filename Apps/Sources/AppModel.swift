@@ -144,6 +144,11 @@ final class AppModel {
         case .presence(let userID, let presence):
             let wasOffline = (presences[userID]?.state ?? .offline) == .offline
             presences[userID] = presence
+            // Presence for someone not yet an accepted buddy means the list
+            // changed server-side (e.g. our request was just accepted).
+            if !buddies.contains(where: { $0.user.id == userID && $0.status == .accepted }) {
+                Task { try? await refreshBuddies() }
+            }
             if wasOffline && presence.state != .offline {
                 SoundPlayer.play(.buddyIn)
             } else if !wasOffline && presence.state == .offline {

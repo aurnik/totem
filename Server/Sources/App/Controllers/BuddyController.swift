@@ -3,6 +3,8 @@ import TotemKit
 import Vapor
 
 struct BuddyController: RouteCollection {
+    let gateway: GatewayController
+
     func boot(routes: RoutesBuilder) throws {
         let buddies = routes.grouped("buddies")
         buddies.get(use: list)
@@ -83,6 +85,7 @@ struct BuddyController: RouteCollection {
         row.status = .accepted
         try await row.save(on: req.db)
         try await BuddyModel(userID: userID, buddyID: row.$user.id, status: .accepted).save(on: req.db)
+        await gateway.buddyshipFormed(userID, row.$user.id)
         return .ok
     }
 

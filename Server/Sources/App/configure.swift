@@ -15,7 +15,7 @@ func configure(_ app: Application) async throws {
     let gateway = GatewayController(app: app, connections: connections)
 
     let authed = app.grouped(TokenAuthenticator(), UserModel.guardMiddleware())
-    try authed.register(collection: BuddyController())
+    try authed.register(collection: BuddyController(gateway: gateway))
     authed.webSocket("ws") { req, ws in
         await gateway.handleUpgrade(req: req, ws: ws)
     }

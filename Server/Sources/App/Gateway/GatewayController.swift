@@ -32,6 +32,17 @@ struct GatewayController {
         await signOn(userID: userID)
     }
 
+    /// After a mutual accept, each party's welcome snapshot predates the
+    /// buddyship — push each one's current presence to the other.
+    func buddyshipFormed(_ a: UUID, _ b: UUID) async {
+        do {
+            await connections.send(.presence(userID: b, presence: try await presence.get(for: b)), to: a)
+            await connections.send(.presence(userID: a, presence: try await presence.get(for: a)), to: b)
+        } catch {
+            app.logger.report(error: error)
+        }
+    }
+
     // MARK: - Lifecycle
 
     private func signOn(userID: UUID) async {
