@@ -10,6 +10,17 @@ public enum ClientFrame: Codable, Sendable {
     /// Message into an existing (group) session the sender belongs to.
     case sendSessionMessage(sessionID: UUID, body: String, clientMessageID: UUID)
     case typing(recipientID: UUID)
+    /// Live mic audio: raw little-endian Int16 mono PCM at
+    /// `AudioWire.sampleRate`, ~100ms per chunk. Relay-only, best-effort —
+    /// never stored, never acked, silently dropped for offline recipients.
+    case sendAudio(recipientID: UUID, chunk: Data)
+    case sendSessionAudio(sessionID: UUID, chunk: Data)
+}
+
+public enum AudioWire {
+    public static let sampleRate: Double = 16_000
+    /// ~1s of PCM — anything larger is malformed and dropped by the server.
+    public static let chunkMaxBytes = 32_768
 }
 
 /// A session plus the users in it — what a client needs to render a group chat.
@@ -38,6 +49,10 @@ public enum ServerFrame: Codable, Sendable {
     /// Server ack for a sent message, correlating the client-generated ID.
     case messageSent(clientMessageID: UUID, message: ChatMessage)
     case typing(userID: UUID)
+    /// Live mic audio from a chat participant. `conversationID` is what the
+    /// receiving client keys the chat by: the sender's user ID for 1:1, the
+    /// session ID for groups.
+    case audio(conversationID: UUID, senderID: UUID, chunk: Data)
     case sessionClosed(sessionID: UUID)
     /// A buddy request arrived (or one of yours was accepted — paired with a
     /// `presence` push). Clients refetch the buddy list rather than patching

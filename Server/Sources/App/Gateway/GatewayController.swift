@@ -159,6 +159,28 @@ struct GatewayController {
                 if try await areAcceptedBuddies(userID, recipientID) {
                     await connections.send(.typing(userID: userID), to: recipientID)
                 }
+
+            // Live audio is best-effort relay: no ack, no error frames, no
+            // ping-verify (chunks arrive ~10/s), nothing stored. A recipient
+            // without the chat open just drops the chunks client-side.
+            case .sendAudio(let recipientID, let chunk):
+                guard chunk.count <= AudioWire.chunkMaxBytes,
+                      try await areAcceptedBuddies(userID, recipientID)
+                else { return }
+                await connections.send(
+                    .audio(conversationID: userID, senderID: userID, chunk: chunk),
+                    to: recipientID)
+
+            case .sendSessionAudio(let sessionID, let chunk):
+                guard chunk.count <= AudioWire.chunkMaxBytes,
+                      let session = try await SessionModel.find(sessionID, on: db),
+                      session.includes(userID), session.endedAt == nil
+                else { return }
+                for participant in session.participants where participant != userID {
+                    await connections.send(
+                        .audio(conversationID: sessionID, senderID: userID, chunk: chunk),
+                        to: participant)
+                }
             }
         } catch {
             app.logger.report(error: error)

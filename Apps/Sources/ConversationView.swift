@@ -22,6 +22,16 @@ struct ConversationView: View {
         group == nil && (model.presences[conversationID]?.state ?? .offline) == .offline
     }
 
+    private var micIsLive: Bool {
+        model.liveMicConversation == conversationID
+    }
+
+    private var speakingNames: String? {
+        let speakers = model.speakingUsers[conversationID] ?? []
+        let names = speakers.compactMap { model.handle(of: $0) }.sorted()
+        return names.isEmpty ? nil : names.joined(separator: ", ")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if peerOffline {
@@ -29,24 +39,50 @@ struct ConversationView: View {
             } else if model.endedConversations.contains(conversationID) {
                 banner("Conversation archived. New messages start a fresh session.")
             }
+            if let speakingNames {
+                liveVoiceBanner("\(speakingNames) speaking")
+            } else if micIsLive {
+                liveVoiceBanner("Your mic is live")
+            }
             transcript
             composer
         }
         .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
+            #if os(iOS)
             ToolbarItem(placement: .principal) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
             }
+            #endif
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.toggleMic(in: conversationID)
+                } label: {
+                    Image(systemName: micIsLive ? "mic.fill" : "mic")
+                        .foregroundStyle(micIsLive ? Color.red : Color.accentColor)
+                        .symbolEffect(.pulse, isActive: micIsLive)
+                }
+                .disabled(peerOffline)
+            }
         }
-        #endif
         .onAppear { model.conversationOpened(conversationID) }
         .onDisappear { model.conversationClosed(conversationID) }
         .onChange(of: model.isSignedOn) { _, signedOn in
             if !signedOn { dismiss() }
         }
+    }
+
+    private func liveVoiceBanner(_ text: String) -> some View {
+        Label(text, systemImage: "speaker.wave.2.fill")
+            .font(.footnote)
+            .foregroundStyle(Color.accentColor)
+            .frame(maxWidth: .infinity)
+            .padding(8)
+            .background(Color.accentColor.opacity(0.12))
     }
 
     private func banner(_ text: String) -> some View {

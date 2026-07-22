@@ -25,6 +25,7 @@ targets:
         UILaunchScreen: {}
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        NSMicrophoneUsageDescription: Totem streams your voice live to buddies in an open chat.
   Totem-macOS:
     type: application
     platform: macOS
@@ -37,3 +38,4 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         LSUIElement: false
+        NSMicrophoneUsageDescription: Totem streams your voice live to buddies in an open chat.

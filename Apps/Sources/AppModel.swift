@@ -54,6 +54,16 @@ final class AppModel {
     private var pendingSends: [UUID: UUID] = [:]
     private var sessionPeers: [UUID: UUID] = [:]
     private var lastTypingSentAt: [UUID: Date] = [:]
+    /// Live voice: the conversation the local mic streams into (one at a
+    /// time) and who we currently hear, per conversation. Speakers are
+    /// inferred from chunk arrival and expire after a beat of silence —
+    /// no explicit mic-state frames on the wire.
+    var liveMicConversation: UUID?
+    var speakingUsers: [UUID: Set<UUID>] = [:]
+    private var speakingExpiry: [UUID: Task<Void, Never>] = [:]
+    private var micSendTask: Task<Void, Never>?
+    private var micChunks: AsyncStream<Data>.Continuation?
+    private let audio = AudioStreamer()
 
     private var api = APIClient()
     private var socket: SocketClient?
@@ -204,6 +214,11 @@ final class AppModel {
         typingPeers = []
         typingExpiry.values.forEach { $0.cancel() }
         typingExpiry = [:]
+        stopMic()
+        audio.stopAll()
+        speakingUsers = [:]
+        speakingExpiry.values.forEach { $0.cancel() }
+        speakingExpiry = [:]
     }
 
     // MARK: - Chat
@@ -254,6 +269,59 @@ final class AppModel {
             }
         }
         return nil
+    }
+
+    // MARK: - Live voice
+
+    func toggleMic(in conversationID: UUID) {
+        if liveMicConversation == conversationID {
+            stopMic()
+        } else {
+            startMic(in: conversationID)
+        }
+    }
+
+    private func startMic(in conversationID: UUID) {
+        stopMic()
+        guard let socket else { return }
+        let isGroup = groupSessions[conversationID] != nil
+        // Chunks flow through one stream consumed by one task so sends stay
+        // ordered — racing per-chunk Tasks would garble the audio.
+        let (stream, continuation) = AsyncStream<Data>.makeStream(
+            bufferingPolicy: .bufferingNewest(8))
+        Task {
+            guard await audio.startMic(onChunk: { continuation.yield($0) }) else {
+                continuation.finish()
+                return
+            }
+            liveMicConversation = conversationID
+            micChunks = continuation
+            micSendTask = Task {
+                for await chunk in stream {
+                    let frame: ClientFrame = isGroup
+                        ? .sendSessionAudio(sessionID: conversationID, chunk: chunk)
+                        : .sendAudio(recipientID: conversationID, chunk: chunk)
+                    try? await socket.send(frame)
+                }
+            }
+        }
+    }
+
+    func stopMic() {
+        audio.stopMic()
+        liveMicConversation = nil
+        micChunks?.finish()
+        micChunks = nil
+        micSendTask?.cancel()
+        micSendTask = nil
+    }
+
+    private func silenceConversation(_ conversationID: UUID) {
+        for senderID in speakingUsers.removeValue(forKey: conversationID) ?? [] {
+            audio.stopSpeaker(senderID)
+            speakingExpiry[senderID]?.cancel()
+            speakingExpiry[senderID] = nil
+        }
     }
 
     /// Throttled to one event per 3s per peer (spec §6).
@@ -310,6 +378,9 @@ final class AppModel {
 
     func conversationClosed(_ peerID: UUID) {
         activeConversations.remove(peerID)
+        // Voice is scoped to having the chat open, both directions.
+        if liveMicConversation == peerID { stopMic() }
+        silenceConversation(peerID)
     }
 
     func setAwayMessage(_ message: String) {
@@ -426,15 +497,31 @@ final class AppModel {
                 guard !Task.isCancelled else { return }
                 self?.typingPeers.remove(userID)
             }
+        case .audio(let conversationID, let senderID, let chunk):
+            // Live voice only reaches ears with that chat open.
+            guard activeConversations.contains(conversationID) else { return }
+            audio.play(chunk, from: senderID)
+            speakingUsers[conversationID, default: []].insert(senderID)
+            speakingExpiry[senderID]?.cancel()
+            speakingExpiry[senderID] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1.2))
+                guard !Task.isCancelled else { return }
+                self?.speakingUsers[conversationID]?.remove(senderID)
+                self?.audio.stopSpeaker(senderID)
+            }
         case .sessionClosed(let sessionID):
             // Transcripts live only until the session ends — no history.
             if groupSessions[sessionID] != nil {
                 endedConversations.insert(sessionID)
                 transcripts[sessionID] = []
+                if liveMicConversation == sessionID { stopMic() }
+                silenceConversation(sessionID)
             } else if let peerID = sessionPeers.removeValue(forKey: sessionID) {
                 endedConversations.insert(peerID)
                 transcripts[peerID] = []
                 clearTyping(peerID)
+                if liveMicConversation == peerID { stopMic() }
+                silenceConversation(peerID)
             }
         case .buddyRequest:
             Task { try? await refreshBuddies() }

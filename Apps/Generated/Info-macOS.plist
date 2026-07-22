@@ -25,5 +25,7 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Totem streams your voice live to buddies in an open chat.</string>
 </dict>
 </plist>
