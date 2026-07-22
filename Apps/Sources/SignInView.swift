@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SignInView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage("serverURL") private var serverURL = APIClient.defaultServerURL
     @State private var handle = ""
     @State private var errorMessage: String?
     @State private var busy = false
@@ -21,6 +22,15 @@ struct SignInView: View {
                 Task { await signIn() }
             }
             .disabled(handle.count < 3 || busy)
+            TextField("Server", text: $serverURL)
+                .textFieldStyle(.roundedBorder)
+                .font(.footnote)
+                .frame(maxWidth: 240)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                #endif
             if let errorMessage {
                 Text(errorMessage)
                     .font(.footnote)
@@ -34,7 +44,7 @@ struct SignInView: View {
         busy = true
         defer { busy = false }
         do {
-            try await model.signIn(handle: handle)
+            try await model.signIn(handle: handle, serverURL: serverURL)
         } catch {
             errorMessage = "Couldn't sign in. Is the server running?"
         }

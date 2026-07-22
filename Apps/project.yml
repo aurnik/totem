@@ -10,6 +10,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.10"
+    DEVELOPMENT_TEAM: TKXA365JX2
+    CODE_SIGN_STYLE: Automatic
 targets:
   Totem-iOS:
     type: application

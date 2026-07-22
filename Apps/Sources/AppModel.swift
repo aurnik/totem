@@ -32,7 +32,9 @@ final class AppModel {
 
     // MARK: - Auth
 
-    func signIn(handle: String) async throws {
+    func signIn(handle: String, serverURL: String) async throws {
+        guard let url = URL(string: serverURL) else { throw URLError(.badURL) }
+        api.baseURL = url
         let response = try await api.devLogin(handle: handle)
         api.token = response.token
         currentUser = response.user
