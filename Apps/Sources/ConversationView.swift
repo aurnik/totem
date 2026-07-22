@@ -80,22 +80,19 @@ struct ConversationView: View {
                         .modifier(PopInEffect(
                             // Only genuinely-new items pop; older ones scrolling
                             // back into view render statically.
-                            enabled: index == transcript.count - 1
-                                && Date().timeIntervalSince(item.date) < 3,
+                            enabled: model.isNewlyAppended(item.id),
                             anchor: anchor(for: item)
                         ))
                     }
-                    TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                        if model.isTyping(peerID) {
-                            HStack {
-                                TypingIndicatorBubble()
-                                Spacer()
-                            }
-                            .id("typingIndicator")
-                            .modifier(PopInEffect(enabled: true, anchor: .bottomLeading))
-                            .onAppear {
-                                withAnimation { proxy.scrollTo("typingIndicator", anchor: .bottom) }
-                            }
+                    if model.isTyping(peerID) {
+                        HStack {
+                            TypingIndicatorBubble()
+                            Spacer()
+                        }
+                        .id("typingIndicator")
+                        .modifier(PopInEffect(enabled: true, anchor: .bottomLeading))
+                        .onAppear {
+                            withAnimation { proxy.scrollTo("typingIndicator", anchor: .bottom) }
                         }
                     }
                 }

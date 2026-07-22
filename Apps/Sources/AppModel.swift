@@ -41,7 +41,13 @@ final class AppModel {
     /// wire; the spec's no-read-receipts rule is about the other party.
     var unreadPeers: Set<UUID> = []
     private var activeConversations: Set<UUID> = []
-    private var typingUntil: [UUID: Date] = [:]
+    /// Peers currently typing. Plain observable state (expired by tasks, not
+    /// polled) so views update reliably — offscreen TimelineViews pause on iOS.
+    private var typingPeers: Set<UUID> = []
+    private var typingExpiry: [UUID: Task<Void, Never>] = [:]
+    /// The most recently appended transcript item, stamped with the local
+    /// clock — drives entrance animations without trusting server timestamps.
+    private var lastAppended: (id: UUID, at: Date)?
     private var pendingSends: [UUID: UUID] = [:]
     private var sessionPeers: [UUID: UUID] = [:]
     private var lastTypingSentAt: [UUID: Date] = [:]
@@ -177,7 +183,9 @@ final class AppModel {
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
         endedConversations.formUnion(transcripts.keys)
-        typingUntil = [:]
+        typingPeers = []
+        typingExpiry.values.forEach { $0.cancel() }
+        typingExpiry = [:]
     }
 
     // MARK: - Chat
@@ -206,7 +214,23 @@ final class AppModel {
     }
 
     func isTyping(_ peerID: UUID) -> Bool {
-        (typingUntil[peerID] ?? .distantPast) > Date()
+        typingPeers.contains(peerID)
+    }
+
+    func isNewlyAppended(_ itemID: UUID) -> Bool {
+        guard let last = lastAppended, last.id == itemID else { return false }
+        return Date().timeIntervalSince(last.at) < 3
+    }
+
+    private func append(_ item: TranscriptItem, to peerID: UUID) {
+        transcripts[peerID, default: []].append(item)
+        lastAppended = (item.id, Date())
+    }
+
+    private func clearTyping(_ peerID: UUID) {
+        typingPeers.remove(peerID)
+        typingExpiry[peerID]?.cancel()
+        typingExpiry[peerID] = nil
     }
 
     private func startFreshSessionIfEnded(with peerID: UUID) {
@@ -294,12 +318,12 @@ final class AppModel {
             if let handle = buddy(withID: userID)?.user.handle, hasConversation {
                 let nowOffline = presence.state == .offline
                 if wasOffline != nowOffline {
-                    transcripts[userID, default: []].append(
-                        .notice(id: UUID(), text: "\(handle) signed \(nowOffline ? "off" : "on")", at: Date()))
+                    append(.notice(id: UUID(), text: "\(handle) signed \(nowOffline ? "off" : "on")", at: Date()),
+                           to: userID)
                 }
                 if let away = presence.awayMessage, away != previous?.awayMessage {
-                    transcripts[userID, default: []].append(
-                        .notice(id: UUID(), text: "\(handle) is away: \"\(away)\"", at: Date()))
+                    append(.notice(id: UUID(), text: "\(handle) is away: \"\(away)\"", at: Date()),
+                           to: userID)
                 }
             }
             // Presence for someone not yet an accepted buddy means the list
@@ -316,8 +340,8 @@ final class AppModel {
             let peerID = message.senderID
             sessionPeers[message.sessionID] = peerID
             startFreshSessionIfEnded(with: peerID)
-            transcripts[peerID, default: []].append(.message(message))
-            typingUntil[peerID] = nil
+            append(.message(message), to: peerID)
+            clearTyping(peerID)
             if !activeConversations.contains(peerID) {
                 unreadPeers.insert(peerID)
             }
@@ -325,15 +349,21 @@ final class AppModel {
         case .messageSent(let clientMessageID, let message):
             if let peerID = pendingSends.removeValue(forKey: clientMessageID) {
                 sessionPeers[message.sessionID] = peerID
-                transcripts[peerID, default: []].append(.message(message))
+                append(.message(message), to: peerID)
                 SoundPlayer.play(.messageSent)
             }
         case .typing(let userID):
-            typingUntil[userID] = Date().addingTimeInterval(5)
+            typingPeers.insert(userID)
+            typingExpiry[userID]?.cancel()
+            typingExpiry[userID] = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                self?.typingPeers.remove(userID)
+            }
         case .sessionClosed(let sessionID):
             if let peerID = sessionPeers.removeValue(forKey: sessionID) {
                 endedConversations.insert(peerID)
-                typingUntil[peerID] = nil
+                clearTyping(peerID)
             }
         case .buddyRequest:
             Task { try? await refreshBuddies() }

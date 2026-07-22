@@ -9,6 +9,8 @@ actor ConnectionManager {
     /// Bumped on every register; lets the 90s offline-grace task tell whether
     /// the user reconnected while it slept.
     private var generations: [UUID: Int] = [:]
+    private var lastActivity: [UUID: Date] = [:]
+    private var lastPong: [UUID: Date] = [:]
 
     func register(_ ws: WebSocket, for userID: UUID) async -> Int {
         if let old = sockets[userID] {
@@ -36,6 +38,34 @@ actor ConnectionManager {
 
     func connectedUserIDs() -> [UUID] {
         Array(sockets.keys)
+    }
+
+    func noteActivity(_ userID: UUID) {
+        lastActivity[userID] = Date()
+    }
+
+    func notePong(_ userID: UUID) {
+        lastPong[userID] = Date()
+        lastActivity[userID] = Date()
+    }
+
+    /// A registered socket isn't proof of a live app: a suspended or killed
+    /// iOS app leaves the connection open and silent. A protocol ping needs
+    /// the client's runtime to answer, so no pong within the timeout means
+    /// dead. Recent inbound traffic short-circuits the round trip.
+    func verifyAlive(_ userID: UUID, timeout: TimeInterval = 3) async -> Bool {
+        guard let ws = sockets[userID] else { return false }
+        if let recent = lastActivity[userID], Date().timeIntervalSince(recent) < 5 {
+            return true
+        }
+        let sentAt = Date()
+        ws.sendPing(Data(), promise: nil)
+        while Date().timeIntervalSince(sentAt) < timeout {
+            try? await Task.sleep(for: .milliseconds(200))
+            if let pong = lastPong[userID], pong >= sentAt { return true }
+            if sockets[userID] !== ws { return false }
+        }
+        return false
     }
 
     /// Force-close a connection whose heartbeats have gone silent. Bumps the

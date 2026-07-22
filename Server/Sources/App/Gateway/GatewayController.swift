@@ -25,6 +25,9 @@ struct GatewayController {
         ws.onText { _, text in
             await handleFrame(buffer: Data(text.utf8), from: userID)
         }
+        ws.onPong { _, _ in
+            await connections.notePong(userID)
+        }
         ws.onClose.whenComplete { _ in
             Task { await handleClose(userID: userID, ws: ws, generation: generation) }
         }
@@ -116,6 +119,7 @@ struct GatewayController {
     // MARK: - Frames
 
     private func handleFrame(buffer: Data, from userID: UUID) async {
+        await connections.noteActivity(userID)
         guard let frame = try? WireCoder.decoder().decode(ClientFrame.self, from: buffer) else {
             await connections.send(.error("Unrecognized frame."), to: userID)
             return
@@ -163,13 +167,20 @@ struct GatewayController {
         let session = try await openSession(between: senderID, and: recipientID)
         let message = MessageModel(sessionID: try session.requireID(), senderID: senderID, body: body)
 
-        // Offline recipient: stored and delivered on their next sign-on (spec §6).
-        if await connections.isConnected(recipientID) {
+        // Sending is the moment liveness matters: ping-verify a nominally
+        // connected recipient so a suspended app is discovered now rather
+        // than when the sweep catches it.
+        if await connections.verifyAlive(recipientID) {
             message.deliveredAt = Date()
             try await message.save(on: db)
             await connections.send(.message(message.dto), to: recipientID)
         } else {
+            // Stored and delivered on their next sign-on (spec §6).
             try await message.save(on: db)
+            if await connections.isConnected(recipientID) {
+                await connections.expire(recipientID)
+                await goOffline(userID: recipientID)
+            }
         }
         await connections.send(
             .messageSent(clientMessageID: clientMessageID, message: message.dto), to: senderID)
