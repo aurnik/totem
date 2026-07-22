@@ -7,14 +7,32 @@ public enum ClientFrame: Codable, Sendable {
     case setPresence(state: PresenceState, awayMessage: String?)
     case signOff
     case sendMessage(recipientID: UUID, body: String, clientMessageID: UUID)
+    /// Message into an existing (group) session the sender belongs to.
+    case sendSessionMessage(sessionID: UUID, body: String, clientMessageID: UUID)
     case typing(recipientID: UUID)
+}
+
+/// A session plus the users in it — what a client needs to render a group chat.
+public struct SessionInfo: Codable, Hashable, Sendable {
+    public let session: ChatSession
+    public let participants: [User]
+
+    public init(session: ChatSession, participants: [User]) {
+        self.session = session
+        self.participants = participants
+    }
+
+    public var isGroup: Bool { session.participantIDs.count > 2 }
 }
 
 /// Frames sent from server to client.
 public enum ServerFrame: Codable, Sendable {
-    /// Sent on connect: authoritative snapshot of own presence and all buddies',
-    /// keyed by user UUID string (UUID keys would encode as a JSON array).
-    case welcome(self_: Presence, buddies: [String: Presence])
+    /// Sent on connect: authoritative snapshot of own presence, all buddies'
+    /// (keyed by user UUID string — UUID keys would encode as a JSON array),
+    /// and any open group sessions the user belongs to.
+    case welcome(self_: Presence, buddies: [String: Presence], sessions: [SessionInfo])
+    /// A (group) session was created that includes this user.
+    case sessionStarted(SessionInfo)
     case presence(userID: UUID, presence: Presence)
     case message(ChatMessage)
     /// Server ack for a sent message, correlating the client-generated ID.

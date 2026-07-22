@@ -31,9 +31,12 @@ final class AppModel {
         }
     }
 
-    /// Transcripts keyed by peer user ID, session-scoped: cleared when a new
-    /// session starts after the old one was archived.
+    /// Transcripts keyed by conversation ID — the peer's user ID for 1:1
+    /// chats, the session ID for group chats. Session-scoped: cleared when a
+    /// new session starts after the old one was archived.
     var transcripts: [UUID: [TranscriptItem]] = [:]
+    /// Open group sessions by session ID.
+    var groupSessions: [UUID: SessionInfo] = [:]
     /// Peers whose session ended (either side signed off) — transcript is
     /// showing archived state until the next message starts a fresh session.
     var endedConversations: Set<UUID> = []
@@ -131,6 +134,7 @@ final class AppModel {
         buddies = []
         presences = [:]
         transcripts = [:]
+        groupSessions = [:]
         endedConversations = []
         unreadPeers = []
         UserDefaults.standard.removeObject(forKey: "authToken")
@@ -192,7 +196,11 @@ final class AppModel {
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
+        // Session-scoped ephemerality: signing off ends every session, and
+        // transcripts do not outlive their session.
         endedConversations.formUnion(transcripts.keys)
+        transcripts = transcripts.mapValues { _ in [] }
+        unreadPeers = []
         typingPeers = []
         typingExpiry.values.forEach { $0.cancel() }
         typingExpiry = [:]
@@ -204,14 +212,48 @@ final class AppModel {
         acceptedBuddies.first { $0.user.id == id }
     }
 
-    func sendMessage(to peerID: UUID, body: String) {
+    func sendMessage(to conversationID: UUID, body: String) {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        startFreshSessionIfEnded(with: peerID)
+        startFreshSessionIfEnded(with: conversationID)
         let clientID = UUID()
-        pendingSends[clientID] = peerID
+        pendingSends[clientID] = conversationID
         let socket = self.socket
-        Task { try? await socket?.send(.sendMessage(recipientID: peerID, body: trimmed, clientMessageID: clientID)) }
+        if groupSessions[conversationID] != nil {
+            Task { try? await socket?.send(.sendSessionMessage(sessionID: conversationID, body: trimmed, clientMessageID: clientID)) }
+        } else {
+            Task { try? await socket?.send(.sendMessage(recipientID: conversationID, body: trimmed, clientMessageID: clientID)) }
+        }
+    }
+
+    /// One participant opens the existing 1:1 conversation; more creates a
+    /// group session server-side. Returns the conversation ID to open.
+    func startChat(with participantIDs: [UUID]) async throws -> UUID {
+        if participantIDs.count == 1 { return participantIDs[0] }
+        let info = try await api.createSession(participantIDs: participantIDs)
+        groupSessions[info.session.id] = info
+        return info.session.id
+    }
+
+    func conversationTitle(_ conversationID: UUID) -> String {
+        if let info = groupSessions[conversationID] {
+            return info.participants
+                .filter { $0.id != currentUser?.id }
+                .map(\.handle)
+                .sorted()
+                .joined(separator: ", ")
+        }
+        return buddy(withID: conversationID)?.user.handle ?? "chat"
+    }
+
+    func handle(of userID: UUID) -> String? {
+        if let buddy = buddy(withID: userID) { return buddy.user.handle }
+        for info in groupSessions.values {
+            if let user = info.participants.first(where: { $0.id == userID }) {
+                return user.handle
+            }
+        }
+        return nil
     }
 
     /// Throttled to one event per 3s per peer (spec §6).
@@ -315,10 +357,16 @@ final class AppModel {
 
     private func handle(_ frame: ServerFrame) {
         switch frame {
-        case .welcome(_, let buddies):
+        case .welcome(_, let buddies, let sessions):
             presences = Dictionary(uniqueKeysWithValues: buddies.compactMap { key, value in
                 UUID(uuidString: key).map { ($0, value) }
             })
+            groupSessions = Dictionary(
+                uniqueKeysWithValues: sessions.filter(\.isGroup).map { ($0.session.id, $0) })
+        case .sessionStarted(let info):
+            if info.isGroup {
+                groupSessions[info.session.id] = info
+            }
         case .presence(let userID, let presence):
             let previous = presences[userID]
             let wasOffline = (previous?.state ?? .offline) == .offline
@@ -351,19 +399,23 @@ final class AppModel {
                 SoundPlayer.play(.buddyOut)
             }
         case .message(let message):
-            let peerID = message.senderID
-            sessionPeers[message.sessionID] = peerID
-            startFreshSessionIfEnded(with: peerID)
-            append(.message(message), to: peerID)
-            clearTyping(peerID)
-            if !activeConversations.contains(peerID) {
-                unreadPeers.insert(peerID)
+            let key = groupSessions[message.sessionID] != nil ? message.sessionID : message.senderID
+            if key == message.senderID {
+                sessionPeers[message.sessionID] = key
+            }
+            startFreshSessionIfEnded(with: key)
+            append(.message(message), to: key)
+            clearTyping(message.senderID)
+            if !activeConversations.contains(key) {
+                unreadPeers.insert(key)
             }
             SoundPlayer.play(.messageReceived)
         case .messageSent(let clientMessageID, let message):
-            if let peerID = pendingSends.removeValue(forKey: clientMessageID) {
-                sessionPeers[message.sessionID] = peerID
-                append(.message(message), to: peerID)
+            if let key = pendingSends.removeValue(forKey: clientMessageID) {
+                if groupSessions[message.sessionID] == nil {
+                    sessionPeers[message.sessionID] = key
+                }
+                append(.message(message), to: key)
                 SoundPlayer.play(.messageSent)
             }
         case .typing(let userID):
@@ -375,8 +427,13 @@ final class AppModel {
                 self?.typingPeers.remove(userID)
             }
         case .sessionClosed(let sessionID):
-            if let peerID = sessionPeers.removeValue(forKey: sessionID) {
+            // Transcripts live only until the session ends — no history.
+            if groupSessions[sessionID] != nil {
+                endedConversations.insert(sessionID)
+                transcripts[sessionID] = []
+            } else if let peerID = sessionPeers.removeValue(forKey: sessionID) {
                 endedConversations.insert(peerID)
+                transcripts[peerID] = []
                 clearTyping(peerID)
             }
         case .buddyRequest:

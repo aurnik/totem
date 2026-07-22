@@ -38,7 +38,11 @@ struct APIClient {
     }
 
     func acceptBuddyRequest(id: UUID) async throws {
-        let _: EmptyResponse = try await post("buddies/requests/\(id.uuidString)/accept", body: [:])
+        let _: EmptyResponse = try await post("buddies/requests/\(id.uuidString)/accept", body: [String: String]())
+    }
+
+    func createSession(participantIDs: [UUID]) async throws -> SessionInfo {
+        try await post("sessions", body: ["participantIDs": participantIDs.map(\.uuidString)])
     }
 
     var socketURL: URL {
@@ -52,7 +56,7 @@ struct APIClient {
 
     private struct EmptyResponse: Codable {}
 
-    private func request(_ path: String, method: String, body: [String: String]?) throws -> URLRequest {
+    private func request(_ path: String, method: String, body: (some Encodable)?) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
         if let token {
@@ -79,10 +83,10 @@ struct APIClient {
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
-        try await run(request(path, method: "GET", body: nil))
+        try await run(request(path, method: "GET", body: String?.none))
     }
 
-    private func post<T: Decodable>(_ path: String, body: [String: String]) async throws -> T {
+    private func post<T: Decodable>(_ path: String, body: (some Encodable)?) async throws -> T {
         try await run(request(path, method: "POST", body: body))
     }
 }

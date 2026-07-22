@@ -68,49 +68,78 @@ final class SessionModel: Model, @unchecked Sendable {
     static let schema = "sessions"
 
     @ID(key: .id) var id: UUID?
+    /// First two participants, kept for the original two-party schema and
+    /// still used for 1:1 open-session lookups. `participants` is the source
+    /// of truth and holds all members for group sessions.
     @Field(key: "participant_a") var participantA: UUID
     @Field(key: "participant_b") var participantB: UUID
+    @Field(key: "participants") var participantsJSON: String
     @Timestamp(key: "started_at", on: .create) var startedAt: Date?
     @OptionalField(key: "ended_at") var endedAt: Date?
 
     init() {}
 
-    init(participantA: UUID, participantB: UUID) {
-        self.participantA = participantA
-        self.participantB = participantB
+    init(participants: [UUID]) {
+        precondition(participants.count >= 2)
+        self.participantA = participants[0]
+        self.participantB = participants[1]
+        self.participants = participants
     }
 
+    convenience init(participantA: UUID, participantB: UUID) {
+        self.init(participants: [participantA, participantB])
+    }
+
+    var participants: [UUID] {
+        get {
+            (try? JSONDecoder().decode([UUID].self, from: Data(participantsJSON.utf8)))
+                ?? [participantA, participantB]
+        }
+        set {
+            participantsJSON = String(
+                decoding: (try? JSONEncoder().encode(newValue)) ?? Data("[]".utf8), as: UTF8.self)
+        }
+    }
+
+    var isGroup: Bool { participants.count > 2 }
+
     func includes(_ userID: UUID) -> Bool {
-        participantA == userID || participantB == userID
+        participants.contains(userID)
     }
 
     func peer(of userID: UUID) -> UUID {
-        participantA == userID ? participantB : participantA
+        participants.first { $0 != userID } ?? participantA
+    }
+
+    var dto: ChatSession {
+        ChatSession(id: id!, participantIDs: participants, startedAt: startedAt ?? Date(), endedAt: endedAt)
     }
 }
 
-/// Persists for 24h to cover reconnects and offline delivery, then hard-deleted (spec §5).
-final class MessageModel: Model, @unchecked Sendable {
-    static let schema = "messages"
-
-    @ID(key: .id) var id: UUID?
-    @Parent(key: "session_id") var session: SessionModel
-    @Field(key: "sender_id") var senderID: UUID
-    @Field(key: "body") var body: String
-    @Timestamp(key: "sent_at", on: .create) var sentAt: Date?
-    @OptionalField(key: "delivered_at") var deliveredAt: Date?
-
-    init() {}
-
-    init(sessionID: UUID, senderID: UUID, body: String) {
-        self.$session.id = sessionID
-        self.senderID = senderID
-        self.body = body
+struct AddSessionParticipants: AsyncMigration {
+    func prepare(on db: Database) async throws {
+        try await db.schema(SessionModel.schema)
+            .field("participants", .string, .required, .sql(.default("[]")))
+            .update()
+        for session in try await SessionModel.query(on: db).all() where session.participantsJSON == "[]" {
+            session.participants = [session.participantA, session.participantB]
+            try await session.save(on: db)
+        }
     }
 
-    var dto: ChatMessage {
-        ChatMessage(id: id!, sessionID: $session.id, senderID: senderID, body: body, sentAt: sentAt ?? Date())
+    func revert(on db: Database) async throws {
+        try await db.schema(SessionModel.schema).deleteField("participants").update()
     }
+}
+
+/// Messages are never stored server-side — pure relay. Drops the table from
+/// databases created before that decision.
+struct DropMessageStorage: AsyncMigration {
+    func prepare(on db: Database) async throws {
+        try? await db.schema("messages").delete()
+    }
+
+    func revert(on db: Database) async throws {}
 }
 
 struct CreateSchema: AsyncMigration {
@@ -144,18 +173,9 @@ struct CreateSchema: AsyncMigration {
             .field("started_at", .datetime)
             .field("ended_at", .datetime)
             .create()
-        try await db.schema(MessageModel.schema)
-            .id()
-            .field("session_id", .uuid, .required, .references("sessions", "id", onDelete: .cascade))
-            .field("sender_id", .uuid, .required)
-            .field("body", .string, .required)
-            .field("sent_at", .datetime)
-            .field("delivered_at", .datetime)
-            .create()
     }
 
     func revert(on db: Database) async throws {
-        try await db.schema(MessageModel.schema).delete()
         try await db.schema(SessionModel.schema).delete()
         try await db.schema(BuddyModel.schema).delete()
         try await db.schema(TokenModel.schema).delete()

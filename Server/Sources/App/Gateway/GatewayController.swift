@@ -86,9 +86,14 @@ struct GatewayController {
             for id in buddyIDs {
                 snapshot[id.uuidString] = try await presence.get(for: id)
             }
-            await connections.send(.welcome(self_: current, buddies: snapshot), to: userID)
+            let groupSessions = try await openGroupSessions(of: userID)
+            var sessionInfos: [SessionInfo] = []
+            for session in groupSessions {
+                sessionInfos.append(try await sessionInfo(session, on: db))
+            }
+            await connections.send(
+                .welcome(self_: current, buddies: snapshot, sessions: sessionInfos), to: userID)
             await fanOut(.presence(userID: userID, presence: current), toBuddiesOf: userID)
-            try await deliverPending(to: userID)
         } catch {
             app.logger.report(error: error)
         }
@@ -146,6 +151,10 @@ struct GatewayController {
                 try await relayMessage(
                     from: userID, to: recipientID, body: body, clientMessageID: clientMessageID)
 
+            case .sendSessionMessage(let sessionID, let body, let clientMessageID):
+                try await relaySessionMessage(
+                    from: userID, sessionID: sessionID, body: body, clientMessageID: clientMessageID)
+
             case .typing(let recipientID):
                 if try await areAcceptedBuddies(userID, recipientID) {
                     await connections.send(.typing(userID: userID), to: recipientID)
@@ -157,6 +166,9 @@ struct GatewayController {
         }
     }
 
+    /// Messages are never stored server-side: pure relay, in one socket and
+    /// out the others. An unreachable recipient means the message is refused,
+    /// not spooled.
     private func relayMessage(
         from senderID: UUID, to recipientID: UUID, body: String, clientMessageID: UUID
     ) async throws {
@@ -164,49 +176,63 @@ struct GatewayController {
             await connections.send(.error("Not buddies."), to: senderID)
             return
         }
-        let session = try await openSession(between: senderID, and: recipientID)
-        let message = MessageModel(sessionID: try session.requireID(), senderID: senderID, body: body)
-
         // Sending is the moment liveness matters: ping-verify a nominally
         // connected recipient so a suspended app is discovered now rather
         // than when the sweep catches it.
-        if await connections.verifyAlive(recipientID) {
-            message.deliveredAt = Date()
-            try await message.save(on: db)
-            await connections.send(.message(message.dto), to: recipientID)
-        } else {
-            // Stored and delivered on their next sign-on (spec §6).
-            try await message.save(on: db)
+        guard await connections.verifyAlive(recipientID) else {
             if await connections.isConnected(recipientID) {
                 await connections.expire(recipientID)
                 await goOffline(userID: recipientID)
             }
+            await connections.send(.error("Message not delivered — they're offline."), to: senderID)
+            return
         }
+        let session = try await openSession(between: senderID, and: recipientID)
+        let message = ChatMessage(
+            id: UUID(), sessionID: try session.requireID(),
+            senderID: senderID, body: body, sentAt: Date())
+        await connections.send(.message(message), to: recipientID)
         await connections.send(
-            .messageSent(clientMessageID: clientMessageID, message: message.dto), to: senderID)
+            .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
     }
 
-    private func deliverPending(to userID: UUID) async throws {
-        let pending = try await MessageModel.query(on: db)
-            .join(SessionModel.self, on: \MessageModel.$session.$id == \SessionModel.$id)
-            .filter(\.$deliveredAt == nil)
-            .filter(\.$senderID != userID)
-            .group(.or) { or in
-                or.filter(SessionModel.self, \.$participantA == userID)
-                or.filter(SessionModel.self, \.$participantB == userID)
-            }
-            .sort(\.$sentAt)
-            .all()
-        for message in pending {
-            message.deliveredAt = Date()
-            try await message.save(on: db)
-            await connections.send(.message(message.dto), to: userID)
+    /// Group message: relay to every connected member, store nothing.
+    /// Offline members miss it — session-scoped ephemerality.
+    private func relaySessionMessage(
+        from senderID: UUID, sessionID: UUID, body: String, clientMessageID: UUID
+    ) async throws {
+        guard let session = try await SessionModel.find(sessionID, on: db),
+              session.includes(senderID), session.endedAt == nil
+        else {
+            await connections.send(.error("No such session."), to: senderID)
+            return
         }
+        let message = ChatMessage(
+            id: UUID(), sessionID: sessionID, senderID: senderID, body: body, sentAt: Date())
+        for participant in session.participants where participant != senderID {
+            await connections.send(.message(message), to: participant)
+        }
+        await connections.send(
+            .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
+    }
+
+    func sessionInfo(_ session: SessionModel, on db: Database) async throws -> SessionInfo {
+        let users = try await UserModel.query(on: db)
+            .filter(\.$id ~~ session.participants)
+            .all()
+        return SessionInfo(session: session.dto, participants: users.map(\.dto))
+    }
+
+    private func openGroupSessions(of userID: UUID) async throws -> [SessionModel] {
+        try await SessionModel.query(on: db)
+            .filter(\.$endedAt == nil)
+            .all()
+            .filter { $0.isGroup && $0.includes(userID) }
     }
 
     // MARK: - Sessions
 
-    private func openSession(between a: UUID, and b: UUID) async throws -> SessionModel {
+    func openSession(between a: UUID, and b: UUID) async throws -> SessionModel {
         let query = SessionModel.query(on: db)
             .filter(\.$endedAt == nil)
             .group(.or) { or in
@@ -221,15 +247,13 @@ struct GatewayController {
         return session
     }
 
-    /// Either party going offline ends the session for both (spec §2, §6).
+    /// Either party going offline ends a 1:1 session for both (spec §2, §6).
+    /// Group sessions outlive individual members' presence in v1.
     private func closeOpenSessions(of userID: UUID) async throws {
         let open = try await SessionModel.query(on: db)
             .filter(\.$endedAt == nil)
-            .group(.or) { or in
-                or.filter(\.$participantA == userID)
-                or.filter(\.$participantB == userID)
-            }
             .all()
+            .filter { !$0.isGroup && $0.includes(userID) }
         for session in open {
             session.endedAt = Date()
             try await session.save(on: db)

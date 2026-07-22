@@ -69,9 +69,9 @@ struct TotemApp: App {
         }
         #if os(macOS)
         // One window per conversation — the AIM interaction model (spec §7).
-        WindowGroup("Conversation", for: UUID.self) { $peerID in
-            if let peerID {
-                ConversationView(peerID: peerID)
+        WindowGroup("Conversation", for: UUID.self) { $conversationID in
+            if let conversationID {
+                ConversationView(conversationID: conversationID)
                     .environment(model)
             }
         }

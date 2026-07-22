@@ -5,9 +5,14 @@ import TotemKit
 /// Alphabetical within group, no algorithmic ordering (spec §6).
 struct BuddyListView: View {
     @Environment(AppModel.self) private var model
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
     @State private var showingAwaySheet = false
     @State private var showingAddSheet = false
+    @State private var showingNewChat = false
     @State private var showingOffline = false
+    @State private var path = NavigationPath()
 
     private var grouped: [(PresenceState, [Buddy])] {
         let groups = Dictionary(grouping: model.acceptedBuddies) { model.presence(of: $0).state }
@@ -21,13 +26,14 @@ struct BuddyListView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 if !model.isSignedOn {
                     signedOffHeader
                 } else {
                     selfSection
                     requestsSection
+                    groupChatsSection
                     ForEach(grouped, id: \.0) { state, buddies in
                         Section(state.rawValue.capitalized) {
                             ForEach(buddies) { BuddyRow(buddy: $0) }
@@ -42,7 +48,12 @@ struct BuddyListView: View {
             }
             .navigationTitle("Friends")
             .toolbar {
-                Button("Add Buddy", systemImage: "plus") { showingAddSheet = true }
+                Menu {
+                    Button("New chat with…") { showingNewChat = true }
+                    Button("Add Buddy…") { showingAddSheet = true }
+                } label: {
+                    Label("New", systemImage: "plus")
+                }
                 if model.isSignedOn {
                     Button("Away…") { showingAwaySheet = true }
                     Button("Sign Off") { model.signOff() }
@@ -54,14 +65,54 @@ struct BuddyListView: View {
             .sheet(isPresented: $showingAddSheet) {
                 AddBuddySheet()
             }
+            .sheet(isPresented: $showingNewChat) {
+                NewChatSheet { conversationID in
+                    #if os(iOS)
+                    path.append(conversationID)
+                    #else
+                    openWindow(value: conversationID)
+                    #endif
+                }
+                .environment(model)
+            }
             .refreshable {
                 try? await model.refreshBuddies()
             }
             #if os(iOS)
-            .navigationDestination(for: UUID.self) { peerID in
-                ConversationView(peerID: peerID)
+            .navigationDestination(for: UUID.self) { conversationID in
+                ConversationView(conversationID: conversationID)
             }
             #endif
+        }
+    }
+
+    @ViewBuilder
+    private var groupChatsSection: some View {
+        let groups = model.groupSessions.values
+            .sorted { $0.session.startedAt > $1.session.startedAt }
+        if !groups.isEmpty {
+            Section("Group Chats") {
+                ForEach(groups, id: \.session.id) { info in
+                    let unread = model.unreadPeers.contains(info.session.id)
+                    let label = HStack {
+                        Image(systemName: "person.2.fill")
+                            .foregroundStyle(.secondary)
+                        Text(model.conversationTitle(info.session.id))
+                            .fontWeight(unread ? .bold : .regular)
+                            .lineLimit(1)
+                    }
+                    #if os(iOS)
+                    NavigationLink(value: info.session.id) { label }
+                    #else
+                    Button {
+                        openWindow(value: info.session.id)
+                    } label: {
+                        label.contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    #endif
+                }
+            }
         }
     }
 

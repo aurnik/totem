@@ -1,45 +1,49 @@
 import SwiftUI
 import TotemKit
 
-/// A session-scoped conversation with one buddy. Live while both parties are
-/// on; if the peer is offline this is "leave a message" mode (delivered at
-/// their next sign-on, spec §6). Dismisses itself when we sign off.
+/// A session-scoped conversation — 1:1 with a buddy, or a group session.
+/// Live only while parties are on; messages are never stored server-side, so
+/// an offline 1:1 peer means sending is disabled. Dismisses when we sign off.
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let peerID: UUID
+    let conversationID: UUID
     @State private var draft = ""
 
-    private var handle: String {
-        model.buddy(withID: peerID)?.user.handle ?? "buddy"
+    private var group: SessionInfo? {
+        model.groupSessions[conversationID]
+    }
+
+    private var title: String {
+        model.conversationTitle(conversationID)
     }
 
     private var peerOffline: Bool {
-        (model.presences[peerID]?.state ?? .offline) == .offline
+        group == nil && (model.presences[conversationID]?.state ?? .offline) == .offline
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if peerOffline {
-                banner("\(handle) is offline — messages will be delivered when they next sign on.")
-            } else if model.endedConversations.contains(peerID) {
+                banner("\(title) is offline — messages can't be delivered right now.")
+            } else if model.endedConversations.contains(conversationID) {
                 banner("Conversation archived. New messages start a fresh session.")
             }
             transcript
             composer
         }
-        .navigationTitle(handle)
+        .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text(handle)
+                Text(title)
                     .font(.subheadline.weight(.semibold))
             }
         }
         #endif
-        .onAppear { model.conversationOpened(peerID) }
-        .onDisappear { model.conversationClosed(peerID) }
+        .onAppear { model.conversationOpened(conversationID) }
+        .onDisappear { model.conversationClosed(conversationID) }
         .onChange(of: model.isSignedOn) { _, signedOn in
             if !signedOn { dismiss() }
         }
@@ -55,7 +59,7 @@ struct ConversationView: View {
     }
 
     private var transcript: some View {
-        let transcript = model.transcripts[peerID] ?? []
+        let transcript = model.transcripts[conversationID] ?? []
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
@@ -63,9 +67,12 @@ struct ConversationView: View {
                         Group {
                             switch item {
                             case .message(let message):
+                                let isMine = message.senderID == model.currentUser?.id
                                 MessageRow(
                                     message: message,
-                                    isMine: message.senderID == model.currentUser?.id,
+                                    isMine: isMine,
+                                    senderName: (group != nil && !isMine)
+                                        ? model.handle(of: message.senderID) : nil,
                                     recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
                                 )
                             case .notice(_, let text, _):
@@ -84,7 +91,7 @@ struct ConversationView: View {
                             anchor: anchor(for: item)
                         ))
                     }
-                    if model.isTyping(peerID) {
+                    if group == nil && model.isTyping(conversationID) {
                         HStack {
                             TypingIndicatorBubble()
                             Spacer()
@@ -128,7 +135,7 @@ struct ConversationView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespaces).isEmpty
+        !draft.trimmingCharacters(in: .whitespaces).isEmpty && !peerOffline
     }
 
     private var composer: some View {
@@ -142,7 +149,9 @@ struct ConversationView: View {
                     .padding(.trailing, 6)
                     .padding(.vertical, 8)
                     .onChange(of: draft) { _, newValue in
-                        if !newValue.isEmpty { model.sendTyping(to: peerID) }
+                        if !newValue.isEmpty, group == nil {
+                            model.sendTyping(to: conversationID)
+                        }
                     }
                     .onSubmit(send)
                 Button(action: send) {
@@ -167,7 +176,9 @@ struct ConversationView: View {
                 TextField("Message", text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: draft) { _, newValue in
-                        if !newValue.isEmpty { model.sendTyping(to: peerID) }
+                        if !newValue.isEmpty, group == nil {
+                            model.sendTyping(to: conversationID)
+                        }
                     }
                     .onSubmit(send)
                 Button("Send", action: send)
@@ -180,7 +191,8 @@ struct ConversationView: View {
     }
 
     private func send() {
-        model.sendMessage(to: peerID, body: draft)
+        guard canSend else { return }
+        model.sendMessage(to: conversationID, body: draft)
         draft = ""
     }
 }
@@ -245,6 +257,7 @@ private struct TypingDot: View {
 struct MessageRow: View {
     let message: ChatMessage
     let isMine: Bool
+    var senderName: String?
     var recencyFraction: Double = 1
 
     private var incomingBackground: Color {
@@ -271,23 +284,31 @@ struct MessageRow: View {
     var body: some View {
         HStack {
             if isMine { Spacer(minLength: 48) }
-            Text(message.body)
-                .font(.body)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background {
-                    if isMine {
-                        LinearGradient(
-                            colors: [Self.historyBlue(recencyFraction - 0.06),
-                                     Self.historyBlue(recencyFraction)],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    } else {
-                        incomingBackground
-                    }
+            VStack(alignment: .leading, spacing: 2) {
+                if let senderName {
+                    Text(senderName)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
                 }
-                .foregroundStyle(isMine ? .white : .primary)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
+                Text(message.body)
+                    .font(.body)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background {
+                        if isMine {
+                            LinearGradient(
+                                colors: [Self.historyBlue(recencyFraction - 0.06),
+                                         Self.historyBlue(recencyFraction)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        } else {
+                            incomingBackground
+                        }
+                    }
+                    .foregroundStyle(isMine ? .white : .primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+            }
             if !isMine { Spacer(minLength: 48) }
         }
         .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
