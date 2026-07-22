@@ -40,7 +40,7 @@ struct BuddyListView: View {
                     }
                 }
             }
-            .navigationTitle("Buddy List")
+            .navigationTitle("Friends")
             .toolbar {
                 Button("Add Buddy", systemImage: "plus") { showingAddSheet = true }
                 if model.isSignedOn {
