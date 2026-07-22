@@ -66,16 +66,21 @@ final class AppModel {
            let user = try? WireCoder.decoder().decode(User.self, from: data) {
             api.token = token
             currentUser = user
+            // Sign on immediately rather than after the buddy fetch: the
+            // socket reconnects on its own, whereas gating on a fetch that
+            // failed transiently left the app stuck on the Sign On screen.
+            signOn()
             Task {
-                do {
-                    try await refreshBuddies()
-                    // Launching into the buddy list signs on automatically; the
-                    // explicit Sign On button only appears after a manual sign-off.
-                    signOn()
-                } catch URLError.userAuthenticationRequired {
-                    logOut()
-                } catch {
-                    // Offline or server down; keep the session and let sign-on retry.
+                for attempt in 1...3 {
+                    do {
+                        try await refreshBuddies()
+                        return
+                    } catch URLError.userAuthenticationRequired {
+                        logOut()
+                        return
+                    } catch {
+                        try? await Task.sleep(for: .seconds(Double(attempt) * 2))
+                    }
                 }
             }
         }
