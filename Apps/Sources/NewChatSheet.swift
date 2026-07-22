@@ -124,35 +124,22 @@ struct NewChatSheet: View {
 
     private func friendRow(_ buddy: Buddy) -> some View {
         let isSelected = selected.contains(buddy.user.id)
+        // Row tap only selects; the chat opens from the Chat button.
         return Button {
-            tapped(buddy.user.id)
+            toggle(buddy.user.id)
         } label: {
             HStack {
                 Text(buddy.user.handle)
                     .foregroundStyle(.primary)
                 Spacer()
                 StateDot(state: model.presence(of: buddy).state)
-                // Selection control builds a group; a plain row tap with
-                // nothing selected opens the chat in one step.
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.5))
-                    .onTapGesture { toggle(buddy.user.id) }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    /// Row tap: with an in-progress group selection it toggles membership;
-    /// otherwise it opens the 1:1 chat immediately — fewest taps to a chat.
-    private func tapped(_ id: UUID) {
-        if selected.isEmpty {
-            dismiss()
-            onOpen(id)
-        } else {
-            toggle(id)
-        }
     }
 
     private func toggle(_ id: UUID) {
