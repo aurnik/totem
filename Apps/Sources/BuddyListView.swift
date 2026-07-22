@@ -227,8 +227,10 @@ struct AddBuddySheet: View {
                         do {
                             try await model.addBuddy(handle: handle)
                             dismiss()
-                        } catch {
+                        } catch URLError.resourceUnavailable {
                             errorMessage = "No user with that handle."
+                        } catch {
+                            errorMessage = "Couldn't reach the server."
                         }
                     }
                 }
