@@ -57,6 +57,11 @@ struct BuddyListView: View {
             .refreshable {
                 try? await model.refreshBuddies()
             }
+            #if os(iOS)
+            .navigationDestination(for: UUID.self) { peerID in
+                ConversationView(peerID: peerID)
+            }
+            #endif
         }
     }
 
@@ -125,11 +130,27 @@ struct BuddyListView: View {
 
 struct BuddyRow: View {
     @Environment(AppModel.self) private var model
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
     let buddy: Buddy
 
     var body: some View {
+        #if os(iOS)
+        NavigationLink(value: buddy.user.id) { label }
+        #else
+        Button {
+            openWindow(value: buddy.user.id)
+        } label: {
+            label.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        #endif
+    }
+
+    private var label: some View {
         let presence = model.presence(of: buddy)
-        HStack {
+        return HStack {
             StateDot(state: presence.state)
             VStack(alignment: .leading) {
                 Text(buddy.user.handle)
@@ -141,8 +162,6 @@ struct BuddyRow: View {
                 }
             }
         }
-        // TODO: tap → conversation (build-sequence step 4); offline buddies
-        // get "leave a message" instead of a live window (spec §6).
     }
 }
 

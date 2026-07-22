@@ -32,6 +32,26 @@ struct GatewayController {
         await signOn(userID: userID)
     }
 
+    /// A suspended iOS app never closes its socket — heartbeats just stop and
+    /// the Redis key expires silently, which by itself notifies no one. This
+    /// sweep turns TTL expiry into a real offline transition: fan-out to
+    /// buddies, sessions archived, socket reaped (spec §3: server marks
+    /// offline after 90s of silence).
+    func startLivenessSweep() {
+        Task.detached {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                for userID in await self.connections.connectedUserIDs() {
+                    let current = try? await self.presence.get(for: userID)
+                    if current?.state ?? .offline == .offline {
+                        await self.connections.expire(userID)
+                        await self.goOffline(userID: userID)
+                    }
+                }
+            }
+        }
+    }
+
     /// A new request pushes to the target's socket so no client ever needs a
     /// manual refresh to see it.
     func buddyRequestReceived(by targetID: UUID, from user: User) async {

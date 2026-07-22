@@ -34,6 +34,19 @@ actor ConnectionManager {
         generations[userID] ?? 0
     }
 
+    func connectedUserIDs() -> [UUID] {
+        Array(sockets.keys)
+    }
+
+    /// Force-close a connection whose heartbeats have gone silent. Bumps the
+    /// generation so any pending offline-grace task for the old socket no-ops.
+    func expire(_ userID: UUID) async {
+        if let ws = sockets.removeValue(forKey: userID) {
+            try? await ws.close(code: .goingAway)
+        }
+        generations[userID, default: 0] += 1
+    }
+
     func send(_ frame: ServerFrame, to userID: UUID) async {
         guard let ws = sockets[userID],
               let data = try? WireCoder.encoder().encode(frame)

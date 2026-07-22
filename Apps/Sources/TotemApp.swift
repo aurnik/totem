@@ -15,6 +15,15 @@ struct TotemApp: App {
                 }
         }
         #if os(macOS)
+        // One window per conversation — the AIM interaction model (spec §7).
+        WindowGroup("Conversation", for: UUID.self) { $peerID in
+            if let peerID {
+                ConversationView(peerID: peerID)
+                    .environment(model)
+            }
+        }
+        .defaultSize(width: 360, height: 460)
+
         // Menu bar presence without focusing the app (spec §7).
         MenuBarExtra("Totem \(model.isSignedOn ? "(\(model.onlineBuddyCount))" : "")",
                      systemImage: model.isSignedOn ? "person.2.fill" : "person.2") {

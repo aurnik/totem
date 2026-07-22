@@ -10,6 +10,17 @@ final class AppModel {
     var presences: [UUID: Presence] = [:]
     var machine = PresenceStateMachine()
 
+    /// Transcripts keyed by peer user ID, session-scoped: cleared when a new
+    /// session starts after the old one was archived.
+    var messages: [UUID: [ChatMessage]] = [:]
+    /// Peers whose session ended (either side signed off) — transcript is
+    /// showing archived state until the next message starts a fresh session.
+    var endedConversations: Set<UUID> = []
+    private var typingUntil: [UUID: Date] = [:]
+    private var pendingSends: [UUID: UUID] = [:]
+    private var sessionPeers: [UUID: UUID] = [:]
+    private var lastTypingSentAt: [UUID: Date] = [:]
+
     private var api = APIClient()
     private var socket: SocketClient?
     private var socketTask: Task<Void, Never>?
@@ -90,6 +101,45 @@ final class AppModel {
         Task { await socket?.close() }
         self.socket = nil
         presences = [:]
+        // Sign-off closes all conversation windows (spec §3); views observe
+        // isSignedOn and dismiss themselves.
+        endedConversations.formUnion(messages.keys)
+        typingUntil = [:]
+    }
+
+    // MARK: - Chat
+
+    func buddy(withID id: UUID) -> Buddy? {
+        acceptedBuddies.first { $0.user.id == id }
+    }
+
+    func sendMessage(to peerID: UUID, body: String) {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        startFreshSessionIfEnded(with: peerID)
+        let clientID = UUID()
+        pendingSends[clientID] = peerID
+        let socket = self.socket
+        Task { try? await socket?.send(.sendMessage(recipientID: peerID, body: trimmed, clientMessageID: clientID)) }
+    }
+
+    /// Throttled to one event per 3s per peer (spec §6).
+    func sendTyping(to peerID: UUID) {
+        let now = Date()
+        if let last = lastTypingSentAt[peerID], now.timeIntervalSince(last) < 3 { return }
+        lastTypingSentAt[peerID] = now
+        let socket = self.socket
+        Task { try? await socket?.send(.typing(recipientID: peerID)) }
+    }
+
+    func isTyping(_ peerID: UUID) -> Bool {
+        (typingUntil[peerID] ?? .distantPast) > Date()
+    }
+
+    private func startFreshSessionIfEnded(with peerID: UUID) {
+        if endedConversations.remove(peerID) != nil {
+            messages[peerID] = []
+        }
     }
 
     func setAwayMessage(_ message: String) {
@@ -154,13 +204,28 @@ final class AppModel {
             } else if !wasOffline && presence.state == .offline {
                 SoundPlayer.play(.buddyOut)
             }
-        case .message:
-            // Chat UI is build-sequence step 4 (spec §9); presence dogfood comes first.
+        case .message(let message):
+            let peerID = message.senderID
+            sessionPeers[message.sessionID] = peerID
+            startFreshSessionIfEnded(with: peerID)
+            messages[peerID, default: []].append(message)
+            typingUntil[peerID] = nil
             SoundPlayer.play(.messageReceived)
+        case .messageSent(let clientMessageID, let message):
+            if let peerID = pendingSends.removeValue(forKey: clientMessageID) {
+                sessionPeers[message.sessionID] = peerID
+                messages[peerID, default: []].append(message)
+                SoundPlayer.play(.messageSent)
+            }
+        case .typing(let userID):
+            typingUntil[userID] = Date().addingTimeInterval(5)
+        case .sessionClosed(let sessionID):
+            if let peerID = sessionPeers.removeValue(forKey: sessionID) {
+                endedConversations.insert(peerID)
+                typingUntil[peerID] = nil
+            }
         case .buddyRequest:
             Task { try? await refreshBuddies() }
-        case .messageSent, .typing, .sessionClosed:
-            break
         case .error(let message):
             print("server error: \(message)")
         }

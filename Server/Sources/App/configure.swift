@@ -21,6 +21,7 @@ func configure(_ app: Application) async throws {
     }
     try app.register(collection: AuthController())
 
+    gateway.startLivenessSweep()
     startMessageRetentionSweep(app)
 }
 
