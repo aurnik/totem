@@ -1,9 +1,9 @@
 import SwiftUI
 import TotemKit
 
-/// "New chat with…" composer: fuzzy-search input over friends, a checkbox
-/// list for multi-select, and group chat creation when more than one friend
-/// is picked.
+/// "New chat with…" composer: search over friends (fuzzy), one-tap chat open,
+/// checkbox multi-select for groups, and an inline "Add friend" row when the
+/// typed text isn't an existing friend's handle.
 struct NewChatSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -29,11 +29,10 @@ struct NewChatSheet: View {
 
     private var results: [Buddy] {
         let friends = model.acceptedBuddies
-        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !needle.isEmpty else { return friends }
+        guard !trimmedQuery.isEmpty else { return friends }
         return friends
             .compactMap { buddy in
-                fuzzyScore(needle: needle, in: buddy.user.handle.lowercased())
+                fuzzyScore(needle: trimmedQuery, in: buddy.user.handle.lowercased())
                     .map { (buddy, $0) }
             }
             .sorted { $0.1 > $1.1 }
@@ -46,68 +45,43 @@ struct NewChatSheet: View {
             .map(\.user.handle)
     }
 
+    private var startLabel: String {
+        selected.count > 1 ? "Chat (\(selected.count))" : "Chat"
+    }
+
     var body: some View {
+        #if os(iOS)
+        NavigationStack {
+            friendList
+                .searchable(
+                    text: $query,
+                    placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "Search or type a handle"
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .navigationTitle("New Chat")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(startLabel) { start() }
+                            .fontWeight(.semibold)
+                            .disabled(selected.isEmpty || busy)
+                    }
+                }
+        }
+        #else
         VStack(alignment: .leading, spacing: 12) {
             Text("New chat with…")
                 .font(.headline)
-            TextField("Type a handle", text: $query)
+            TextField("Search or type a handle", text: $query)
                 .textFieldStyle(.roundedBorder)
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                #endif
-            if !selected.isEmpty {
-                Text(selectedHandles.joined(separator: ", "))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            List {
-                if showsAddFriendRow {
-                    Button {
-                        addFriend()
-                    } label: {
-                        HStack {
-                            Image(systemName: "person.badge.plus")
-                                .foregroundStyle(Color.accentColor)
-                            Text("Add friend: \(trimmedQuery)")
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                ForEach(results) { buddy in
-                    Button {
-                        tapped(buddy.user.id)
-                    } label: {
-                        HStack {
-                            // Checkbox tap builds a group; a plain row tap with
-                            // nothing selected opens the chat in one step.
-                            Image(systemName: selected.contains(buddy.user.id)
-                                  ? "checkmark.square.fill" : "square")
-                                .foregroundStyle(selected.contains(buddy.user.id) ? Color.accentColor : .secondary)
-                                .onTapGesture { toggle(buddy.user.id) }
-                            Text(buddy.user.handle)
-                            Spacer()
-                            StateDot(state: model.presence(of: buddy).state)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .listStyle(.plain)
-            .frame(minHeight: 180)
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
-            if let statusMessage {
-                Text(statusMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            friendList
+                .listStyle(.plain)
+                .frame(minHeight: 220)
             HStack {
                 Button("Cancel") { dismiss() }
                 Spacer()
@@ -117,11 +91,57 @@ struct NewChatSheet: View {
             }
         }
         .padding()
-        .frame(minWidth: 320, minHeight: 400)
+        .frame(minWidth: 340, minHeight: 420)
+        #endif
     }
 
-    private var startLabel: String {
-        selected.count > 1 ? "Start Group Chat (\(selected.count))" : "Start Chat"
+    private var friendList: some View {
+        List {
+            if showsAddFriendRow {
+                Section {
+                    Button(action: addFriend) {
+                        Label("Add friend: \(trimmedQuery)", systemImage: "person.badge.plus")
+                    }
+                }
+            }
+            Section {
+                ForEach(results) { buddy in
+                    friendRow(buddy)
+                }
+            } header: {
+                if !selected.isEmpty {
+                    Text("To: \(selectedHandles.joined(separator: ", "))")
+                }
+            } footer: {
+                if let errorMessage {
+                    Text(errorMessage).foregroundStyle(.red)
+                } else if let statusMessage {
+                    Text(statusMessage)
+                }
+            }
+        }
+    }
+
+    private func friendRow(_ buddy: Buddy) -> some View {
+        let isSelected = selected.contains(buddy.user.id)
+        return Button {
+            tapped(buddy.user.id)
+        } label: {
+            HStack {
+                Text(buddy.user.handle)
+                    .foregroundStyle(.primary)
+                Spacer()
+                StateDot(state: model.presence(of: buddy).state)
+                // Selection control builds a group; a plain row tap with
+                // nothing selected opens the chat in one step.
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.5))
+                    .onTapGesture { toggle(buddy.user.id) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// Row tap: with an in-progress group selection it toggles membership;
