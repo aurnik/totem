@@ -157,14 +157,8 @@ struct BuddyRow: View {
         return HStack {
             StateDot(state: presence.state)
             VStack(alignment: .leading) {
-                HStack(spacing: 6) {
-                    Text(buddy.user.handle)
-                    if model.unreadPeers.contains(buddy.user.id) {
-                        Circle()
-                            .fill(.blue)
-                            .frame(width: 8, height: 8)
-                    }
-                }
+                Text(buddy.user.handle)
+                    .fontWeight(model.unreadPeers.contains(buddy.user.id) ? .bold : .regular)
                 if let away = presence.awayMessage {
                     Text(away)
                         .font(.footnote)
