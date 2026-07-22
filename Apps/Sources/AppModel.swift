@@ -42,6 +42,9 @@ final class AppModel {
             Task {
                 do {
                     try await refreshBuddies()
+                    // Launching into the buddy list signs on automatically; the
+                    // explicit Sign On button only appears after a manual sign-off.
+                    signOn()
                 } catch URLError.userAuthenticationRequired {
                     logOut()
                 } catch {
