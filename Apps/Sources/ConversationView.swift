@@ -104,10 +104,12 @@ struct ConversationView: View {
         VStack(alignment: .leading, spacing: 4) {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 if model.isTyping(peerID) {
-                    Text("\(handle) is typing…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
+                    HStack {
+                        TypingIndicatorBubble()
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 2)
                 }
             }
             #if os(iOS)
@@ -159,6 +161,43 @@ struct ConversationView: View {
     private func send() {
         model.sendMessage(to: peerID, body: draft)
         draft = ""
+    }
+}
+
+/// iMessage-style typing indicator: an incoming-gray bubble with three
+/// staggered pulsing dots.
+struct TypingIndicatorBubble: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            TypingDot(delay: 0)
+            TypingDot(delay: 0.18)
+            TypingDot(delay: 0.36)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background {
+            #if os(iOS)
+            Color(.systemGray5)
+            #else
+            Color.gray.opacity(0.2)
+            #endif
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+private struct TypingDot: View {
+    let delay: Double
+    @State private var up = false
+
+    var body: some View {
+        Circle()
+            .fill(.secondary)
+            .frame(width: 8, height: 8)
+            .offset(y: up ? -2 : 1)
+            .opacity(up ? 0.9 : 0.4)
+            .animation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true).delay(delay), value: up)
+            .onAppear { up = true }
     }
 }
 
