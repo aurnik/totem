@@ -68,7 +68,7 @@ struct ConversationView: View {
                                     isMine: message.senderID == model.currentUser?.id,
                                     recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
                                 )
-                            case .notice(_, let text):
+                            case .notice(_, let text, _):
                                 Text(text)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -77,6 +77,26 @@ struct ConversationView: View {
                             }
                         }
                         .id(item.id)
+                        .modifier(PopInEffect(
+                            // Only genuinely-new items pop; older ones scrolling
+                            // back into view render statically.
+                            enabled: index == transcript.count - 1
+                                && Date().timeIntervalSince(item.date) < 3,
+                            anchor: anchor(for: item)
+                        ))
+                    }
+                    TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                        if model.isTyping(peerID) {
+                            HStack {
+                                TypingIndicatorBubble()
+                                Spacer()
+                            }
+                            .id("typingIndicator")
+                            .modifier(PopInEffect(enabled: true, anchor: .bottomLeading))
+                            .onAppear {
+                                withAnimation { proxy.scrollTo("typingIndicator", anchor: .bottom) }
+                            }
+                        }
                     }
                 }
                 .padding(12)
@@ -96,22 +116,21 @@ struct ConversationView: View {
         return max(0, 1 - distanceFromEnd / 25)
     }
 
+    private func anchor(for item: AppModel.TranscriptItem) -> UnitPoint {
+        switch item {
+        case .message(let message):
+            message.senderID == model.currentUser?.id ? .bottomTrailing : .bottomLeading
+        case .notice:
+            .bottom
+        }
+    }
+
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                if model.isTyping(peerID) {
-                    HStack {
-                        TypingIndicatorBubble()
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 2)
-                }
-            }
             #if os(iOS)
             HStack(alignment: .bottom, spacing: 0) {
                 TextField("Message", text: $draft, axis: .vertical)
@@ -161,6 +180,26 @@ struct ConversationView: View {
     private func send() {
         model.sendMessage(to: peerID, body: draft)
         draft = ""
+    }
+}
+
+/// Fade-and-grow entrance for newly inserted transcript content, anchored
+/// where the bubble sprouts from (sender's side; center for notices).
+struct PopInEffect: ViewModifier {
+    let enabled: Bool
+    var anchor: UnitPoint = .bottomLeading
+    @State private var appeared = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(enabled && !appeared ? 0.4 : 1, anchor: anchor)
+            .opacity(enabled && !appeared ? 0 : 1)
+            .onAppear {
+                guard enabled else { return }
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) {
+                    appeared = true
+                }
+            }
     }
 }
 

@@ -14,12 +14,19 @@ final class AppModel {
     /// (away-status changes), iMessage-group-event style.
     enum TranscriptItem: Identifiable, Hashable {
         case message(ChatMessage)
-        case notice(id: UUID, text: String)
+        case notice(id: UUID, text: String, at: Date)
 
         var id: UUID {
             switch self {
             case .message(let message): message.id
-            case .notice(let id, _): id
+            case .notice(let id, _, _): id
+            }
+        }
+
+        var date: Date {
+            switch self {
+            case .message(let message): message.sentAt
+            case .notice(_, _, let at): at
             }
         }
     }
@@ -288,11 +295,11 @@ final class AppModel {
                 let nowOffline = presence.state == .offline
                 if wasOffline != nowOffline {
                     transcripts[userID, default: []].append(
-                        .notice(id: UUID(), text: "\(handle) signed \(nowOffline ? "off" : "on")"))
+                        .notice(id: UUID(), text: "\(handle) signed \(nowOffline ? "off" : "on")", at: Date()))
                 }
                 if let away = presence.awayMessage, away != previous?.awayMessage {
                     transcripts[userID, default: []].append(
-                        .notice(id: UUID(), text: "\(handle) is away: \"\(away)\""))
+                        .notice(id: UUID(), text: "\(handle) is away: \"\(away)\"", at: Date()))
                 }
             }
             // Presence for someone not yet an accepted buddy means the list
