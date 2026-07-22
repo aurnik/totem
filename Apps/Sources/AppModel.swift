@@ -45,6 +45,30 @@ final class AppModel {
         buddies = try await api.buddies()
     }
 
+    /// Ascending by the requester's open-request count, so people who
+    /// blast requests broadly sort to the bottom.
+    var incomingRequests: [Buddy] {
+        buddies.filter { $0.status == .pending && $0.incoming }
+            .sorted {
+                let (l, r) = ($0.openRequestCount ?? 0, $1.openRequestCount ?? 0)
+                return l == r ? $0.user.handle < $1.user.handle : l < r
+            }
+    }
+
+    var outgoingRequests: [Buddy] {
+        buddies.filter { $0.status == .pending && !$0.incoming }
+    }
+
+    func addBuddy(handle: String) async throws {
+        try await api.sendBuddyRequest(handle: handle)
+        try await refreshBuddies()
+    }
+
+    func acceptRequest(_ buddy: Buddy) async throws {
+        try await api.acceptBuddyRequest(id: buddy.id)
+        try await refreshBuddies()
+    }
+
     // MARK: - Presence
 
     func signOn() {

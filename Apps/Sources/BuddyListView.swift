@@ -6,6 +6,7 @@ import TotemKit
 struct BuddyListView: View {
     @Environment(AppModel.self) private var model
     @State private var showingAwaySheet = false
+    @State private var showingAddSheet = false
     @State private var showingOffline = false
 
     private var grouped: [(PresenceState, [Buddy])] {
@@ -26,6 +27,7 @@ struct BuddyListView: View {
                     signedOffHeader
                 } else {
                     selfSection
+                    requestsSection
                     ForEach(grouped, id: \.0) { state, buddies in
                         Section(state.rawValue.capitalized) {
                             ForEach(buddies) { BuddyRow(buddy: $0) }
@@ -40,6 +42,7 @@ struct BuddyListView: View {
             }
             .navigationTitle("Buddy List")
             .toolbar {
+                Button("Add Buddy", systemImage: "plus") { showingAddSheet = true }
                 if model.isSignedOn {
                     Button("Away…") { showingAwaySheet = true }
                     Button("Sign Off") { model.signOff() }
@@ -47,6 +50,9 @@ struct BuddyListView: View {
             }
             .sheet(isPresented: $showingAwaySheet) {
                 AwayMessageSheet()
+            }
+            .sheet(isPresented: $showingAddSheet) {
+                AddBuddySheet()
             }
             .refreshable {
                 try? await model.refreshBuddies()
@@ -63,6 +69,40 @@ struct BuddyListView: View {
         }
         .frame(maxWidth: .infinity)
         .padding()
+    }
+
+    @ViewBuilder
+    private var requestsSection: some View {
+        if !model.incomingRequests.isEmpty || !model.outgoingRequests.isEmpty {
+            Section("Pending") {
+                ForEach(model.incomingRequests) { request in
+                    HStack {
+                        Text(request.user.handle)
+                        Spacer()
+                        Button("Accept") {
+                            Task { try? await model.acceptRequest(request) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Accept") {
+                            Task { try? await model.acceptRequest(request) }
+                        }
+                        .tint(.green)
+                    }
+                }
+                ForEach(model.outgoingRequests) { request in
+                    HStack {
+                        Text(request.user.handle)
+                        Spacer()
+                        Text("Sent")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
 
     private var selfSection: some View {
@@ -122,6 +162,51 @@ struct StateDot: View {
         Circle()
             .fill(color)
             .frame(width: 10, height: 10)
+    }
+}
+
+struct AddBuddySheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var handle = ""
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Add Buddy")
+                .font(.headline)
+            Text("Buddies are found by exact handle. They'll need to accept before you see each other.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            TextField("Handle", text: $handle)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                #endif
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button("Send Request") {
+                    Task {
+                        do {
+                            try await model.addBuddy(handle: handle)
+                            dismiss()
+                        } catch {
+                            errorMessage = "No user with that handle."
+                        }
+                    }
+                }
+                .disabled(handle.count < 3)
+            }
+        }
+        .padding()
+        .frame(minWidth: 300)
     }
 }
 

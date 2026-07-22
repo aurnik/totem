@@ -27,12 +27,16 @@ public struct Buddy: Codable, Identifiable, Hashable, Sendable {
     public var status: BuddyStatus
     /// True when the other user initiated the request and we have not accepted yet.
     public var incoming: Bool
+    /// For incoming pending requests: how many open (unaccepted) requests the
+    /// requester has outstanding. Drives pending-list ordering.
+    public var openRequestCount: Int?
 
-    public init(id: UUID, user: User, status: BuddyStatus, incoming: Bool) {
+    public init(id: UUID, user: User, status: BuddyStatus, incoming: Bool, openRequestCount: Int? = nil) {
         self.id = id
         self.user = user
         self.status = status
         self.incoming = incoming
+        self.openRequestCount = openRequestCount
     }
 }
 

@@ -23,11 +23,19 @@ struct BuddyController: RouteCollection {
             .filter(\.$status == .pending)
             .with(\.$user)
             .all()
-        return try own.map {
+        var result = try own.map {
             Buddy(id: try $0.requireID(), user: $0.buddy.dto, status: $0.status, incoming: false)
-        } + incoming.map {
-            Buddy(id: try $0.requireID(), user: $0.user.dto, status: $0.status, incoming: true)
         }
+        for row in incoming {
+            let openRequests = try await BuddyModel.query(on: req.db)
+                .filter(\.$user.$id == row.$user.id)
+                .filter(\.$status == .pending)
+                .count()
+            result.append(Buddy(
+                id: try row.requireID(), user: row.user.dto, status: row.status,
+                incoming: true, openRequestCount: openRequests))
+        }
+        return result
     }
 
     struct BuddyRequest: Content {
