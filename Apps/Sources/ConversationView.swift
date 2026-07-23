@@ -26,10 +26,10 @@ struct ConversationView: View {
         model.liveMicConversation == conversationID
     }
 
-    private var speakingNames: String? {
-        let speakers = model.speakingUsers[conversationID] ?? []
-        let names = speakers.compactMap { model.handle(of: $0) }.sorted()
-        return names.isEmpty ? nil : names.joined(separator: ", ")
+    private var speakers: [(id: UUID, handle: String)] {
+        (model.speakingUsers[conversationID] ?? [])
+            .map { (id: $0, handle: model.handle(of: $0) ?? "?") }
+            .sorted { $0.handle < $1.handle }
     }
 
     var body: some View {
@@ -39,10 +39,10 @@ struct ConversationView: View {
             } else if model.endedConversations.contains(conversationID) {
                 banner("Conversation archived. New messages start a fresh session.")
             }
-            if let speakingNames {
-                liveVoiceBanner("\(speakingNames) speaking", icon: "speaker.wave.2.fill",
-                                spectrum: model.incomingSpectrum[conversationID])
-            } else if micIsLive {
+            if !speakers.isEmpty {
+                speakersSection
+            }
+            if micIsLive {
                 liveVoiceBanner("Your mic is live", icon: "mic.fill",
                                 spectrum: model.micSpectrum)
             }
@@ -76,6 +76,31 @@ struct ConversationView: View {
         .onChange(of: model.isSignedOn) { _, signedOn in
             if !signedOn { dismiss() }
         }
+    }
+
+    /// Fixed to the top while anyone is audible: two-column grid of speaking
+    /// users, each an initial-letter circle beside their live EQ.
+    private var speakersSection: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
+                  alignment: .leading, spacing: 8) {
+            ForEach(speakers, id: \.id) { speaker in
+                HStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 28, height: 28)
+                        Text(speaker.handle.prefix(1).uppercased())
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                    AudioMeterView(spectrum: model.speakerSpectrum[speaker.id]
+                        ?? Array(repeating: 0, count: AudioAnalyzer.bandCount))
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.12))
     }
 
     private func liveVoiceBanner(_ text: String, icon: String, spectrum: [Float]?) -> some View {

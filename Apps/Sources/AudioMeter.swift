@@ -6,10 +6,10 @@ import TotemKit
 /// at log-spaced frequencies, one per display band. Not a real FFT power
 /// spectrum — just enough to draw a live equalizer at ~10 updates/s.
 enum AudioAnalyzer {
-    static let bandCount = 12
+    static let bandCount = 4
     /// Log-spaced probe frequencies across the speech range.
     private static let frequencies: [Double] = (0..<bandCount).map { band in
-        100 * pow(6_000 / 100, Double(band) / Double(bandCount - 1))
+        150 * pow(3_600 / 150, Double(band) / Double(bandCount - 1))
     }
 
     /// Per-band levels normalized to 0...1 (floor −50 dBFS).
@@ -34,19 +34,20 @@ enum AudioAnalyzer {
     }
 }
 
-/// Equalizer-style bars for one spectrum frame.
+/// Equalizer-style bars for one spectrum frame: spaced vertical bars,
+/// vertically centered, expanding outward with gain.
 struct AudioMeterView: View {
     let spectrum: [Float]
 
     var body: some View {
-        HStack(alignment: .center, spacing: 2) {
+        HStack(alignment: .center, spacing: 5) {
             ForEach(spectrum.indices, id: \.self) { band in
                 Capsule()
                     .fill(Color.accentColor)
-                    .frame(width: 3, height: 3 + 13 * CGFloat(spectrum[band]))
+                    .frame(width: 4, height: 4 + 16 * CGFloat(spectrum[band]))
             }
         }
-        .frame(height: 16)
+        .frame(height: 20)
         .animation(.linear(duration: 0.1), value: spectrum)
     }
 }

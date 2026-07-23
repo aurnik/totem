@@ -61,9 +61,9 @@ final class AppModel {
     var liveMicConversation: UUID?
     var speakingUsers: [UUID: Set<UUID>] = [:]
     /// Per-chunk spectrum frames for the meters: own mic, and incoming audio
-    /// keyed by conversation (last speaker's chunk wins).
+    /// keyed by speaking user.
     var micSpectrum: [Float]?
-    var incomingSpectrum: [UUID: [Float]] = [:]
+    var speakerSpectrum: [UUID: [Float]] = [:]
     private var speakingExpiry: [UUID: Task<Void, Never>] = [:]
     private var micSendTask: Task<Void, Never>?
     private var micChunks: AsyncStream<Data>.Continuation?
@@ -221,7 +221,7 @@ final class AppModel {
         stopMic()
         audio.stopAll()
         speakingUsers = [:]
-        incomingSpectrum = [:]
+        speakerSpectrum = [:]
         speakingExpiry.values.forEach { $0.cancel() }
         speakingExpiry = [:]
     }
@@ -328,8 +328,8 @@ final class AppModel {
             audio.stopSpeaker(senderID)
             speakingExpiry[senderID]?.cancel()
             speakingExpiry[senderID] = nil
+            speakerSpectrum[senderID] = nil
         }
-        incomingSpectrum[conversationID] = nil
     }
 
     /// Throttled to one event per 3s per peer (spec §6).
@@ -510,16 +510,14 @@ final class AppModel {
             guard activeConversations.contains(conversationID) else { return }
             audio.play(chunk, from: senderID)
             speakingUsers[conversationID, default: []].insert(senderID)
-            incomingSpectrum[conversationID] = AudioAnalyzer.spectrum(of: chunk)
+            speakerSpectrum[senderID] = AudioAnalyzer.spectrum(of: chunk)
             speakingExpiry[senderID]?.cancel()
             speakingExpiry[senderID] = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(1.2))
                 guard !Task.isCancelled, let self else { return }
                 self.speakingUsers[conversationID]?.remove(senderID)
+                self.speakerSpectrum[senderID] = nil
                 self.audio.stopSpeaker(senderID)
-                if self.speakingUsers[conversationID]?.isEmpty != false {
-                    self.incomingSpectrum[conversationID] = nil
-                }
             }
         case .sessionClosed(let sessionID):
             // Transcripts live only until the session ends — no history.
