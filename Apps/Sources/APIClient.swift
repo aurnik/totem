@@ -10,10 +10,16 @@ struct APIClient {
     /// proxy/filter software inspects the well-known http-alt port and
     /// corrupts inbound WebSocket frames.
     static var defaultServerURL: String {
+        // Distributed builds carry their server baked in (set by
+        // Server/onboard/sign.sh) so a friend signs in with just a handle.
+        if let baked = Bundle.main.object(forInfoDictionaryKey: "TotemDefaultServerURL") as? String,
+           !baked.isEmpty {
+            return baked
+        }
         #if os(iOS) && !targetEnvironment(simulator)
-        "http://Aurniks-MacBook-Pro.local:9047"
+        return "http://Aurniks-MacBook-Pro.local:9047"
         #else
-        "http://127.0.0.1:9047"
+        return "http://127.0.0.1:9047"
         #endif
     }
 
@@ -43,6 +49,22 @@ struct APIClient {
 
     func createSession(participantIDs: [UUID]) async throws -> SessionInfo {
         try await post("sessions", body: ["participantIDs": participantIDs.map(\.uuidString)])
+    }
+
+    struct BuildInfo: Codable {
+        let build: Int
+    }
+
+    /// Latest ad-hoc build published by the server's onboarding pipeline.
+    func latestBuild() async throws -> Int {
+        let info: BuildInfo = try await get("app/version")
+        return info.build
+    }
+
+    var updateManifestURL: URL {
+        let manifest = baseURL.appending(path: "app/manifest").absoluteString
+        let encoded = manifest.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? manifest
+        return URL(string: "itms-services://?action=download-manifest&url=\(encoded)")!
     }
 
     var socketURL: URL {

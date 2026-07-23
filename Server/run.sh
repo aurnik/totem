@@ -5,6 +5,6 @@
 set -e
 cd "$(dirname "$0")"
 swift build
-codesign -f -s "Apple Development: Aurnik Islam (75RYUVCU7X)" \
+codesign -f -s "${SERVER_CODESIGN_IDENTITY:-Apple Development: Aurnik Islam (75RYUVCU7X)}" \
     --identifier com.aurnik.totem.server .build/debug/App
 exec .build/debug/App serve --hostname 0.0.0.0 --port 9047 "$@"

@@ -18,8 +18,13 @@ struct OnboardController: RouteCollection {
         join.get(use: page)
         join.get("profile", use: profile)
         join.on(.POST, "udid", body: .collect(maxSize: "1mb"), use: receiveUDID)
-        join.get("manifest", use: manifest)
-        join.get("ipa", use: ipa)
+
+        // Ungated: serving the build is harmless (only registered devices can
+        // run it) and the app's update check needs these without a code.
+        let app = routes.grouped("app")
+        app.get("version", use: version)
+        app.get("manifest", use: manifest)
+        app.get("ipa", use: ipa)
     }
 
     // MARK: - Routes
@@ -42,7 +47,7 @@ struct OnboardController: RouteCollection {
             <pre>\(message.htmlEscaped())</pre>
             """
         case .ready:
-            let manifestURL = "\(base)/join/manifest?code=\(code)"
+            let manifestURL = "\(base)/app/manifest"
             let encoded = manifestURL.addingPercentEncoding(
                 withAllowedCharacters: .alphanumerics) ?? manifestURL
             step2 = """
@@ -151,9 +156,27 @@ struct OnboardController: RouteCollection {
         return req.redirect(to: "\(baseURL(req))/join?code=\(code)", redirectType: .permanent)
     }
 
+    /// Latest published build number — the app's update check. 404 until the
+    /// first signing run has produced a build.
+    private func version(_ req: Request) async throws -> BuildInfo {
+        guard let build = currentBuild(req) else {
+            throw Abort(.notFound, reason: "No build published yet.")
+        }
+        return BuildInfo(build: build)
+    }
+
+    struct BuildInfo: Content {
+        let build: Int
+    }
+
+    private func currentBuild(_ req: Request) -> Int? {
+        (try? String(contentsOfFile: onboardDir(req) + "/build/version.txt", encoding: .utf8))
+            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
     private func manifest(_ req: Request) async throws -> Response {
-        let code = try inviteCode(req)
-        let ipaURL = "\(baseURL(req))/join/ipa?code=\(code)"
+        let ipaURL = "\(baseURL(req))/app/ipa"
+        let build = currentBuild(req) ?? 1
         let payload = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -176,7 +199,7 @@ struct OnboardController: RouteCollection {
                         <key>bundle-identifier</key>
                         <string>\(Self.bundleID)</string>
                         <key>bundle-version</key>
-                        <string>1.0</string>
+                        <string>\(build)</string>
                         <key>kind</key>
                         <string>software</string>
                         <key>title</key>
@@ -192,7 +215,6 @@ struct OnboardController: RouteCollection {
     }
 
     private func ipa(_ req: Request) async throws -> Response {
-        _ = try inviteCode(req)
         let path = ipaPath(req)
         guard FileManager.default.fileExists(atPath: path) else {
             throw Abort(.notFound, reason: "No build available yet.")

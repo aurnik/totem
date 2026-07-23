@@ -17,7 +17,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -25,6 +25,8 @@
 	</dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Totem streams your voice live to buddies in an open chat.</string>
+	<key>TotemDefaultServerURL</key>
+	<string>$(TOTEM_SERVER_URL)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

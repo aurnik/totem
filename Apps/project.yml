@@ -12,6 +12,11 @@ settings:
     SWIFT_VERSION: "5.10"
     DEVELOPMENT_TEAM: TKXA365JX2
     CODE_SIGN_STYLE: Automatic
+    # Overridden by Server/onboard/sign.sh: distributed builds get a
+    # date-stamped build number (drives the in-app update check) and a baked
+    # default server URL. Dev builds stay at "1" (update check disabled).
+    CURRENT_PROJECT_VERSION: "1"
+    TOTEM_SERVER_URL: ""
 targets:
   Totem-iOS:
     type: application
@@ -26,6 +31,8 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSMicrophoneUsageDescription: Totem streams your voice live to buddies in an open chat.
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        TotemDefaultServerURL: $(TOTEM_SERVER_URL)
   Totem-macOS:
     type: application
     platform: macOS

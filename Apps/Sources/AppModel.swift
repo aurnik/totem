@@ -73,6 +73,9 @@ final class AppModel {
     private var api = APIClient()
     private var socket: SocketClient?
     private var socketTask: Task<Void, Never>?
+    /// A newer ad-hoc build is published on the server (iOS, distributed
+    /// builds only — dev builds have build number "1" and never check).
+    var updateAvailable = false
 
     init() {
         NotificationManager.shared.activate()
@@ -402,9 +405,36 @@ final class AppModel {
     func scenePhaseChanged(to phase: ScenePhase) {
         switch phase {
         case .background: apply(machine.handle(.appBackgrounded(at: Date())))
-        case .active: apply(machine.handle(.appForegrounded(at: Date())))
+        case .active:
+            apply(machine.handle(.appForegrounded(at: Date())))
+            checkForUpdate()
         default: break
         }
+    }
+
+    // MARK: - Updates (ad-hoc distribution)
+
+    private func checkForUpdate() {
+        #if os(iOS)
+        guard !updateAvailable,
+              let local = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+                .flatMap(Int.init),
+              local > 1
+        else { return }
+        Task {
+            if let latest = try? await api.latestBuild(), latest > local {
+                updateAvailable = true
+            }
+        }
+        #endif
+    }
+
+    /// Opens the itms-services manifest — iOS installs the new build over
+    /// this one in place, data preserved.
+    func openUpdate() {
+        #if os(iOS)
+        UIApplication.shared.open(api.updateManifestURL)
+        #endif
     }
 
     private func apply(_ effects: [PresenceStateMachine.Effect]) {
