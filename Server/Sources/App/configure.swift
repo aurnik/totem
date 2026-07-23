@@ -4,9 +4,14 @@ import Redis
 import Vapor
 
 func configure(_ app: Application) async throws {
-    app.databases.use(.sqlite(.file("db.sqlite")), as: .sqlite)
-    app.redis.configuration = try RedisConfiguration(
-        hostname: Environment.get("REDIS_HOST") ?? "localhost")
+    app.databases.use(
+        .sqlite(.file(Environment.get("DB_PATH") ?? "db.sqlite")), as: .sqlite)
+    if let redisURL = Environment.get("REDIS_URL") {
+        app.redis.configuration = try RedisConfiguration(url: redisURL)
+    } else {
+        app.redis.configuration = try RedisConfiguration(
+            hostname: Environment.get("REDIS_HOST") ?? "localhost")
+    }
 
     app.migrations.add(CreateSchema())
     app.migrations.add(AddSessionParticipants())

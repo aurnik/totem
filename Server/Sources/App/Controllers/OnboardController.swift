@@ -25,6 +25,15 @@ struct OnboardController: RouteCollection {
         app.get("version", use: version)
         app.get("manifest", use: manifest)
         app.get("ipa", use: ipa)
+
+        // Worker API for a remote signer (the Mac mini polling a
+        // Railway-hosted server). Bearer-authed with SIGNER_SECRET; the
+        // presence of that env var is what switches UDID handling from
+        // local spawning to job queueing.
+        let signer = routes.grouped("signer")
+        signer.get("jobs", use: signerJobs)
+        signer.on(.PUT, "ipa", body: .collect(maxSize: "200mb"), use: signerUpload)
+        signer.on(.POST, "fail", body: .collect(maxSize: "64kb"), use: signerFail)
     }
 
     // MARK: - Routes
@@ -148,9 +157,14 @@ struct OnboardController: RouteCollection {
               udid.allSatisfy({ $0.isHexDigit || $0 == "-" })
         else { throw Abort(.badRequest, reason: "No UDID in enrollment payload.") }
 
-        let started = await OnboardPipeline.shared.begin(
-            udid: udid, onboardDir: onboardDir(req), logger: req.logger)
-        req.logger.info("onboard: UDID \(udid) received, signing \(started ? "started" : "already running")")
+        if Environment.get("SIGNER_SECRET") != nil {
+            await OnboardPipeline.shared.enqueue(udid: udid)
+            req.logger.info("onboard: UDID \(udid) queued for the remote signer")
+        } else {
+            let started = await OnboardPipeline.shared.begin(
+                udid: udid, onboardDir: onboardDir(req), logger: req.logger)
+            req.logger.info("onboard: UDID \(udid) received, signing \(started ? "started" : "already running")")
+        }
         // Redirecting the enrollment POST bounces the device back to Safari;
         // the profile itself never persists.
         return req.redirect(to: "\(baseURL(req))/join?code=\(code)", redirectType: .permanent)
@@ -222,6 +236,52 @@ struct OnboardController: RouteCollection {
         return req.fileio.streamFile(at: path)
     }
 
+    // MARK: - Signer worker API
+
+    /// With ?wait=true this long-polls: the response is held open until a job
+    /// arrives (or ~50s passes), so the worker gets jobs pushed the moment a
+    /// friend registers, over a connection only the worker initiates.
+    private func signerJobs(_ req: Request) async throws -> SignerJobs {
+        try signerAuth(req)
+        if req.query[Bool.self, at: "wait"] == true {
+            return SignerJobs(udids: await OnboardPipeline.shared.waitForJobs())
+        }
+        return SignerJobs(udids: await OnboardPipeline.shared.jobs())
+    }
+
+    struct SignerJobs: Content {
+        let udids: [String]
+    }
+
+    private func signerUpload(_ req: Request) async throws -> HTTPStatus {
+        try signerAuth(req)
+        guard let build = req.query[Int.self, at: "build"],
+              let body = req.body.data
+        else { throw Abort(.badRequest, reason: "Need ?build= and an IPA body.") }
+        let dir = onboardDir(req) + "/build"
+        try FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true)
+        try Data(buffer: body).write(to: URL(fileURLWithPath: dir + "/totem.ipa"))
+        try "\(build)".write(toFile: dir + "/version.txt", atomically: true, encoding: .utf8)
+        await OnboardPipeline.shared.completed()
+        req.logger.info("onboard: signer uploaded build \(build)")
+        return .ok
+    }
+
+    private func signerFail(_ req: Request) async throws -> HTTPStatus {
+        try signerAuth(req)
+        let message = req.body.data.map { String(buffer: $0) } ?? "signer reported failure"
+        await OnboardPipeline.shared.fail(message)
+        req.logger.error("onboard: signer reported failure")
+        return .ok
+    }
+
+    private func signerAuth(_ req: Request) throws {
+        guard let secret = Environment.get("SIGNER_SECRET"),
+              req.headers.bearerAuthorization?.token == secret
+        else { throw Abort(.unauthorized) }
+    }
+
     // MARK: - Helpers
 
     private func inviteCode(_ req: Request) throws -> String {
@@ -240,7 +300,8 @@ struct OnboardController: RouteCollection {
     }
 
     private func onboardDir(_ req: Request) -> String {
-        req.application.directory.workingDirectory + "onboard"
+        Environment.get("ONBOARD_DIR")
+            ?? req.application.directory.workingDirectory + "onboard"
     }
 
     private func ipaPath(_ req: Request) -> String {
@@ -275,12 +336,56 @@ actor OnboardPipeline {
 
     private var running = false
     private var failure: String?
+    /// Remote-signer mode: UDIDs waiting for the worker to pick up.
+    private var pending: [String] = []
 
     func state(ipaPath: String) -> State {
-        if running { return .signing }
+        if running || !pending.isEmpty { return .signing }
         if let failure { return .failed(failure) }
         if FileManager.default.fileExists(atPath: ipaPath) { return .ready }
         return .idle
+    }
+
+    private var waiters: [UUID: CheckedContinuation<[String], Never>] = [:]
+
+    func enqueue(udid: String) {
+        failure = nil
+        if !pending.contains(udid) { pending.append(udid) }
+        for waiter in waiters.values {
+            waiter.resume(returning: pending)
+        }
+        waiters = [:]
+    }
+
+    func jobs() -> [String] { pending }
+
+    /// Long-poll: resolves immediately if jobs are pending, otherwise the
+    /// moment one is enqueued, otherwise empty after ~50s (inside typical
+    /// proxy timeouts) so the worker just reconnects.
+    func waitForJobs() async -> [String] {
+        if !pending.isEmpty { return pending }
+        let id = UUID()
+        return await withCheckedContinuation { continuation in
+            waiters[id] = continuation
+            Task {
+                try? await Task.sleep(for: .seconds(50))
+                self.expireWaiter(id)
+            }
+        }
+    }
+
+    private func expireWaiter(_ id: UUID) {
+        waiters.removeValue(forKey: id)?.resume(returning: [])
+    }
+
+    func completed() {
+        pending = []
+        failure = nil
+    }
+
+    func fail(_ message: String) {
+        pending = []
+        failure = message
     }
 
     /// Returns false if a run was already in progress (the new device still

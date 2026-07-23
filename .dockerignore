@@ -1,0 +1,8 @@
+**/.build
+**/.swiftpm
+Apps
+DerivedData
+*.xcodeproj
+Server/db.sqlite
+Server/onboard/build
+Server/onboard/.venv
