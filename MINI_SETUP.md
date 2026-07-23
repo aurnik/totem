@@ -30,6 +30,9 @@ the server from local signing to job queueing.
    - `DB_PATH` = `/data/db.sqlite`
    - `ONBOARD_DIR` = `/data/onboard`
    - `REDIS_URL` = reference the Redis service's connection URL variable
+   - `REDIS_PUBLIC_URL` = reference the Redis service's public URL variable
+     (fallback — NIO fails to resolve Railway's IPv6-only private DNS, so
+     the server retries the private URL then falls back to this)
    - `ONBOARD_CODE` = an invite code you choose
    - `SIGNER_SECRET` = the shared secret
    - `ONBOARD_BASE_URL` = `https://<the service's public domain>` (generate
