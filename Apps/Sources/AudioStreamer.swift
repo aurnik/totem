@@ -3,7 +3,12 @@ import TotemKit
 
 /// Live voice for open chats: captures the mic as wire-format PCM chunks
 /// (16 kHz mono Int16) and plays incoming chunks through one player node per
-/// remote speaker. A single AVAudioEngine handles both directions.
+/// remote speaker.
+///
+/// Capture and playback use separate engines: touching `inputNode` wires the
+/// input into an engine's graph permanently, and starting such an engine
+/// under a play-only session category fails with CoreAudio 'what'
+/// (2003329396). Keeping playback input-free avoids the whole class.
 ///
 /// Deliberately no `setVoiceProcessingEnabled`: on macOS the voice-processing
 /// IO unit has a habit of delivering silent input buffers. iOS gets echo
@@ -11,9 +16,14 @@ import TotemKit
 /// headphones are the answer.
 @MainActor
 final class AudioStreamer {
-    private let engine = AVAudioEngine()
+    private let playbackEngine = AVAudioEngine()
+    private let captureEngine = AVAudioEngine()
     private var players: [UUID: AVAudioPlayerNode] = [:]
     private var micLive = false
+    /// Once the mic has ever been used, the iOS session category stays
+    /// `.playAndRecord` — flipping categories mid-flight kills running
+    /// engines out from under us.
+    private var everRecorded = false
     /// Last session/engine failure — playback problems are otherwise
     /// invisible (the meters run off the raw chunks, not the engine).
     private var lastError: String?
@@ -34,12 +44,14 @@ final class AudioStreamer {
         guard await Self.requestMicPermission() else { return false }
         guard !micLive else { return true }
 
-        configureSession(record: true)
-        // The input side only joins the engine's active graph when the tap
-        // exists before start — restart the engine around tap installation
-        // or a mic enabled mid-playback captures nothing.
-        if engine.isRunning { engine.stop() }
-        let input = engine.inputNode
+        let firstRecording = !everRecorded
+        everRecorded = true
+        configureSession()
+        // The first mic use flips the session category, which can stop a
+        // running playback engine out from under its player nodes.
+        if firstRecording { restartPlayback() }
+
+        let input = captureEngine.inputNode
         let tapFormat = input.outputFormat(forBus: 0)
         guard tapFormat.sampleRate > 0,
               let converter = AVAudioConverter(from: tapFormat, to: Self.wireFormat)
@@ -70,20 +82,23 @@ final class AudioStreamer {
         }
 
         micLive = true
-        guard startEngine() else {
+        captureEngine.prepare()
+        do {
+            try captureEngine.start()
+        } catch {
+            lastError = "capture: \(error.localizedDescription)"
+            print("capture engine failed to start: \(error)")
             stopMic()
             return false
         }
-        // Player nodes stop playing across an engine restart.
-        players.values.forEach { $0.play() }
         return true
     }
 
     func stopMic() {
         guard micLive else { return }
         micLive = false
-        engine.inputNode.removeTap(onBus: 0)
-        stopEngineIfIdle()
+        captureEngine.inputNode.removeTap(onBus: 0)
+        captureEngine.stop()
     }
 
     // MARK: - Playback
@@ -114,8 +129,10 @@ final class AudioStreamer {
     func stopSpeaker(_ senderID: UUID) {
         guard let player = players.removeValue(forKey: senderID) else { return }
         player.stop()
-        engine.detach(player)
-        stopEngineIfIdle()
+        playbackEngine.detach(player)
+        if players.isEmpty {
+            playbackEngine.stop()
+        }
     }
 
     func stopAll() {
@@ -127,49 +144,51 @@ final class AudioStreamer {
 
     private func playerNode(for senderID: UUID) -> AVAudioPlayerNode? {
         if let existing = players[senderID] { return existing }
-        if !engine.isRunning {
-            configureSession(record: micLive)
+        if !playbackEngine.isRunning {
+            configureSession()
         }
         let node = AVAudioPlayerNode()
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: Self.playbackFormat)
+        playbackEngine.attach(node)
+        playbackEngine.connect(node, to: playbackEngine.mainMixerNode, format: Self.playbackFormat)
         players[senderID] = node
-        guard startEngine() else {
+        guard startPlaybackEngine() else {
             players[senderID] = nil
-            engine.detach(node)
+            playbackEngine.detach(node)
             return nil
         }
         node.play()
         return node
     }
 
-    // MARK: - Engine & session
-
-    private func startEngine() -> Bool {
-        guard !engine.isRunning else { return true }
-        engine.prepare()
+    private func startPlaybackEngine() -> Bool {
+        guard !playbackEngine.isRunning else { return true }
+        playbackEngine.prepare()
         do {
-            try engine.start()
+            try playbackEngine.start()
             lastError = nil
             return true
         } catch {
             lastError = "engine: \(error.localizedDescription)"
-            print("audio engine failed to start: \(error)")
+            print("playback engine failed to start: \(error)")
             return false
         }
     }
 
-    private func stopEngineIfIdle() {
-        if !micLive && players.isEmpty && engine.isRunning {
-            engine.stop()
+    private func restartPlayback() {
+        guard !players.isEmpty else { return }
+        playbackEngine.stop()
+        if startPlaybackEngine() {
+            players.values.forEach { $0.play() }
         }
     }
 
-    private func configureSession(record: Bool) {
+    // MARK: - Session
+
+    private func configureSession() {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
-            if record {
+            if everRecorded {
                 try session.setCategory(
                     .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
             } else {
