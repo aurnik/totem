@@ -25,6 +25,13 @@ xcrun devicectl device install app --device 4FABDBEF-E20F-5818-9026-83C0F0502A78
   "$HOME/Library/Developer/Xcode/DerivedData/Totem-"*/Build/Products/Debug-iphoneos/Totem-iOS.app
 ```
 
+Friend onboarding (`/join` routes, `Server/onboard/`): serves a UDID-capture
+profile, registers the device via the App Store Connect API, and exports an
+ad-hoc IPA installable via itms-services. Enabled only when the server env has
+`ONBOARD_CODE` (invite code) and, for real devices, `ONBOARD_BASE_URL` (public
+https base — profile enrollment and itms-services require TLS) plus
+`ASC_KEY_ID`/`ASC_ISSUER_ID`/`ASC_KEY_PATH` (App Store Connect API key).
+
 Commit as the user "aurnik" (git config already set); no Claude attribution.
 
 ## Dev-machine networking constraints (will bite you)
