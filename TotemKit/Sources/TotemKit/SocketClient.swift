@@ -1,3 +1,6 @@
+// Client-only: the Linux (containerized server) build has no
+// URLSessionWebSocketTask and never opens client sockets.
+#if canImport(Darwin)
 import Foundation
 
 /// Live channel to the presence gateway over URLSessionWebSocketTask (spec §4).
@@ -126,3 +129,4 @@ public actor SocketClient {
         return try? WireCoder.decoder().decode(ServerFrame.self, from: data)
     }
 }
+#endif
