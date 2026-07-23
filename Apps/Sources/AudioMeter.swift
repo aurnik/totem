@@ -11,6 +11,12 @@ enum AudioAnalyzer {
     private static let frequencies: [Double] = (0..<bandCount).map { band in
         150 * pow(3_600 / 150, Double(band) / Double(bandCount - 1))
     }
+    /// Speech rolls off ~6 dB/octave above the fundamentals, so without
+    /// compensation only the low bands ever move. Tilt the higher bands up
+    /// by the same slope.
+    private static let tiltDecibels: [Float] = frequencies.map { frequency in
+        Float(6 * log2(frequency / frequencies[0]))
+    }
 
     /// Per-band levels normalized to 0...1 (floor −50 dBFS).
     static func spectrum(of chunk: Data) -> [Float] {
@@ -18,7 +24,7 @@ enum AudioAnalyzer {
             raw.bindMemory(to: Int16.self).map { Float($0) / 32_768 }
         }
         guard samples.count > 32 else { return Array(repeating: 0, count: bandCount) }
-        return frequencies.map { frequency in
+        return frequencies.enumerated().map { band, frequency in
             let coefficient = Float(2 * cos(2 * .pi * frequency / AudioWire.sampleRate))
             var s1: Float = 0, s2: Float = 0
             for sample in samples {
@@ -28,7 +34,7 @@ enum AudioAnalyzer {
             }
             let power = s1 * s1 + s2 * s2 - coefficient * s1 * s2
             let amplitude = 2 * sqrt(max(power, 0)) / Float(samples.count)
-            let decibels = 20 * log10(amplitude + .leastNormalMagnitude)
+            let decibels = 20 * log10(amplitude + .leastNormalMagnitude) + tiltDecibels[band]
             return min(max(1 + decibels / 50, 0), 1)
         }
     }
@@ -46,10 +52,10 @@ struct AudioMeterView: View {
                 let curved = CGFloat(spectrum[band]) * CGFloat(spectrum[band])
                 Capsule()
                     .fill(Color.accentColor)
-                    .frame(width: 4, height: 4 + 24 * curved)
+                    .frame(width: 4, height: 4 + 34 * curved)
             }
         }
-        .frame(height: 28)
+        .frame(height: 38)
         .animation(.linear(duration: 0.1), value: spectrum)
     }
 }
