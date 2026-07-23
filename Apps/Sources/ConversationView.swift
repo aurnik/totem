@@ -40,9 +40,11 @@ struct ConversationView: View {
                 banner("Conversation archived. New messages start a fresh session.")
             }
             if let speakingNames {
-                liveVoiceBanner("\(speakingNames) speaking")
+                liveVoiceBanner("\(speakingNames) speaking", icon: "speaker.wave.2.fill",
+                                spectrum: model.incomingSpectrum[conversationID])
             } else if micIsLive {
-                liveVoiceBanner("Your mic is live")
+                liveVoiceBanner("Your mic is live", icon: "mic.fill",
+                                spectrum: model.micSpectrum)
             }
             transcript
             composer
@@ -76,13 +78,19 @@ struct ConversationView: View {
         }
     }
 
-    private func liveVoiceBanner(_ text: String) -> some View {
-        Label(text, systemImage: "speaker.wave.2.fill")
-            .font(.footnote)
-            .foregroundStyle(Color.accentColor)
-            .frame(maxWidth: .infinity)
-            .padding(8)
-            .background(Color.accentColor.opacity(0.12))
+    private func liveVoiceBanner(_ text: String, icon: String, spectrum: [Float]?) -> some View {
+        HStack(spacing: 10) {
+            Label(text, systemImage: icon)
+            if let spectrum {
+                AudioMeterView(spectrum: spectrum)
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(Color.accentColor)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(Color.accentColor.opacity(0.12))
     }
 
     private func banner(_ text: String) -> some View {

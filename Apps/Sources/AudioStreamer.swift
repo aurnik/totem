@@ -3,9 +3,12 @@ import TotemKit
 
 /// Live voice for open chats: captures the mic as wire-format PCM chunks
 /// (16 kHz mono Int16) and plays incoming chunks through one player node per
-/// remote speaker. A single AVAudioEngine handles both directions; voice
-/// processing (echo cancellation) is enabled while the mic is live so nearby
-/// devices don't feed back into each other.
+/// remote speaker. A single AVAudioEngine handles both directions.
+///
+/// Deliberately no `setVoiceProcessingEnabled`: on macOS the voice-processing
+/// IO unit has a habit of delivering silent input buffers. iOS gets echo
+/// cancellation from the `.voiceChat` session mode instead; on macOS,
+/// headphones are the answer.
 @MainActor
 final class AudioStreamer {
     private let engine = AVAudioEngine()
@@ -29,11 +32,11 @@ final class AudioStreamer {
         guard !micLive else { return true }
 
         configureSession(record: true)
+        // The input side only joins the engine's active graph when the tap
+        // exists before start — restart the engine around tap installation
+        // or a mic enabled mid-playback captures nothing.
+        if engine.isRunning { engine.stop() }
         let input = engine.inputNode
-        if !input.isVoiceProcessingEnabled {
-            if engine.isRunning { engine.stop() }
-            try? input.setVoiceProcessingEnabled(true)
-        }
         let tapFormat = input.outputFormat(forBus: 0)
         guard tapFormat.sampleRate > 0,
               let converter = AVAudioConverter(from: tapFormat, to: Self.wireFormat)
@@ -68,6 +71,8 @@ final class AudioStreamer {
             stopMic()
             return false
         }
+        // Player nodes stop playing across an engine restart.
+        players.values.forEach { $0.play() }
         return true
     }
 
