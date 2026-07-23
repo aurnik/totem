@@ -35,19 +35,21 @@ enum AudioAnalyzer {
 }
 
 /// Equalizer-style bars for one spectrum frame: spaced vertical bars,
-/// vertically centered, expanding outward with gain.
+/// vertically centered, expanding outward with gain. Levels are squared so
+/// the noise floor stays flat and actual speech visibly jumps.
 struct AudioMeterView: View {
     let spectrum: [Float]
 
     var body: some View {
         HStack(alignment: .center, spacing: 5) {
             ForEach(spectrum.indices, id: \.self) { band in
+                let curved = CGFloat(spectrum[band]) * CGFloat(spectrum[band])
                 Capsule()
                     .fill(Color.accentColor)
-                    .frame(width: 4, height: 4 + 16 * CGFloat(spectrum[band]))
+                    .frame(width: 4, height: 4 + 24 * curved)
             }
         }
-        .frame(height: 20)
+        .frame(height: 28)
         .animation(.linear(duration: 0.1), value: spectrum)
     }
 }

@@ -42,10 +42,6 @@ struct ConversationView: View {
             if !speakers.isEmpty {
                 speakersSection
             }
-            if micIsLive {
-                liveVoiceBanner("Your mic is live", icon: "mic.fill",
-                                spectrum: model.micSpectrum)
-            }
             transcript
             composer
         }
@@ -100,21 +96,6 @@ struct ConversationView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.accentColor.opacity(0.12))
-    }
-
-    private func liveVoiceBanner(_ text: String, icon: String, spectrum: [Float]?) -> some View {
-        HStack(spacing: 10) {
-            Label(text, systemImage: icon)
-            if let spectrum {
-                AudioMeterView(spectrum: spectrum)
-            }
-        }
-        .font(.footnote)
-        .foregroundStyle(Color.accentColor)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
         .background(Color.accentColor.opacity(0.12))
     }
 

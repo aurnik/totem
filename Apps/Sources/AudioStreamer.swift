@@ -14,6 +14,9 @@ final class AudioStreamer {
     private let engine = AVAudioEngine()
     private var players: [UUID: AVAudioPlayerNode] = [:]
     private var micLive = false
+    /// Last session/engine failure — playback problems are otherwise
+    /// invisible (the meters run off the raw chunks, not the engine).
+    private var lastError: String?
 
     private static let wireFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16, sampleRate: AudioWire.sampleRate,
@@ -85,11 +88,13 @@ final class AudioStreamer {
 
     // MARK: - Playback
 
-    func play(_ chunk: Data, from senderID: UUID) {
+    /// Returns nil on success, else a short description of why nothing will
+    /// be heard, so the caller can surface it.
+    func play(_ chunk: Data, from senderID: UUID) -> String? {
         let frames = AVAudioFrameCount(chunk.count / 2)
         guard frames > 0,
               let buffer = AVAudioPCMBuffer(pcmFormat: Self.playbackFormat, frameCapacity: frames)
-        else { return }
+        else { return "bad chunk" }
         buffer.frameLength = frames
         chunk.withUnsafeBytes { raw in
             let samples = raw.bindMemory(to: Int16.self)
@@ -98,8 +103,11 @@ final class AudioStreamer {
                 out[i] = Float(samples[i]) / 32_768
             }
         }
-        guard let player = playerNode(for: senderID) else { return }
+        guard let player = playerNode(for: senderID) else {
+            return lastError ?? "audio engine failed"
+        }
         player.scheduleBuffer(buffer)
+        return nil
     }
 
     /// The speaker went quiet (or their chat closed) — drop their node.
@@ -142,8 +150,10 @@ final class AudioStreamer {
         engine.prepare()
         do {
             try engine.start()
+            lastError = nil
             return true
         } catch {
+            lastError = "engine: \(error.localizedDescription)"
             print("audio engine failed to start: \(error)")
             return false
         }
@@ -158,13 +168,18 @@ final class AudioStreamer {
     private func configureSession(record: Bool) {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        if record {
-            try? session.setCategory(
-                .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
-        } else {
-            try? session.setCategory(.playback, mode: .default)
+        do {
+            if record {
+                try session.setCategory(
+                    .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+            } else {
+                try session.setCategory(.playback, mode: .default)
+            }
+            try session.setActive(true)
+        } catch {
+            lastError = "audio session: \(error.localizedDescription)"
+            print("audio session configuration failed: \(error)")
         }
-        try? session.setActive(true)
         #endif
     }
 

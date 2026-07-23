@@ -60,10 +60,11 @@ final class AppModel {
     /// no explicit mic-state frames on the wire.
     var liveMicConversation: UUID?
     var speakingUsers: [UUID: Set<UUID>] = [:]
-    /// Per-chunk spectrum frames for the meters: own mic, and incoming audio
-    /// keyed by speaking user.
-    var micSpectrum: [Float]?
+    /// Per-chunk spectrum frames for the speaker meters, keyed by speaking user.
     var speakerSpectrum: [UUID: [Float]] = [:]
+    /// Conversations already told (via notice) that playback is broken —
+    /// throttles the notice to once per sign-on.
+    private var playbackFailureNoticed: Set<UUID> = []
     private var speakingExpiry: [UUID: Task<Void, Never>] = [:]
     private var micSendTask: Task<Void, Never>?
     private var micChunks: AsyncStream<Data>.Continuation?
@@ -222,6 +223,7 @@ final class AppModel {
         audio.stopAll()
         speakingUsers = [:]
         speakerSpectrum = [:]
+        playbackFailureNoticed = []
         speakingExpiry.values.forEach { $0.cancel() }
         speakingExpiry = [:]
     }
@@ -303,7 +305,6 @@ final class AppModel {
             micChunks = continuation
             micSendTask = Task {
                 for await chunk in stream {
-                    micSpectrum = AudioAnalyzer.spectrum(of: chunk)
                     let frame: ClientFrame = isGroup
                         ? .sendSessionAudio(sessionID: conversationID, chunk: chunk)
                         : .sendAudio(recipientID: conversationID, chunk: chunk)
@@ -316,7 +317,6 @@ final class AppModel {
     func stopMic() {
         audio.stopMic()
         liveMicConversation = nil
-        micSpectrum = nil
         micChunks?.finish()
         micChunks = nil
         micSendTask?.cancel()
@@ -508,7 +508,12 @@ final class AppModel {
         case .audio(let conversationID, let senderID, let chunk):
             // Live voice only reaches ears with that chat open.
             guard activeConversations.contains(conversationID) else { return }
-            audio.play(chunk, from: senderID)
+            if let failure = audio.play(chunk, from: senderID),
+               !playbackFailureNoticed.contains(conversationID) {
+                playbackFailureNoticed.insert(conversationID)
+                append(.notice(id: UUID(), text: "Can't play live audio — \(failure)", at: Date()),
+                       to: conversationID)
+            }
             speakingUsers[conversationID, default: []].insert(senderID)
             speakerSpectrum[senderID] = AudioAnalyzer.spectrum(of: chunk)
             speakingExpiry[senderID]?.cancel()
