@@ -5,3 +5,5 @@ DerivedData/
 xcuserdata/
 .swiftpm/
 Server/db.sqlite
+Server/onboard/build/
+Server/onboard/.venv/
