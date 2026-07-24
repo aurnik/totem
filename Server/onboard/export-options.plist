@@ -5,10 +5,17 @@
     <key>method</key>
     <string>ad-hoc</string>
     <key>signingStyle</key>
-    <string>automatic</string>
+    <string>manual</string>
     <key>destination</key>
     <string>export</string>
     <key>teamID</key>
-    <string>TKXA365JX2</string>
+    <string>BUQNMSY5Q2</string>
+    <key>signingCertificate</key>
+    <string>Apple Distribution</string>
+    <key>provisioningProfiles</key>
+    <dict>
+        <key>com.aurnik.totem.Totem-iOS</key>
+        <string>Totem AdHoc</string>
+    </dict>
 </dict>
 </plist>

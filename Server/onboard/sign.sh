@@ -1,7 +1,9 @@
 #!/bin/bash
-# Archives and exports an ad-hoc IPA whose provisioning profile includes every
-# registered device, stamped with a monotonic build number (the app's update
-# check compares these). Usage:
+# Archives and exports an ad-hoc IPA, stamped with a monotonic build number
+# (the app's update check compares these). Signing is fully API-driven manual
+# signing: provision.py ensures the bundle ID, Apple Distribution certificate,
+# and a fresh ad-hoc profile (recreated to include every registered device) —
+# no Xcode account, works headless. Usage:
 #   sign.sh <UDID>      register that device first, then build
 #   sign.sh --rebuild   just publish a new build (updates for existing devices)
 # Requires:
@@ -18,33 +20,39 @@ UDID="${1:?usage: sign.sh <UDID> | sign.sh --rebuild}"
 : "${ASC_ISSUER_ID:?ASC_ISSUER_ID is not set}"
 : "${ASC_KEY_PATH:?ASC_KEY_PATH is not set}"
 
+# The paid team (Dead Simple LLC). project.yml carries the free personal
+# team for dev builds; distribution overrides it.
+TEAM_ID=BUQNMSY5Q2
+
+if [ ! -d .venv ]; then
+    python3 -m venv .venv
+    ./.venv/bin/pip -q install PyJWT cryptography
+fi
+
 if [ "$UDID" != "--rebuild" ]; then
-    if [ ! -d .venv ]; then
-        python3 -m venv .venv
-        ./.venv/bin/pip -q install PyJWT cryptography
-    fi
     ./.venv/bin/python register_device.py "$UDID"
 fi
+./.venv/bin/python provision.py
 
 REPO="$(cd ../.. && pwd)"
 BUILD="$REPO/Server/onboard/build"
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
-AUTH=(-allowProvisioningUpdates
-      -authenticationKeyPath "$ASC_KEY_PATH"
-      -authenticationKeyID "$ASC_KEY_ID"
-      -authenticationKeyIssuerID "$ASC_ISSUER_ID")
 
 cd "$REPO/Apps"
 xcodegen generate
 xcodebuild -project Totem.xcodeproj -scheme Totem-iOS -configuration Release \
     -destination "generic/platform=iOS" \
     -archivePath "$BUILD/Totem.xcarchive" \
+    DEVELOPMENT_TEAM="$TEAM_ID" \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="Apple Distribution" \
+    PROVISIONING_PROFILE_SPECIFIER="Totem AdHoc" \
     CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
     TOTEM_SERVER_URL="${ONBOARD_BASE_URL:-}" \
-    archive "${AUTH[@]}"
+    archive
 xcodebuild -exportArchive -archivePath "$BUILD/Totem.xcarchive" \
     -exportPath "$BUILD/export" \
-    -exportOptionsPlist "$REPO/Server/onboard/export-options.plist" "${AUTH[@]}"
+    -exportOptionsPlist "$REPO/Server/onboard/export-options.plist"
 cp "$BUILD/export/Totem-iOS.ipa" "$BUILD/totem.ipa"
 echo "$BUILD_NUMBER" > "$BUILD/version.txt"
 echo "onboard build $BUILD_NUMBER complete"
