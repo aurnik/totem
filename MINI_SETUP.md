@@ -66,20 +66,41 @@ it baked in automatically once the first signed build is published).
   `~/.appstoreconnect/AuthKey.p8`, `chmod 600`. Note its Key ID and
   Issuer ID.
 
-### First run — interactively, once
+### How signing works (no Xcode account needed)
 
-Cloud signing creates/downloads the Apple Distribution certificate on first
-use and the keychain prompts:
+Signing is fully API-driven manual signing — `provision.py` (run by
+`sign.sh` on every build) ensures via the App Store Connect API:
+
+- the distribution bundle ID `com.deadsimple.totem` (dev builds keep
+  `com.aurnik.totem.Totem-iOS` under the personal team; that ID is not
+  registrable in the paid team `BUQNMSY5Q2`),
+- an Apple Distribution certificate created from a locally generated key
+  (state in `~/.appstoreconnect/dist/`), imported into a dedicated
+  `totem-signing` keychain that the pipeline unlocks with a known password —
+  the login keychain is locked in ssh sessions, so codesign would otherwise
+  prompt or fail,
+- a recreated "Totem AdHoc" profile including every registered device
+  (profiles are immutable — recreation is how new devices get in),
+- Apple's WWDR intermediate certificates.
+
+First run:
 
 ```sh
-export ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_KEY_PATH=~/.appstoreconnect/AuthKey.p8
+export ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_KEY_PATH=~/.appstoreconnect/AuthKey_….p8
 export SERVER_URL=https://<railway-domain> SIGNER_SECRET=<shared secret>
 Server/onboard/worker.sh --publish
 ```
 
-Click "Always Allow" on keychain prompts. When it finishes,
-`curl $SERVER_URL/app/version` returns the build number — the update feed
-is live.
+When it finishes, `curl $SERVER_URL/app/version` returns the build number —
+the update feed is live.
+
+Also required on the mini: full Xcode with the iOS platform
+(`xcodebuild -downloadPlatform iOS` — Xcode ships without it), and xcodegen
+installed as its full release layout, NOT a bare symlink to the binary —
+xcodegen finds its bundled SettingPresets relative to the binary path, and
+through a symlink it silently generates projects with no platform settings.
+Unzip the release to `~/tools/xcodegen/` and put `~/tools/xcodegen/bin` on
+PATH.
 
 ### Keep the worker running
 
