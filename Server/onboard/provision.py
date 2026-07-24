@@ -25,6 +25,10 @@ BUNDLE_ID = "com.deadsimple.totem"
 PROFILE_NAME = "Totem AdHoc"
 API = "https://api.appstoreconnect.apple.com/v1"
 STATE = os.path.expanduser("~/.appstoreconnect/dist")
+# Dedicated signing keychain so codesign works headless: the login keychain
+# is locked in ssh sessions, this one we can unlock with a known password.
+KEYCHAIN = os.path.expanduser("~/Library/Keychains/totem-signing.keychain-db")
+KEYCHAIN_PASS = "totem-signing"
 
 
 def token():
@@ -92,10 +96,31 @@ def ensure_certificate():
     return created["data"]["id"]
 
 
+def ensure_keychain():
+    if not os.path.exists(KEYCHAIN):
+        run("security", "create-keychain", "-p", KEYCHAIN_PASS, KEYCHAIN)
+        run("security", "set-keychain-settings", KEYCHAIN)  # never auto-lock
+    run("security", "unlock-keychain", "-p", KEYCHAIN_PASS, KEYCHAIN)
+    listed = run("security", "list-keychains", "-d", "user").stdout
+    if "totem-signing" not in listed:
+        existing = [line.strip().strip('"') for line in listed.splitlines() if line.strip()]
+        run("security", "list-keychains", "-d", "user", "-s", KEYCHAIN, *existing)
+    # Apple's WWDR intermediates, or codesign can't build the cert chain.
+    for generation in ("G3", "G4", "G5", "G6"):
+        cer = f"{STATE}/wwdr{generation}.cer"
+        if not os.path.exists(cer):
+            try:
+                urllib.request.urlretrieve(
+                    f"https://www.apple.com/certificateauthority/AppleWWDRCA{generation}.cer", cer)
+            except Exception:
+                continue
+        run("security", "import", cer, "-k", KEYCHAIN, ok_fail=True)
+
+
 def import_into_keychain(cert):
-    """Build a p12 from our key + the issued cert and import it, trusted for
-    codesign. Idempotent — reimport of an existing identity just fails and
-    is ignored."""
+    """Build a p12 from our key + the issued cert and import it into the
+    signing keychain, pre-authorized for codesign so nothing ever prompts.
+    Idempotent — reimport of an existing identity fails and is ignored."""
     cer_path = f"{STATE}/dist.cer"
     pem_path = f"{STATE}/dist.pem"
     p12_path = f"{STATE}/dist.p12"
@@ -104,8 +129,13 @@ def import_into_keychain(cert):
     run("openssl", "x509", "-inform", "DER", "-in", cer_path, "-out", pem_path)
     run("openssl", "pkcs12", "-export", "-inkey", f"{STATE}/dist.key",
         "-in", pem_path, "-out", p12_path, "-passout", "pass:totem")
-    run("security", "import", p12_path, "-P", "totem",
+    run("security", "import", p12_path, "-k", KEYCHAIN, "-P", "totem",
         "-T", "/usr/bin/codesign", "-T", "/usr/bin/security", ok_fail=True)
+    run("security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:",
+        "-s", "-k", KEYCHAIN_PASS, KEYCHAIN, ok_fail=True)
+    identities = run("security", "find-identity", "-v", "-p", "codesigning", KEYCHAIN).stdout
+    if "Apple Distribution" not in identities:
+        sys.exit(f"distribution identity missing after import: {identities.strip()[:300]}")
 
 
 def ensure_profile(bundle_id_res, cert_id):
@@ -132,6 +162,7 @@ def ensure_profile(bundle_id_res, cert_id):
     print(f"profile refreshed with {len(devices)} device(s)")
 
 
+ensure_keychain()
 bundle = ensure_bundle_id()
 certificate = ensure_certificate()
 ensure_profile(bundle, certificate)
