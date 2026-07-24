@@ -1,7 +1,11 @@
+import APNS
+import APNSCore
+import Crypto
 import Fluent
 import FluentSQLiteDriver
 import Redis
 import Vapor
+import VaporAPNS
 
 func configure(_ app: Application) async throws {
     // Boot-stage markers on print (not the logger): a crash between two
@@ -13,19 +17,39 @@ func configure(_ app: Application) async throws {
     print("configure: redis")
     app.redis.configuration = try await resolveRedis()
 
+    print("configure: apns")
+    // Sign-on pushes; disabled unless the APNs auth key is in the env.
+    if let keyPEM = Environment.get("APNS_KEY_PEM"),
+       let keyID = Environment.get("APNS_KEY_ID") {
+        app.apns.containers.use(
+            APNSClientConfiguration(
+                authenticationMethod: .jwt(
+                    privateKey: try .init(pemRepresentation: keyPEM),
+                    keyIdentifier: keyID,
+                    teamIdentifier: Environment.get("APNS_TEAM_ID") ?? "BUQNMSY5Q2"),
+                environment: .production),
+            eventLoopGroupProvider: .shared(app.eventLoopGroup),
+            responseDecoder: JSONDecoder(),
+            requestEncoder: JSONEncoder(),
+            as: .default)
+    }
+
     print("configure: migrate")
     app.migrations.add(CreateSchema())
     app.migrations.add(AddSessionParticipants())
     app.migrations.add(DropMessageStorage())
+    app.migrations.add(AddPushSupport())
     try await app.autoMigrate()
     print("configure: routes")
 
     let connections = ConnectionManager()
-    let gateway = GatewayController(app: app, connections: connections)
+    let gateway = GatewayController(
+        app: app, connections: connections, pusher: SignOnPusher(app: app))
 
     let authed = app.grouped(TokenAuthenticator(), UserModel.guardMiddleware())
     try authed.register(collection: BuddyController(gateway: gateway))
     try authed.register(collection: SessionController(gateway: gateway))
+    try authed.register(collection: PushController())
     authed.webSocket("ws") { req, ws in
         await gateway.handleUpgrade(req: req, ws: ws)
     }

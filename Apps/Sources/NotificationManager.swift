@@ -1,5 +1,8 @@
 import Foundation
 import UserNotifications
+#if os(iOS)
+import UIKit
+#endif
 
 /// Local sign-on notifications. Throttled to one per buddy per 30 minutes
 /// (spec §7) — unthrottled sign-on alerts are uninstall-inducing. Permission
@@ -17,9 +20,25 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     func requestPermissionIfNeeded() {
         let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: "askedNotificationPermission") else { return }
+        guard !defaults.bool(forKey: "askedNotificationPermission") else {
+            registerForRemotePushes()
+            return
+        }
         defaults.set(true, forKey: "askedNotificationPermission")
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if granted {
+                Task { @MainActor in self.registerForRemotePushes() }
+            }
+        }
+    }
+
+    /// APNs registration for server-side sign-on pushes. Harmless on builds
+    /// without the push entitlement (dev builds) — registration just fails
+    /// via the delegate and no token is ever sent.
+    private func registerForRemotePushes() {
+        #if os(iOS)
+        UIApplication.shared.registerForRemoteNotifications()
+        #endif
     }
 
     func buddySignedOn(_ userID: UUID, handle: String) {

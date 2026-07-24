@@ -10,6 +10,9 @@ final class UserModel: Model, Content, @unchecked Sendable {
     @Field(key: "handle") var handle: String
     @Field(key: "display_name") var displayName: String
     @OptionalField(key: "avatar_url") var avatarURL: String?
+    /// User setting: push "X signed on" to this user's devices while the
+    /// app is closed. On by default, toggleable in the app.
+    @Field(key: "sign_on_pushes") var signOnPushes: Bool
     @Timestamp(key: "created_at", on: .create) var createdAt: Date?
 
     init() {}
@@ -17,6 +20,7 @@ final class UserModel: Model, Content, @unchecked Sendable {
     init(handle: String, displayName: String) {
         self.handle = handle
         self.displayName = displayName
+        self.signOnPushes = true
     }
 
     var dto: TotemKit.User {
@@ -129,6 +133,44 @@ struct AddSessionParticipants: AsyncMigration {
 
     func revert(on db: Database) async throws {
         try await db.schema(SessionModel.schema).deleteField("participants").update()
+    }
+}
+
+/// APNs device tokens — the one piece of per-device state the server keeps.
+/// Message content still never touches storage.
+final class PushTokenModel: Model, @unchecked Sendable {
+    static let schema = "push_tokens"
+
+    @ID(key: .id) var id: UUID?
+    @Parent(key: "user_id") var user: UserModel
+    @Field(key: "token") var token: String
+    @Timestamp(key: "updated_at", on: .update) var updatedAt: Date?
+
+    init() {}
+
+    init(userID: UUID, token: String) {
+        self.$user.id = userID
+        self.token = token
+    }
+}
+
+struct AddPushSupport: AsyncMigration {
+    func prepare(on db: Database) async throws {
+        try await db.schema(UserModel.schema)
+            .field("sign_on_pushes", .bool, .required, .sql(.default(true)))
+            .update()
+        try await db.schema(PushTokenModel.schema)
+            .id()
+            .field("user_id", .uuid, .required, .references("users", "id", onDelete: .cascade))
+            .field("token", .string, .required)
+            .field("updated_at", .datetime)
+            .unique(on: "token")
+            .create()
+    }
+
+    func revert(on db: Database) async throws {
+        try await db.schema(PushTokenModel.schema).delete()
+        try await db.schema(UserModel.schema).deleteField("sign_on_pushes").update()
     }
 }
 

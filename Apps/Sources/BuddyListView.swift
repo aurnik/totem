@@ -11,6 +11,7 @@ struct BuddyListView: View {
     @State private var showingAwaySheet = false
     @State private var showingNewChat = false
     @State private var showingOffline = false
+    @State private var showingSettings = false
     @State private var path = NavigationPath()
 
     private var grouped: [(PresenceState, [Buddy])] {
@@ -64,9 +65,14 @@ struct BuddyListView: View {
                     Button("Away…") { showingAwaySheet = true }
                     Button("Sign Off") { model.signOff() }
                 }
+                Button("Settings", systemImage: "gearshape") { showingSettings = true }
             }
             .sheet(isPresented: $showingAwaySheet) {
                 AwayMessageSheet()
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsSheet()
+                    .environment(model)
             }
             .sheet(isPresented: $showingNewChat) {
                 NewChatSheet { conversationID in
@@ -256,6 +262,53 @@ struct StateDot: View {
         Circle()
             .fill(color)
             .frame(width: 10, height: 10)
+    }
+}
+
+struct SettingsSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let pushBinding = Binding(
+            get: { model.signOnPushes },
+            set: { model.setSignOnPushes($0) }
+        )
+        #if os(iOS)
+        NavigationStack {
+            List {
+                Section {
+                    Toggle("Notify me when friends sign on", isOn: pushBinding)
+                } footer: {
+                    Text("Delivered even while Totem is closed.")
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        #else
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Settings")
+                .font(.headline)
+            Toggle("Notify me when friends sign on", isOn: pushBinding)
+            Text("Delivered to your iPhone even while Totem is closed.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .frame(minWidth: 320)
+        #endif
     }
 }
 

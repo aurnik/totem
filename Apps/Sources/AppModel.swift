@@ -76,6 +76,9 @@ final class AppModel {
     /// A newer ad-hoc build is published on the server (iOS, distributed
     /// builds only — dev builds have build number "1" and never check).
     var updateAvailable = false
+    /// Server-side setting: push "X signed on" to this account's devices
+    /// while the app is closed.
+    var signOnPushes = UserDefaults.standard.object(forKey: "signOnPushes") as? Bool ?? true
 
     init() {
         NotificationManager.shared.activate()
@@ -196,6 +199,7 @@ final class AppModel {
     func signOn() {
         guard let token = api.token, !isSignedOn else { return }
         apply(machine.handle(.signOn(at: Date())))
+        refreshPushSettings()
         let socket = SocketClient(url: api.socketURL, token: token)
         self.socket = socket
         socketTask = Task { [weak self] in
@@ -409,6 +413,31 @@ final class AppModel {
             apply(machine.handle(.appForegrounded(at: Date())))
             checkForUpdate()
         default: break
+        }
+    }
+
+    // MARK: - Push notifications
+
+    /// Called by the app delegate once iOS hands over the APNs token.
+    func registerPushToken(_ token: String) {
+        let api = self.api
+        Task { try? await api.registerPushToken(token) }
+    }
+
+    func setSignOnPushes(_ enabled: Bool) {
+        signOnPushes = enabled
+        UserDefaults.standard.set(enabled, forKey: "signOnPushes")
+        let api = self.api
+        Task { try? await api.setPushSettings(.init(signOnPushes: enabled)) }
+    }
+
+    private func refreshPushSettings() {
+        let api = self.api
+        Task {
+            if let settings = try? await api.pushSettings() {
+                signOnPushes = settings.signOnPushes
+                UserDefaults.standard.set(settings.signOnPushes, forKey: "signOnPushes")
+            }
         }
     }
 

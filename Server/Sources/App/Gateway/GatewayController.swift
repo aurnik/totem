@@ -8,6 +8,7 @@ import Vapor
 struct GatewayController {
     let app: Application
     let connections: ConnectionManager
+    let pusher: SignOnPusher
 
     var presence: PresenceStore { PresenceStore(redis: app.redis) }
     var db: Database { app.db }
@@ -78,7 +79,10 @@ struct GatewayController {
         do {
             // Preserve an existing away state on reconnect; otherwise online.
             let existing = try await presence.get(for: userID)
-            let current = existing.state == .offline ? Presence(state: .online) : existing
+            // Only a genuine offline→online transition is a sign-on; socket
+            // reconnects within the presence TTL are not.
+            let wasOffline = existing.state == .offline
+            let current = wasOffline ? Presence(state: .online) : existing
             try await presence.set(current, for: userID)
 
             let buddyIDs = try await acceptedBuddyIDs(of: userID)
@@ -94,6 +98,13 @@ struct GatewayController {
             await connections.send(
                 .welcome(self_: current, buddies: snapshot, sessions: sessionInfos), to: userID)
             await fanOut(.presence(userID: userID, presence: current), toBuddiesOf: userID)
+            if wasOffline {
+                let pusher = self.pusher
+                let connections = self.connections
+                Task {
+                    await pusher.buddySignedOn(userID, buddyIDs: buddyIDs, connections: connections)
+                }
+            }
         } catch {
             app.logger.report(error: error)
         }

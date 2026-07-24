@@ -51,6 +51,22 @@ struct APIClient {
         try await post("sessions", body: ["participantIDs": participantIDs.map(\.uuidString)])
     }
 
+    struct PushSettings: Codable {
+        let signOnPushes: Bool
+    }
+
+    func registerPushToken(_ token: String) async throws {
+        let _: EmptyResponse = try await post("push/token", body: ["token": token])
+    }
+
+    func pushSettings() async throws -> PushSettings {
+        try await get("push/settings")
+    }
+
+    func setPushSettings(_ settings: PushSettings) async throws {
+        let _: PushSettings = try await post("push/settings", body: settings)
+    }
+
     struct BuildInfo: Codable {
         let build: Int
     }

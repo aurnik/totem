@@ -71,6 +71,16 @@ def ensure_bundle_id():
     return created["data"]["id"]
 
 
+def ensure_push_capability(bundle_id_res):
+    existing = api("GET", f"bundleIds/{bundle_id_res}/bundleIdCapabilities")["data"]
+    if any(c["attributes"]["capabilityType"] == "PUSH_NOTIFICATIONS" for c in existing):
+        return
+    api("POST", "bundleIdCapabilities", {"data": {"type": "bundleIdCapabilities",
+        "attributes": {"capabilityType": "PUSH_NOTIFICATIONS"},
+        "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bundle_id_res}}}}})
+    print("enabled push notifications capability")
+
+
 def ensure_certificate():
     os.makedirs(STATE, exist_ok=True)
     id_file = f"{STATE}/cert_id"
@@ -164,6 +174,7 @@ def ensure_profile(bundle_id_res, cert_id):
 
 ensure_keychain()
 bundle = ensure_bundle_id()
+ensure_push_capability(bundle)
 certificate = ensure_certificate()
 ensure_profile(bundle, certificate)
 print("provisioning ready")

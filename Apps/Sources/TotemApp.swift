@@ -24,6 +24,16 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 final class PhoneAppDelegate: NSObject, UIApplicationDelegate {
     static weak var model: AppModel?
 
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        MainActor.assumeIsolated {
+            Self.model?.registerPushToken(token)
+        }
+    }
+
     func applicationWillTerminate(_ application: UIApplication) {
         let socket = MainActor.assumeIsolated { Self.model?.detachSocketForTermination() }
         guard let socket else { return }
