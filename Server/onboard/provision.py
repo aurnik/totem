@@ -21,7 +21,7 @@ import urllib.request
 
 import jwt
 
-BUNDLE_ID = "com.aurnik.totem.Totem-iOS"
+BUNDLE_ID = "com.deadsimple.totem"
 PROFILE_NAME = "Totem AdHoc"
 API = "https://api.appstoreconnect.apple.com/v1"
 STATE = os.path.expanduser("~/.appstoreconnect/dist")

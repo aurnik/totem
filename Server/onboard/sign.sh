@@ -44,6 +44,7 @@ xcodebuild -project Totem.xcodeproj -scheme Totem-iOS -configuration Release \
     -destination "generic/platform=iOS" \
     -archivePath "$BUILD/Totem.xcarchive" \
     DEVELOPMENT_TEAM="$TEAM_ID" \
+    PRODUCT_BUNDLE_IDENTIFIER=com.deadsimple.totem \
     CODE_SIGN_STYLE=Manual \
     CODE_SIGN_IDENTITY="Apple Distribution" \
     PROVISIONING_PROFILE_SPECIFIER="Totem AdHoc" \

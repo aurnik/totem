@@ -14,7 +14,7 @@
     <string>Apple Distribution</string>
     <key>provisioningProfiles</key>
     <dict>
-        <key>com.aurnik.totem.Totem-iOS</key>
+        <key>com.deadsimple.totem</key>
         <string>Totem AdHoc</string>
     </dict>
 </dict>

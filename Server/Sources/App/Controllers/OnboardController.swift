@@ -11,7 +11,7 @@ import Vapor
 /// ONBOARD_BASE_URL must be the public https base (profile enrollment and
 /// itms-services both require TLS).
 struct OnboardController: RouteCollection {
-    static let bundleID = "com.aurnik.totem.Totem-iOS"
+    static let bundleID = "com.deadsimple.totem"
 
     func boot(routes: RoutesBuilder) throws {
         let join = routes.grouped("join")
