@@ -3,6 +3,10 @@ import Observation
 import SwiftUI
 import TotemKit
 
+#if os(macOS)
+import AppKit
+#endif
+
 @Observable @MainActor
 final class AppModel {
     var currentUser: User?
@@ -82,6 +86,9 @@ final class AppModel {
 
     init() {
         NotificationManager.shared.activate()
+        #if os(macOS)
+        observeSystemSleep()
+        #endif
         if let saved = UserDefaults.standard.string(forKey: "serverURL"),
            let url = URL(string: saved) {
             api.baseURL = url
@@ -416,6 +423,37 @@ final class AppModel {
         }
     }
 
+    #if os(macOS)
+    /// System sleep is the "I'm away" boundary. Without this, the reconnect
+    /// loop re-establishes the socket during dark wakes (Power Nap), which the
+    /// server reads as a fresh sign-on — buddies get pushed "signed on" all
+    /// day while the lid is closed. Deliberate sign-off kills the reconnect
+    /// loop; dark wakes don't post didWake, so only a real wake signs back on.
+    private var resumeOnWake = false
+
+    private func observeSystemSleep() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isSignedOn else { return }
+                self.resumeOnWake = true
+                self.signOff()
+            }
+        }
+        center.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.resumeOnWake else { return }
+                self.resumeOnWake = false
+                self.signOn()
+            }
+        }
+    }
+    #endif
+
     // MARK: - Push notifications
 
     /// Called by the app delegate once iOS hands over the APNs token.
@@ -445,7 +483,10 @@ final class AppModel {
 
     private func checkForUpdate() {
         #if os(iOS)
-        guard !updateAvailable,
+        // TestFlight installs (sandbox receipt) update through TestFlight,
+        // not the ad-hoc itms-services flow.
+        guard Bundle.main.appStoreReceiptURL?.lastPathComponent != "sandboxReceipt",
+              !updateAvailable,
               let local = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
                 .flatMap(Int.init),
               local > 1
