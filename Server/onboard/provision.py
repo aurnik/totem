@@ -23,6 +23,7 @@ import jwt
 
 BUNDLE_ID = "com.deadsimple.totem"
 PROFILE_NAME = "Totem AdHoc"
+APPSTORE_PROFILE_NAME = "Totem AppStore"
 API = "https://api.appstoreconnect.apple.com/v1"
 STATE = os.path.expanduser("~/.appstoreconnect/dist")
 # Dedicated signing keychain so codesign works headless: the login keychain
@@ -172,9 +173,29 @@ def ensure_profile(bundle_id_res, cert_id):
     print(f"profile refreshed with {len(devices)} device(s)")
 
 
+def ensure_appstore_profile(bundle_id_res, cert_id):
+    for profile in api("GET",
+                       f"profiles?filter[name]={APPSTORE_PROFILE_NAME.replace(' ', '%20')}")["data"]:
+        api("DELETE", f"profiles/{profile['id']}")
+    created = api("POST", "profiles", {"data": {"type": "profiles",
+        "attributes": {"name": APPSTORE_PROFILE_NAME, "profileType": "IOS_APP_STORE"},
+        "relationships": {
+            "bundleId": {"data": {"type": "bundleIds", "id": bundle_id_res}},
+            "certificates": {"data": [{"type": "certificates", "id": cert_id}]},
+        }}})
+    content = base64.b64decode(created["data"]["attributes"]["profileContent"])
+    for directory in ("~/Library/MobileDevice/Provisioning Profiles",
+                      "~/Library/Developer/Xcode/UserData/Provisioning Profiles"):
+        directory = os.path.expanduser(directory)
+        os.makedirs(directory, exist_ok=True)
+        open(f"{directory}/totem-appstore.mobileprovision", "wb").write(content)
+    print("app store profile refreshed")
+
+
 ensure_keychain()
 bundle = ensure_bundle_id()
 ensure_push_capability(bundle)
 certificate = ensure_certificate()
 ensure_profile(bundle, certificate)
+ensure_appstore_profile(bundle, certificate)
 print("provisioning ready")

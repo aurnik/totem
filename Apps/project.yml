@@ -21,13 +21,17 @@ targets:
   Totem-iOS:
     type: application
     platform: iOS
-    sources: [Sources]
+    sources: [Sources, Assets.xcassets]
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - package: TotemKit
     info:
       path: Generated/Info-iOS.plist
       properties:
         UILaunchScreen: {}
+        ITSAppUsesNonExemptEncryption: false
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSMicrophoneUsageDescription: Totem streams your voice live to buddies in an open chat.
