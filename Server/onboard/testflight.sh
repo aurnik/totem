@@ -14,6 +14,9 @@ cd "$(dirname "$0")"
 : "${ASC_ISSUER_ID:?ASC_ISSUER_ID is not set}"
 : "${ASC_KEY_PATH:?ASC_KEY_PATH is not set}"
 
+# xcodegen isn't on PATH in non-interactive ssh sessions on the mini.
+[ -d "$HOME/tools/xcodegen/bin" ] && PATH="$HOME/tools/xcodegen/bin:$PATH"
+
 TEAM_ID=BUQNMSY5Q2
 SERVER_URL="${TOTEM_SERVER_URL:-https://totem-server-production.up.railway.app}"
 
