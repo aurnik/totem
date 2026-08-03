@@ -30,6 +30,9 @@ STATE = os.path.expanduser("~/.appstoreconnect/dist")
 # is locked in ssh sessions, this one we can unlock with a known password.
 KEYCHAIN = os.path.expanduser("~/Library/Keychains/totem-signing.keychain-db")
 KEYCHAIN_PASS = "totem-signing"
+# System LibreSSL, never Homebrew OpenSSL 3: its default PKCS12 format
+# (AES + PBKDF2 MAC) is rejected by `security import`.
+OPENSSL = "/usr/bin/openssl"
 
 
 def token():
@@ -94,9 +97,9 @@ def ensure_certificate():
             return cert_id
     key_path = f"{STATE}/dist.key"
     csr_path = f"{STATE}/dist.csr"
-    run("openssl", "genrsa", "-out", key_path, "2048")
+    run(OPENSSL, "genrsa", "-out", key_path, "2048")
     os.chmod(key_path, 0o600)
-    run("openssl", "req", "-new", "-key", key_path, "-out", csr_path,
+    run(OPENSSL, "req", "-new", "-key", key_path, "-out", csr_path,
         "-subj", "/CN=Totem Distribution/C=US")
     created = api("POST", "certificates", {"data": {"type": "certificates",
         "attributes": {"certificateType": "DISTRIBUTION",
@@ -108,6 +111,8 @@ def ensure_certificate():
 
 
 def ensure_keychain():
+    # First run on a fresh machine: the WWDR downloads below land in STATE.
+    os.makedirs(STATE, exist_ok=True)
     if not os.path.exists(KEYCHAIN):
         run("security", "create-keychain", "-p", KEYCHAIN_PASS, KEYCHAIN)
         run("security", "set-keychain-settings", KEYCHAIN)  # never auto-lock
@@ -137,8 +142,8 @@ def import_into_keychain(cert):
     p12_path = f"{STATE}/dist.p12"
     open(cer_path, "wb").write(
         base64.b64decode(cert["attributes"]["certificateContent"]))
-    run("openssl", "x509", "-inform", "DER", "-in", cer_path, "-out", pem_path)
-    run("openssl", "pkcs12", "-export", "-inkey", f"{STATE}/dist.key",
+    run(OPENSSL, "x509", "-inform", "DER", "-in", cer_path, "-out", pem_path)
+    run(OPENSSL, "pkcs12", "-export", "-inkey", f"{STATE}/dist.key",
         "-in", pem_path, "-out", p12_path, "-passout", "pass:totem")
     run("security", "import", p12_path, "-k", KEYCHAIN, "-P", "totem",
         "-T", "/usr/bin/codesign", "-T", "/usr/bin/security", ok_fail=True)
