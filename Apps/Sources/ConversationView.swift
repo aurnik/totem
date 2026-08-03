@@ -45,7 +45,9 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if peerOffline {
+            if model.isReconnecting {
+                banner("Reconnecting — messages can't be sent right now.")
+            } else if peerOffline {
                 banner("\(title) is offline — messages can't be delivered right now.")
             }
             // Also shown while broadcasting with no one talking back — the
@@ -68,25 +70,26 @@ struct ConversationView: View {
             }
             #endif
             ToolbarItem(placement: .primaryAction) {
-                // Tap toggles the mic; long-press opens the soundboard, whose
-                // rows are real views (unlike Menu items) so they can swipe.
-                Image(systemName: micIsLive ? "mic.fill" : "mic")
-                    .foregroundStyle(peerOffline
-                        ? Color.secondary
-                        : micIsLive ? Color.red : Color.accentColor)
-                    .symbolEffect(.pulse, isActive: micIsLive)
-                    .onTapGesture {
-                        guard !peerOffline else { return }
-                        model.toggleMic(in: conversationID)
-                    }
-                    .onLongPressGesture {
-                        guard !peerOffline else { return }
-                        showingSoundboard = true
-                    }
-                    .popover(isPresented: $showingSoundboard,
-                             attachmentAnchor: .rect(.bounds)) {
-                        soundboard
-                    }
+                Button {
+                    showingSoundboard = true
+                } label: {
+                    Image(systemName: "waveform")
+                }
+                .disabled(peerOffline)
+                .popover(isPresented: $showingSoundboard,
+                         attachmentAnchor: .rect(.bounds)) {
+                    soundboard
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.toggleMic(in: conversationID)
+                } label: {
+                    Image(systemName: micIsLive ? "mic.fill" : "mic")
+                        .foregroundStyle(micIsLive ? Color.red : Color.accentColor)
+                        .symbolEffect(.pulse, isActive: micIsLive)
+                }
+                .disabled(peerOffline)
             }
         }
         .sheet(isPresented: $showingRecorder) {
@@ -144,7 +147,7 @@ struct ConversationView: View {
         .background(Color.accentColor.opacity(0.12))
     }
 
-    /// Menu-styled popover for the mic long-press: tap a sample to play it
+    /// Menu-styled popover for the soundboard button: tap a sample to play it
     /// into the chat, swipe it left to delete, "New sound" while under the cap.
     private var soundboard: some View {
         let rowCount = model.soundSamples.count

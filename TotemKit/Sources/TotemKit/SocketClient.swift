@@ -40,8 +40,11 @@ public actor SocketClient {
     }
 
     public func send(_ frame: ClientFrame) async throws {
+        // Between reconnect attempts there is no task; optional chaining
+        // would make the send silently succeed while doing nothing.
+        guard let task else { throw URLError(.networkConnectionLost) }
         let data = try WireCoder.encoder().encode(frame)
-        try await task?.send(.data(data))
+        try await task.send(.data(data))
     }
 
     /// Deliberate sign-off: sends the frame, closes the socket, no reconnect.

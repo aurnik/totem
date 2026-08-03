@@ -58,6 +58,9 @@ final class AppModel {
     private var lastAppended: (id: UUID, at: Date)?
     private var pendingSends: [UUID: UUID] = [:]
     private var sessionPeers: [UUID: UUID] = [:]
+    /// Where the last outbound message was typed — server error frames carry
+    /// no context, so refusals ("they're offline") surface as notices there.
+    private var lastSentConversation: UUID?
     private var lastTypingSentAt: [UUID: Date] = [:]
     /// Live voice: the conversation the local mic streams into (one at a
     /// time) and who we currently hear, per conversation. Speakers are
@@ -128,6 +131,7 @@ final class AppModel {
     }
 
     var isSignedOn: Bool { machine.isSignedOn }
+    var isReconnecting: Bool { machine.isReconnecting }
     var selfState: PresenceState { machine.displayState }
     var awayMessage: String? { machine.awayMessage }
 
@@ -264,11 +268,22 @@ final class AppModel {
         guard !trimmed.isEmpty else { return }
         let clientID = UUID()
         pendingSends[clientID] = conversationID
+        lastSentConversation = conversationID
+        let frame: ClientFrame = groupSessions[conversationID] != nil
+            ? .sendSessionMessage(sessionID: conversationID, body: trimmed, clientMessageID: clientID)
+            : .sendMessage(recipientID: conversationID, body: trimmed, clientMessageID: clientID)
         let socket = self.socket
-        if groupSessions[conversationID] != nil {
-            Task { try? await socket?.send(.sendSessionMessage(sessionID: conversationID, body: trimmed, clientMessageID: clientID)) }
-        } else {
-            Task { try? await socket?.send(.sendMessage(recipientID: conversationID, body: trimmed, clientMessageID: clientID)) }
+        Task { [weak self] in
+            do {
+                guard let socket else { throw URLError(.networkConnectionLost) }
+                try await socket.send(frame)
+            } catch {
+                // The ack will never come — say so where the message was typed.
+                self?.pendingSends[clientID] = nil
+                self?.append(.notice(id: UUID(), text: "Message not sent — connection lost",
+                                     at: Date()),
+                             to: conversationID)
+            }
         }
     }
 
@@ -293,6 +308,7 @@ final class AppModel {
     }
 
     func handle(of userID: UUID) -> String? {
+        if userID == currentUser?.id { return currentUser?.handle }
         if let buddy = buddy(withID: userID) { return buddy.user.handle }
         for info in groupSessions.values {
             if let user = info.participants.first(where: { $0.id == userID }) {
@@ -454,12 +470,17 @@ final class AppModel {
             }
             liveMicConversation = conversationID
             micChunks = continuation
-            micSendTask = Task {
+            micSendTask = Task { [weak self] in
                 for await chunk in stream {
                     let frame: ClientFrame = isGroup
                         ? .sendSessionAudio(sessionID: conversationID, chunk: chunk)
                         : .sendAudio(recipientID: conversationID, chunk: chunk)
                     try? await socket.send(frame)
+                    // Meter-only self monitor (no playback — that would echo)
+                    // so the speaker can see their own audio going out.
+                    if let self, let selfID = self.currentUser?.id {
+                        self.markSpeaking(selfID, in: conversationID, chunk: chunk)
+                    }
                 }
             }
         }
@@ -828,6 +849,9 @@ final class AppModel {
             Task { try? await refreshBuddies() }
         case .error(let message):
             print("server error: \(message)")
+            if let conversationID = lastSentConversation {
+                append(.notice(id: UUID(), text: message, at: Date()), to: conversationID)
+            }
         }
     }
 
@@ -847,6 +871,12 @@ final class AppModel {
         if (speakingUsers[conversationID] ?? []).isEmpty {
             reportMutedIfNeeded(in: conversationID)
         }
+        markSpeaking(senderID, in: conversationID, chunk: chunk)
+    }
+
+    /// Lights up the speaker meters for one chunk — remote audio, the local
+    /// mic monitor, or a sample loopback — and schedules the quiet-expiry.
+    private func markSpeaking(_ senderID: UUID, in conversationID: UUID, chunk: Data) {
         speakingUsers[conversationID, default: []].insert(senderID)
         speakerSpectrum[senderID] = AudioAnalyzer.spectrum(of: chunk)
         speakingExpiry[senderID]?.cancel()
