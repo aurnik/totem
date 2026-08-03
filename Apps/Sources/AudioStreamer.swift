@@ -5,25 +5,22 @@ import TotemKit
 /// (16 kHz mono Int16) and plays incoming chunks through one player node per
 /// remote speaker.
 ///
-/// Capture and playback use separate engines: touching `inputNode` wires the
-/// input into an engine's graph permanently, and starting such an engine
-/// under a play-only session category fails with CoreAudio 'what'
-/// (2003329396). Keeping playback input-free avoids the whole class.
+/// iOS: capture and playback share ONE engine with the voice-processing IO
+/// unit enabled — echo cancellation only works against audio the same unit
+/// renders, so a split graph lets the peer's speaker output loop back through
+/// their mic uncancelled. The session category is `.playAndRecord` from the
+/// start so touching `inputNode` (which wires it in permanently) never
+/// conflicts with a play-only category.
 ///
-/// Deliberately no `setVoiceProcessingEnabled`: on macOS the voice-processing
-/// IO unit has a habit of delivering silent input buffers. iOS gets echo
-/// cancellation from the `.voiceChat` session mode instead; on macOS,
-/// headphones are the answer.
+/// macOS: separate engines, no `setVoiceProcessingEnabled` — the VP unit
+/// there has a habit of delivering silent input buffers; headphones are the
+/// answer.
 @MainActor
 final class AudioStreamer {
-    private let playbackEngine = AVAudioEngine()
-    private let captureEngine = AVAudioEngine()
+    private let playbackEngine: AVAudioEngine
+    private let captureEngine: AVAudioEngine
     private var players: [UUID: AVAudioPlayerNode] = [:]
     private var micLive = false
-    /// Once the mic has ever been used, the iOS session category stays
-    /// `.playAndRecord` — flipping categories mid-flight kills running
-    /// engines out from under us.
-    private var everRecorded = false
     /// Last session/engine failure — playback problems are otherwise
     /// invisible (the meters run off the raw chunks, not the engine).
     private var lastError: String?
@@ -36,9 +33,18 @@ final class AudioStreamer {
 
     init() {
         #if os(iOS)
+        let shared = AVAudioEngine()
+        playbackEngine = shared
+        captureEngine = shared
+        // Must happen before the engine ever starts; enabling VP mid-flight
+        // tears the graph down.
+        try? shared.inputNode.setVoiceProcessingEnabled(true)
         volumeObservation = AVAudioSession.sharedInstance().observe(\.outputVolume) { [weak self] _, _ in
             Task { @MainActor in self?.onOutputVolumeChange?() }
         }
+        #else
+        playbackEngine = AVAudioEngine()
+        captureEngine = AVAudioEngine()
         #endif
     }
 
@@ -69,13 +75,7 @@ final class AudioStreamer {
         guard await Self.requestMicPermission() else { return false }
         guard !micLive else { return true }
 
-        let firstRecording = !everRecorded
-        everRecorded = true
         configureSession()
-        // The first mic use flips the session category, which can stop a
-        // running playback engine out from under its player nodes.
-        if firstRecording { restartPlayback() }
-
         let input = captureEngine.inputNode
         let tapFormat = input.outputFormat(forBus: 0)
         guard tapFormat.sampleRate > 0,
@@ -125,7 +125,12 @@ final class AudioStreamer {
         guard micLive else { return }
         micLive = false
         captureEngine.inputNode.removeTap(onBus: 0)
+        #if os(iOS)
+        // Shared engine: keep it alive if playback still needs it.
+        if players.isEmpty { captureEngine.stop() }
+        #else
         captureEngine.stop()
+        #endif
     }
 
     // MARK: - Playback
@@ -157,9 +162,15 @@ final class AudioStreamer {
         guard let player = players.removeValue(forKey: senderID) else { return }
         player.stop()
         playbackEngine.detach(player)
+        #if os(iOS)
+        if players.isEmpty && !micLive {
+            playbackEngine.stop()
+        }
+        #else
         if players.isEmpty {
             playbackEngine.stop()
         }
+        #endif
     }
 
     func stopAll() {
@@ -201,27 +212,18 @@ final class AudioStreamer {
         }
     }
 
-    private func restartPlayback() {
-        guard !players.isEmpty else { return }
-        playbackEngine.stop()
-        if startPlaybackEngine() {
-            players.values.forEach { $0.play() }
-        }
-    }
-
     // MARK: - Session
 
     private func configureSession() {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
-            if everRecorded {
-                try session.setCategory(
-                    .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
-            } else {
-                try session.setCategory(.playback, mode: .default)
-            }
+            try session.setCategory(
+                .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setActive(true)
+            // .voiceChat prefers the quiet receiver up top; voice chat
+            // belongs on the loudspeaker.
+            try session.overrideOutputAudioPort(.speaker)
         } catch {
             lastError = "audio session: \(error.localizedDescription)"
             print("audio session configuration failed: \(error)")
