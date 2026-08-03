@@ -51,6 +51,10 @@ struct APIClient {
         try await post("sessions", body: ["participantIDs": participantIDs.map(\.uuidString)])
     }
 
+    func setAvatar(_ avatar: Avatar) async throws {
+        let _: EmptyResponse = try await post("me/avatar", body: avatar)
+    }
+
     struct PushSettings: Codable {
         let signOnPushes: Bool
     }

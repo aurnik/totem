@@ -73,6 +73,7 @@ struct TotemApp: App {
         WindowGroup {
             ContentView()
                 .environment(model)
+                .preferredColorScheme(model.colorScheme)
                 .onChange(of: scenePhase) { _, phase in
                     model.scenePhaseChanged(to: phase)
                 }
@@ -83,6 +84,7 @@ struct TotemApp: App {
             if let conversationID {
                 ConversationView(conversationID: conversationID)
                     .environment(model)
+                    .preferredColorScheme(model.colorScheme)
             }
         }
         .defaultSize(width: 360, height: 460)

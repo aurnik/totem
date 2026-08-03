@@ -10,6 +10,8 @@ final class UserModel: Model, Content, @unchecked Sendable {
     @Field(key: "handle") var handle: String
     @Field(key: "display_name") var displayName: String
     @OptionalField(key: "avatar_url") var avatarURL: String?
+    /// Cartoon-avatar settings as JSON (TotemKit.Avatar), set by the client.
+    @OptionalField(key: "avatar") var avatarJSON: String?
     /// User setting: push "X signed on" to this user's devices while the
     /// app is closed. On by default, toggleable in the app.
     @Field(key: "sign_on_pushes") var signOnPushes: Bool
@@ -29,6 +31,9 @@ final class UserModel: Model, Content, @unchecked Sendable {
             handle: handle,
             displayName: displayName,
             avatarURL: avatarURL.flatMap(URL.init(string:)),
+            avatar: avatarJSON.flatMap {
+                try? JSONDecoder().decode(Avatar.self, from: Data($0.utf8))
+            },
             createdAt: createdAt ?? Date()
         )
     }
@@ -171,6 +176,16 @@ struct AddPushSupport: AsyncMigration {
     func revert(on db: Database) async throws {
         try await db.schema(PushTokenModel.schema).delete()
         try await db.schema(UserModel.schema).deleteField("sign_on_pushes").update()
+    }
+}
+
+struct AddAvatar: AsyncMigration {
+    func prepare(on db: Database) async throws {
+        try await db.schema(UserModel.schema).field("avatar", .string).update()
+    }
+
+    func revert(on db: Database) async throws {
+        try await db.schema(UserModel.schema).deleteField("avatar").update()
     }
 }
 

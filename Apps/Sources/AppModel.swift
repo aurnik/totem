@@ -95,6 +95,52 @@ final class AppModel {
     /// while the app is closed.
     var signOnPushes = UserDefaults.standard.object(forKey: "signOnPushes") as? Bool ?? true
 
+    // MARK: - Appearance
+
+    enum Appearance: String, CaseIterable, Identifiable {
+        case system, light, dark
+        var id: String { rawValue }
+        var label: String { rawValue.capitalized }
+    }
+
+    var appearance = Appearance(
+        rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .system
+
+    func setAppearance(_ appearance: Appearance) {
+        self.appearance = appearance
+        UserDefaults.standard.set(appearance.rawValue, forKey: "appearance")
+    }
+
+    var colorScheme: ColorScheme? {
+        switch appearance {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    // MARK: - Avatar
+
+    /// Live value behind the settings sliders — views mutate it freely while
+    /// dragging; `commitAvatar()` persists and uploads on release.
+    var avatar: Avatar = {
+        guard let data = UserDefaults.standard.data(forKey: "avatar"),
+              let avatar = try? JSONDecoder().decode(Avatar.self, from: data)
+        else { return Avatar() }
+        return avatar
+    }()
+
+    /// Persist locally and push to the server, which embeds it in this
+    /// user's DTO so every chat initiated from now on carries the new look.
+    func commitAvatar() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(avatar), forKey: "avatar")
+        currentUser?.avatar = avatar
+        UserDefaults.standard.set(
+            try? WireCoder.encoder().encode(currentUser), forKey: "currentUser")
+        let (api, avatar) = (self.api, self.avatar)
+        Task { try? await api.setAvatar(avatar) }
+    }
+
     init() {
         NotificationManager.shared.activate()
         audio.onOutputVolumeChange = { [weak self] in self?.outputVolumeChanged() }
@@ -155,6 +201,14 @@ final class AppModel {
         let response = try await api.devLogin(handle: handle)
         api.token = response.token
         currentUser = response.user
+        // The account's avatar wins over whatever a previous user of this
+        // device left behind; a fresh account gets this device's settings.
+        if let remote = response.user.avatar {
+            avatar = remote
+            UserDefaults.standard.set(try? JSONEncoder().encode(remote), forKey: "avatar")
+        } else {
+            commitAvatar()
+        }
 
         let defaults = UserDefaults.standard
         defaults.set(response.token, forKey: "authToken")

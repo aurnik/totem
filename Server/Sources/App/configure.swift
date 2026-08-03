@@ -39,6 +39,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddSessionParticipants())
     app.migrations.add(DropMessageStorage())
     app.migrations.add(AddPushSupport())
+    app.migrations.add(AddAvatar())
     try await app.autoMigrate()
     print("configure: routes")
 
@@ -50,6 +51,7 @@ func configure(_ app: Application) async throws {
     try authed.register(collection: BuddyController(gateway: gateway))
     try authed.register(collection: SessionController(gateway: gateway))
     try authed.register(collection: PushController())
+    try authed.register(collection: ProfileController())
     authed.webSocket("ws") { req, ws in
         await gateway.handleUpgrade(req: req, ws: ws)
     }

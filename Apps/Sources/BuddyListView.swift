@@ -278,53 +278,6 @@ struct StateDot: View {
     }
 }
 
-struct SettingsSheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        let pushBinding = Binding(
-            get: { model.signOnPushes },
-            set: { model.setSignOnPushes($0) }
-        )
-        #if os(iOS)
-        NavigationStack {
-            List {
-                Section {
-                    Toggle("Notify me when friends sign on", isOn: pushBinding)
-                } footer: {
-                    Text("Delivered even while Totem is closed.")
-                }
-            }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium])
-        #else
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Settings")
-                .font(.headline)
-            Toggle("Notify me when friends sign on", isOn: pushBinding)
-            Text("Delivered to your iPhone even while Totem is closed.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding()
-        .frame(minWidth: 320)
-        #endif
-    }
-}
-
 /// Sets or changes the away message; coming back is the "I'm Back" button on
 /// the user's own buddy-list row, not here. Recent messages are one tap.
 struct AwayMessageSheet: View {

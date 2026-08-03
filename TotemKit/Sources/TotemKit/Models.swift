@@ -5,14 +5,33 @@ public struct User: Codable, Identifiable, Hashable, Sendable {
     public var handle: String
     public var displayName: String
     public var avatarURL: URL?
+    public var avatar: Avatar?
     public var createdAt: Date
 
-    public init(id: UUID, handle: String, displayName: String, avatarURL: URL? = nil, createdAt: Date) {
+    public init(id: UUID, handle: String, displayName: String, avatarURL: URL? = nil,
+                avatar: Avatar? = nil, createdAt: Date) {
         self.id = id
         self.handle = handle
         self.displayName = displayName
         self.avatarURL = avatarURL
+        self.avatar = avatar
         self.createdAt = createdAt
+    }
+}
+
+/// Cartoon-avatar settings: positions (0…1) into the client-defined skin and
+/// hair palettes, plus glasses. Rides on the User DTO so buddy lists and
+/// session participants always carry everyone's latest look; rendering is a
+/// client concern.
+public struct Avatar: Codable, Hashable, Sendable {
+    public var skinTone: Double
+    public var hair: Double
+    public var glasses: Bool
+
+    public init(skinTone: Double = 0.25, hair: Double = 0.6, glasses: Bool = false) {
+        self.skinTone = skinTone
+        self.hair = hair
+        self.glasses = glasses
     }
 }
 
