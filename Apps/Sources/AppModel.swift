@@ -442,8 +442,19 @@ final class AppModel {
         silenceConversation(peerID)
     }
 
+    /// Most recent distinct away messages, newest first — the quick-tap
+    /// options in the away sheet.
+    var recentAwayMessages: [String] =
+        UserDefaults.standard.stringArray(forKey: "recentAwayMessages") ?? []
+
     func setAwayMessage(_ message: String) {
         apply(machine.handle(.setAwayMessage(message, at: Date())))
+        // Record what the machine actually kept (trimmed, truncated).
+        guard let saved = machine.awayMessage else { return }
+        recentAwayMessages.removeAll { $0 == saved }
+        recentAwayMessages.insert(saved, at: 0)
+        recentAwayMessages = Array(recentAwayMessages.prefix(3))
+        UserDefaults.standard.set(recentAwayMessages, forKey: "recentAwayMessages")
     }
 
     func clearAwayMessage() {

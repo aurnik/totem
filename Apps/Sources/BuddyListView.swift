@@ -178,14 +178,21 @@ struct BuddyListView: View {
         Section {
             HStack {
                 StateDot(state: model.selfState)
-                Text(model.currentUser?.handle ?? "")
-                    .bold()
+                VStack(alignment: .leading) {
+                    Text(model.currentUser?.handle ?? "")
+                        .bold()
+                    if let away = model.awayMessage {
+                        Text(away)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
                 Spacer()
-                if let away = model.awayMessage {
-                    Text(away)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                if model.awayMessage != nil {
+                    Button("I'm Back") { model.clearAwayMessage() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                 }
             }
         }
@@ -312,34 +319,91 @@ struct SettingsSheet: View {
     }
 }
 
+/// Sets or changes the away message; coming back is the "I'm Back" button on
+/// the user's own buddy-list row, not here. Recent messages are one tap.
 struct AwayMessageSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var message = ""
+    @FocusState private var messageFocused: Bool
+
+    private var canSet: Bool {
+        !message.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func set() {
+        guard canSet else { return }
+        model.setAwayMessage(message)
+        dismiss()
+    }
 
     var body: some View {
-        VStack(spacing: 16) {
+        #if os(iOS)
+        NavigationStack {
+            List {
+                Section {
+                    TextField("Back in 5…", text: $message)
+                        .focused($messageFocused)
+                        .submitLabel(.done)
+                        .onSubmit(set)
+                }
+                if !model.recentAwayMessages.isEmpty {
+                    Section("Recent") {
+                        ForEach(model.recentAwayMessages, id: \.self) { recent in
+                            Button {
+                                model.setAwayMessage(recent)
+                                dismiss()
+                            } label: {
+                                Label(recent, systemImage: "clock.arrow.circlepath")
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Away Message")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Set", action: set)
+                        .disabled(!canSet)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .onAppear {
+            message = model.awayMessage ?? ""
+            messageFocused = true
+        }
+        #else
+        VStack(alignment: .leading, spacing: 16) {
             Text("Away Message")
                 .font(.headline)
             TextField("Back in 5…", text: $message)
                 .textFieldStyle(.roundedBorder)
-            HStack {
-                if model.awayMessage != nil {
-                    Button("I'm Back") {
-                        model.clearAwayMessage()
-                        dismiss()
-                    }
-                }
-                Spacer()
-                Button("Set") {
-                    model.setAwayMessage(message)
+                .onSubmit(set)
+            ForEach(model.recentAwayMessages, id: \.self) { recent in
+                Button {
+                    model.setAwayMessage(recent)
                     dismiss()
+                } label: {
+                    Label(recent, systemImage: "clock.arrow.circlepath")
                 }
-                .disabled(message.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Set", action: set)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSet)
             }
         }
         .padding()
         .frame(minWidth: 300)
         .onAppear { message = model.awayMessage ?? "" }
+        #endif
     }
 }
