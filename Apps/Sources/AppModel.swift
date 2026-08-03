@@ -302,6 +302,123 @@ final class AppModel {
         return nil
     }
 
+    // MARK: - Sound samples
+
+    /// A short recorded sound the user can broadcast into a chat from the
+    /// mic button's long-press menu. Audio lives on this device only, as
+    /// wire-format PCM in Application Support; only the labels are listed
+    /// here (persisted in UserDefaults).
+    struct SoundSample: Identifiable, Codable, Hashable {
+        let id: UUID
+        var label: String
+    }
+
+    static let maxSoundSamples = 3
+    static let sampleMaxSeconds: Double = 10
+
+    var soundSamples: [SoundSample] = {
+        guard let data = UserDefaults.standard.data(forKey: "soundSamples"),
+              let samples = try? JSONDecoder().decode([SoundSample].self, from: data)
+        else { return [] }
+        return samples
+    }()
+    var isRecordingSample = false
+    var sampleRecordingSeconds: Double = 0
+    private var sampleRecordingData = Data()
+
+    private var samplesDir: URL {
+        URL.applicationSupportDirectory.appendingPathComponent("SoundSamples", isDirectory: true)
+    }
+
+    private func sampleURL(_ id: UUID) -> URL {
+        samplesDir.appendingPathComponent("\(id).pcm")
+    }
+
+    func startSampleRecording() async -> Bool {
+        stopMic()
+        sampleRecordingData = Data()
+        sampleRecordingSeconds = 0
+        let started = await audio.startMic { [weak self] chunk in
+            Task { @MainActor in self?.appendSampleChunk(chunk) }
+        }
+        isRecordingSample = started
+        return started
+    }
+
+    private func appendSampleChunk(_ chunk: Data) {
+        guard isRecordingSample else { return }
+        sampleRecordingData.append(chunk)
+        let maxBytes = Int(Self.sampleMaxSeconds * AudioWire.sampleRate) * 2
+        if sampleRecordingData.count >= maxBytes {
+            sampleRecordingData = sampleRecordingData.prefix(maxBytes)
+            stopSampleRecording()
+        }
+        sampleRecordingSeconds = Double(sampleRecordingData.count) / (AudioWire.sampleRate * 2)
+    }
+
+    func stopSampleRecording() {
+        guard isRecordingSample else { return }
+        isRecordingSample = false
+        audio.stopMic()
+    }
+
+    func discardRecordedSample() {
+        stopSampleRecording()
+        sampleRecordingData = Data()
+        sampleRecordingSeconds = 0
+    }
+
+    func saveRecordedSample(label: String) {
+        stopSampleRecording()
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !sampleRecordingData.isEmpty,
+              soundSamples.count < Self.maxSoundSamples
+        else { return }
+        let sample = SoundSample(id: UUID(), label: String(trimmed.prefix(30)))
+        do {
+            try FileManager.default.createDirectory(
+                at: samplesDir, withIntermediateDirectories: true)
+            try sampleRecordingData.write(to: sampleURL(sample.id))
+        } catch {
+            print("sample save failed: \(error)")
+            return
+        }
+        soundSamples.append(sample)
+        if let encoded = try? JSONEncoder().encode(soundSamples) {
+            UserDefaults.standard.set(encoded, forKey: "soundSamples")
+        }
+        sampleRecordingData = Data()
+        sampleRecordingSeconds = 0
+    }
+
+    /// Broadcasts a sample into the chat over the live-audio relay, paced in
+    /// real time like mic chunks so recipients' meters and speaker expiry
+    /// behave normally — and looped back locally so the sender hears it too.
+    func playSample(_ sample: SoundSample, in conversationID: UUID) {
+        guard let data = try? Data(contentsOf: sampleURL(sample.id)), !data.isEmpty
+        else { return }
+        let isGroup = groupSessions[conversationID] != nil
+        let socket = self.socket
+        let selfID = currentUser?.id
+        // 100ms of wire PCM per chunk, matching the mic cadence.
+        let step = Int(AudioWire.sampleRate * 2) / 10
+        Task { [weak self] in
+            var offset = 0
+            while offset < data.count {
+                let chunk = data.subdata(in: offset..<min(offset + step, data.count))
+                let frame: ClientFrame = isGroup
+                    ? .sendSessionAudio(sessionID: conversationID, chunk: chunk)
+                    : .sendAudio(recipientID: conversationID, chunk: chunk)
+                try? await socket?.send(frame)
+                if let self, let selfID {
+                    self.receiveAudio(conversationID: conversationID, senderID: selfID, chunk: chunk)
+                }
+                offset += step
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
     // MARK: - Live voice
 
     func toggleMic(in conversationID: UUID) {
@@ -678,29 +795,7 @@ final class AppModel {
                 self?.typingPeers.remove(userID)
             }
         case .audio(let conversationID, let senderID, let chunk):
-            // Live voice only reaches ears with that chat open.
-            guard activeConversations.contains(conversationID) else { return }
-            if let failure = audio.play(chunk, from: senderID),
-               !playbackFailureNoticed.contains(conversationID) {
-                playbackFailureNoticed.insert(conversationID)
-                append(.notice(id: UUID(), text: "Can't play live audio — \(failure)", at: Date()),
-                       to: conversationID)
-            }
-            // A silent chat just became audible — if our volume is at zero,
-            // that's the moment the speaker needs to know we can't hear.
-            if (speakingUsers[conversationID] ?? []).isEmpty {
-                reportMutedIfNeeded(in: conversationID)
-            }
-            speakingUsers[conversationID, default: []].insert(senderID)
-            speakerSpectrum[senderID] = AudioAnalyzer.spectrum(of: chunk)
-            speakingExpiry[senderID]?.cancel()
-            speakingExpiry[senderID] = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1.2))
-                guard !Task.isCancelled, let self else { return }
-                self.speakingUsers[conversationID]?.remove(senderID)
-                self.speakerSpectrum[senderID] = nil
-                self.audio.stopSpeaker(senderID)
-            }
+            receiveAudio(conversationID: conversationID, senderID: senderID, chunk: chunk)
         case .audioMuted(let conversationID, let userID, let muted):
             guard activeConversations.contains(conversationID) else { return }
             if muted {
@@ -723,6 +818,34 @@ final class AppModel {
             Task { try? await refreshBuddies() }
         case .error(let message):
             print("server error: \(message)")
+        }
+    }
+
+    /// One live-audio chunk reaching the ears and meters — from the wire, or
+    /// looped back locally while broadcasting a sound sample.
+    private func receiveAudio(conversationID: UUID, senderID: UUID, chunk: Data) {
+        // Live voice only reaches ears with that chat open.
+        guard activeConversations.contains(conversationID) else { return }
+        if let failure = audio.play(chunk, from: senderID),
+           !playbackFailureNoticed.contains(conversationID) {
+            playbackFailureNoticed.insert(conversationID)
+            append(.notice(id: UUID(), text: "Can't play live audio — \(failure)", at: Date()),
+                   to: conversationID)
+        }
+        // A silent chat just became audible — if our volume is at zero,
+        // that's the moment the speaker needs to know we can't hear.
+        if (speakingUsers[conversationID] ?? []).isEmpty {
+            reportMutedIfNeeded(in: conversationID)
+        }
+        speakingUsers[conversationID, default: []].insert(senderID)
+        speakerSpectrum[senderID] = AudioAnalyzer.spectrum(of: chunk)
+        speakingExpiry[senderID]?.cancel()
+        speakingExpiry[senderID] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled, let self else { return }
+            self.speakingUsers[conversationID]?.remove(senderID)
+            self.speakerSpectrum[senderID] = nil
+            self.audio.stopSpeaker(senderID)
         }
     }
 }

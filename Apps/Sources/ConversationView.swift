@@ -9,6 +9,7 @@ struct ConversationView: View {
     @Environment(\.dismiss) private var dismiss
     let conversationID: UUID
     @State private var draft = ""
+    @State private var showingRecorder = false
 
     private var group: SessionInfo? {
         model.groupSessions[conversationID]
@@ -63,15 +64,31 @@ struct ConversationView: View {
             }
             #endif
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.toggleMic(in: conversationID)
+                // Tap toggles the mic; long-press opens the soundboard.
+                Menu {
+                    ForEach(model.soundSamples) { sample in
+                        Button(sample.label) {
+                            model.playSample(sample, in: conversationID)
+                        }
+                    }
+                    if model.soundSamples.count < AppModel.maxSoundSamples {
+                        Button("New sound", systemImage: "waveform.badge.plus") {
+                            showingRecorder = true
+                        }
+                    }
                 } label: {
                     Image(systemName: micIsLive ? "mic.fill" : "mic")
                         .foregroundStyle(micIsLive ? Color.red : Color.accentColor)
                         .symbolEffect(.pulse, isActive: micIsLive)
+                } primaryAction: {
+                    model.toggleMic(in: conversationID)
                 }
                 .disabled(peerOffline)
             }
+        }
+        .sheet(isPresented: $showingRecorder) {
+            RecordSoundSheet()
+                .environment(model)
         }
         .onAppear { model.conversationOpened(conversationID) }
         .onDisappear { model.conversationClosed(conversationID) }
