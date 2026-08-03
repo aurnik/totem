@@ -10,6 +10,10 @@ struct ConversationView: View {
     let conversationID: UUID
     @State private var draft = ""
     @State private var showingRecorder = false
+    @State private var showingSoundboard = false
+    /// Recorder opens after the soundboard popover finishes dismissing —
+    /// presenting a sheet mid-dismissal drops it.
+    @State private var recorderPending = false
 
     private var group: SessionInfo? {
         model.groupSessions[conversationID]
@@ -64,31 +68,36 @@ struct ConversationView: View {
             }
             #endif
             ToolbarItem(placement: .primaryAction) {
-                // Tap toggles the mic; long-press opens the soundboard.
-                Menu {
-                    ForEach(model.soundSamples) { sample in
-                        Button(sample.label) {
-                            model.playSample(sample, in: conversationID)
-                        }
+                // Tap toggles the mic; long-press opens the soundboard, whose
+                // rows are real views (unlike Menu items) so they can swipe.
+                Image(systemName: micIsLive ? "mic.fill" : "mic")
+                    .foregroundStyle(peerOffline
+                        ? Color.secondary
+                        : micIsLive ? Color.red : Color.accentColor)
+                    .symbolEffect(.pulse, isActive: micIsLive)
+                    .onTapGesture {
+                        guard !peerOffline else { return }
+                        model.toggleMic(in: conversationID)
                     }
-                    if model.soundSamples.count < AppModel.maxSoundSamples {
-                        Button("New sound", systemImage: "waveform.badge.plus") {
-                            showingRecorder = true
-                        }
+                    .onLongPressGesture {
+                        guard !peerOffline else { return }
+                        showingSoundboard = true
                     }
-                } label: {
-                    Image(systemName: micIsLive ? "mic.fill" : "mic")
-                        .foregroundStyle(micIsLive ? Color.red : Color.accentColor)
-                        .symbolEffect(.pulse, isActive: micIsLive)
-                } primaryAction: {
-                    model.toggleMic(in: conversationID)
-                }
-                .disabled(peerOffline)
+                    .popover(isPresented: $showingSoundboard,
+                             attachmentAnchor: .rect(.bounds)) {
+                        soundboard
+                    }
             }
         }
         .sheet(isPresented: $showingRecorder) {
             RecordSoundSheet()
                 .environment(model)
+        }
+        .onChange(of: showingSoundboard) { _, showing in
+            if !showing && recorderPending {
+                recorderPending = false
+                showingRecorder = true
+            }
         }
         .onAppear { model.conversationOpened(conversationID) }
         .onDisappear { model.conversationClosed(conversationID) }
@@ -133,6 +142,39 @@ struct ConversationView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.accentColor.opacity(0.12))
+    }
+
+    /// Menu-styled popover for the mic long-press: tap a sample to play it
+    /// into the chat, swipe it left to delete, "New sound" while under the cap.
+    private var soundboard: some View {
+        let rowCount = model.soundSamples.count
+            + (model.soundSamples.count < AppModel.maxSoundSamples ? 1 : 0)
+        return List {
+            ForEach(model.soundSamples) { sample in
+                Button {
+                    showingSoundboard = false
+                    model.playSample(sample, in: conversationID)
+                } label: {
+                    Label(sample.label, systemImage: "waveform")
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        model.deleteSample(sample)
+                    }
+                }
+            }
+            if model.soundSamples.count < AppModel.maxSoundSamples {
+                Button {
+                    recorderPending = true
+                    showingSoundboard = false
+                } label: {
+                    Label("New sound", systemImage: "waveform.badge.plus")
+                }
+            }
+        }
+        .listStyle(.plain)
+        .frame(width: 250, height: CGFloat(rowCount) * 46 + 16)
+        .presentationCompactAdaptation(.popover)
     }
 
     private func banner(_ text: String) -> some View {

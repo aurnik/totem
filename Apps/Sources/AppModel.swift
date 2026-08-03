@@ -384,11 +384,21 @@ final class AppModel {
             return
         }
         soundSamples.append(sample)
+        persistSamples()
+        sampleRecordingData = Data()
+        sampleRecordingSeconds = 0
+    }
+
+    func deleteSample(_ sample: SoundSample) {
+        try? FileManager.default.removeItem(at: sampleURL(sample.id))
+        soundSamples.removeAll { $0.id == sample.id }
+        persistSamples()
+    }
+
+    private func persistSamples() {
         if let encoded = try? JSONEncoder().encode(soundSamples) {
             UserDefaults.standard.set(encoded, forKey: "soundSamples")
         }
-        sampleRecordingData = Data()
-        sampleRecordingSeconds = 0
     }
 
     /// Broadcasts a sample into the chat over the live-audio relay, paced in
