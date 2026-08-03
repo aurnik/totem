@@ -211,28 +211,34 @@ struct BuddyRow: View {
     }
 
     var body: some View {
-        #if os(iOS)
-        // Custom chevron so it can darken with unread state — the system
-        // NavigationLink accessory color isn't styleable.
-        ZStack {
-            NavigationLink(value: buddy.user.id) { EmptyView() }
-                .opacity(0)
-            HStack {
-                label
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(unread ? Color.primary : Color(.tertiaryLabel))
+        if model.presence(of: buddy).state == .offline {
+            // Offline friends are listed but not openable: the server refuses
+            // delivery to them, so there's no conversation to have.
+            label
+        } else {
+            #if os(iOS)
+            // Custom chevron so it can darken with unread state — the system
+            // NavigationLink accessory color isn't styleable.
+            ZStack {
+                NavigationLink(value: buddy.user.id) { EmptyView() }
+                    .opacity(0)
+                HStack {
+                    label
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(unread ? Color.primary : Color(.tertiaryLabel))
+                }
             }
+            #else
+            Button {
+                openWindow(value: buddy.user.id)
+            } label: {
+                label.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            #endif
         }
-        #else
-        Button {
-            openWindow(value: buddy.user.id)
-        } label: {
-            label.contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        #endif
     }
 
     private var label: some View {

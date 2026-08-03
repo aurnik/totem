@@ -128,22 +128,28 @@ struct NewChatSheet: View {
 
     private func friendRow(_ buddy: Buddy) -> some View {
         let isSelected = selected.contains(buddy.user.id)
+        let offline = model.presence(of: buddy).state == .offline
         // Row tap only selects; the chat opens from the Chat button.
+        // Offline friends stay visible (the gray dot says why) but can't be
+        // chatted — the server refuses delivery to them.
         return Button {
             toggle(buddy.user.id)
         } label: {
             HStack {
                 StateDot(state: model.presence(of: buddy).state)
                 Text(buddy.user.handle)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(offline ? .secondary : .primary)
                 Spacer()
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.5))
+                if !offline {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.5))
+                }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(offline)
     }
 
     private func toggle(_ id: UUID) {
@@ -172,6 +178,12 @@ struct NewChatSheet: View {
     }
 
     private func start() {
+        // Anyone who went offline since being selected is silently dropped.
+        selected = selected.filter { (model.presences[$0]?.state ?? .offline) != .offline }
+        guard !selected.isEmpty else {
+            errorMessage = "Everyone selected went offline."
+            return
+        }
         busy = true
         Task {
             do {
