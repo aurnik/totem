@@ -68,6 +68,20 @@ struct BuddyController: RouteCollection {
             .first()
         guard existing == nil else { throw Abort(.conflict, reason: "Request already exists.") }
 
+        // They already invited me — mutual interest auto-accepts instead of
+        // leaving a crossed pair of pending requests.
+        if let reverse = try await BuddyModel.query(on: req.db)
+            .filter(\.$user.$id == targetID)
+            .filter(\.$buddy.$id == userID)
+            .first() {
+            reverse.status = .accepted
+            try await reverse.save(on: req.db)
+            try await BuddyModel(userID: userID, buddyID: targetID, status: .accepted)
+                .save(on: req.db)
+            await gateway.buddyshipFormed(userID, targetID)
+            return .created
+        }
+
         try await BuddyModel(userID: userID, buddyID: targetID, status: .pending).save(on: req.db)
         await gateway.buddyRequestReceived(by: targetID, from: user.dto)
         return .created
@@ -85,7 +99,18 @@ struct BuddyController: RouteCollection {
 
         row.status = .accepted
         try await row.save(on: req.db)
-        try await BuddyModel(userID: userID, buddyID: row.$user.id, status: .accepted).save(on: req.db)
+        // The reciprocal row can already exist (crossed requests from before
+        // mutual invites auto-accepted) — update it rather than duplicating.
+        if let reciprocal = try await BuddyModel.query(on: req.db)
+            .filter(\.$user.$id == userID)
+            .filter(\.$buddy.$id == row.$user.id)
+            .first() {
+            reciprocal.status = .accepted
+            try await reciprocal.save(on: req.db)
+        } else {
+            try await BuddyModel(userID: userID, buddyID: row.$user.id, status: .accepted)
+                .save(on: req.db)
+        }
         await gateway.buddyshipFormed(userID, row.$user.id)
         return .ok
     }

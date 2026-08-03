@@ -40,9 +40,19 @@ final class AudioStreamer {
         let shared = AVAudioEngine()
         playbackEngine = shared
         captureEngine = shared
-        // Must happen before the engine ever starts; enabling VP mid-flight
-        // tears the graph down.
-        try? shared.inputNode.setVoiceProcessingEnabled(true)
+        // The session category must be record-capable BEFORE the
+        // voice-processing unit is instantiated — under the launch-default
+        // category enabling can fail, and it must happen before the engine
+        // ever starts. Setting the category alone doesn't activate the
+        // session, so other apps' audio isn't interrupted at launch.
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+            try shared.inputNode.setVoiceProcessingEnabled(true)
+        } catch {
+            lastError = "voice processing: \(error.localizedDescription)"
+            print("voice processing setup failed: \(error)")
+        }
         volumeObservation = AVAudioSession.sharedInstance().observe(\.outputVolume) { [weak self] _, _ in
             Task { @MainActor in self?.onOutputVolumeChange?() }
         }
