@@ -626,6 +626,13 @@ final class AppModel {
                     append(.notice(id: UUID(), text: "\(handle) is away: \"\(away)\"", at: Date()),
                            to: userID)
                 }
+                // Coming back from away — but not by signing off, which
+                // already got its own notice above.
+                if previous?.awayMessage != nil, presence.awayMessage == nil,
+                   presence.state != .offline {
+                    append(.notice(id: UUID(), text: "\(handle) is back", at: Date()),
+                           to: userID)
+                }
             }
             // Presence for someone not yet an accepted buddy means the list
             // changed server-side (e.g. our request was just accepted).
