@@ -36,14 +36,15 @@ final class AppModel {
     }
 
     /// Transcripts keyed by conversation ID — the peer's user ID for 1:1
-    /// chats, the session ID for group chats. Session-scoped: cleared when a
-    /// new session starts after the old one was archived.
+    /// chats, the session ID for group chats. Scoped to the local user's own
+    /// online session: one continuous log while signed on, no matter how
+    /// often peers come and go; cleared when this user's session ends
+    /// (deliberate sign-off, or a `freshSignOn` welcome after the server
+    /// marked them offline). Never persisted — messages live only in the RAM
+    /// of currently-online participants.
     var transcripts: [UUID: [TranscriptItem]] = [:]
     /// Open group sessions by session ID.
     var groupSessions: [UUID: SessionInfo] = [:]
-    /// Peers whose session ended (either side signed off) — transcript is
-    /// showing archived state until the next message starts a fresh session.
-    var endedConversations: Set<UUID> = []
     /// Peers with messages not yet seen. Local-only — never sent over the
     /// wire; the spec's no-read-receipts rule is about the other party.
     var unreadPeers: Set<UUID> = []
@@ -64,6 +65,13 @@ final class AppModel {
     /// no explicit mic-state frames on the wire.
     var liveMicConversation: UUID?
     var speakingUsers: [UUID: Set<UUID>] = [:]
+    /// Participants whose device can't play audio right now (volume at zero),
+    /// per conversation — drives the crossed-out speaker row while voice is
+    /// live so speakers know who can't hear them.
+    var mutedListeners: [UUID: Set<UUID>] = [:]
+    /// Conversations we've told peers *we* can't hear — cleared when the
+    /// volume comes back (with a follow-up frame) or the chat goes silent.
+    private var reportedMutedConversations: Set<UUID> = []
     /// Per-chunk spectrum frames for the speaker meters, keyed by speaking user.
     var speakerSpectrum: [UUID: [Float]] = [:]
     /// Conversations already told (via notice) that playback is broken —
@@ -86,6 +94,7 @@ final class AppModel {
 
     init() {
         NotificationManager.shared.activate()
+        audio.onOutputVolumeChange = { [weak self] in self?.outputVolumeChanged() }
         #if os(macOS)
         observeSystemSleep()
         #endif
@@ -163,7 +172,6 @@ final class AppModel {
         presences = [:]
         transcripts = [:]
         groupSessions = [:]
-        endedConversations = []
         unreadPeers = []
         UserDefaults.standard.removeObject(forKey: "authToken")
         UserDefaults.standard.removeObject(forKey: "currentUser")
@@ -225,10 +233,11 @@ final class AppModel {
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
-        // Session-scoped ephemerality: signing off ends every session, and
-        // transcripts do not outlive their session.
-        endedConversations.formUnion(transcripts.keys)
-        transcripts = transcripts.mapValues { _ in [] }
+        // Session-scoped ephemerality: transcripts do not outlive the local
+        // user's own online session.
+        transcripts = [:]
+        sessionPeers = [:]
+        pendingSends = [:]
         unreadPeers = []
         typingPeers = []
         typingExpiry.values.forEach { $0.cancel() }
@@ -236,6 +245,8 @@ final class AppModel {
         stopMic()
         audio.stopAll()
         speakingUsers = [:]
+        mutedListeners = [:]
+        reportedMutedConversations = []
         speakerSpectrum = [:]
         playbackFailureNoticed = []
         speakingExpiry.values.forEach { $0.cancel() }
@@ -251,7 +262,6 @@ final class AppModel {
     func sendMessage(to conversationID: UUID, body: String) {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        startFreshSessionIfEnded(with: conversationID)
         let clientID = UUID()
         pendingSends[clientID] = conversationID
         let socket = self.socket
@@ -338,12 +348,45 @@ final class AppModel {
     }
 
     private func silenceConversation(_ conversationID: UUID) {
+        mutedListeners[conversationID] = nil
+        reportedMutedConversations.remove(conversationID)
         for senderID in speakingUsers.removeValue(forKey: conversationID) ?? [] {
             audio.stopSpeaker(senderID)
             speakingExpiry[senderID]?.cancel()
             speakingExpiry[senderID] = nil
             speakerSpectrum[senderID] = nil
         }
+    }
+
+    /// On transitions only: while audio is audible in a conversation, tell its
+    /// participants whether this device can actually play it.
+    private func outputVolumeChanged() {
+        if audio.outputMuted {
+            for conversationID in speakingUsers.keys
+            where !(speakingUsers[conversationID] ?? []).isEmpty {
+                reportMutedIfNeeded(in: conversationID)
+            }
+        } else {
+            for conversationID in reportedMutedConversations {
+                sendAudioMuted(false, in: conversationID)
+            }
+            reportedMutedConversations = []
+        }
+    }
+
+    private func reportMutedIfNeeded(in conversationID: UUID) {
+        guard audio.outputMuted, !reportedMutedConversations.contains(conversationID)
+        else { return }
+        reportedMutedConversations.insert(conversationID)
+        sendAudioMuted(true, in: conversationID)
+    }
+
+    private func sendAudioMuted(_ muted: Bool, in conversationID: UUID) {
+        let frame: ClientFrame = groupSessions[conversationID] != nil
+            ? .setSessionAudioMuted(sessionID: conversationID, muted: muted)
+            : .setAudioMuted(recipientID: conversationID, muted: muted)
+        let socket = self.socket
+        Task { try? await socket?.send(frame) }
     }
 
     /// Throttled to one event per 3s per peer (spec §6).
@@ -373,12 +416,6 @@ final class AppModel {
         typingPeers.remove(peerID)
         typingExpiry[peerID]?.cancel()
         typingExpiry[peerID] = nil
-    }
-
-    private func startFreshSessionIfEnded(with peerID: UUID) {
-        if endedConversations.remove(peerID) != nil {
-            transcripts[peerID] = []
-        }
     }
 
     /// Termination path: mark signed off and hand the socket to the caller,
@@ -536,7 +573,19 @@ final class AppModel {
 
     private func handle(_ frame: ServerFrame) {
         switch frame {
-        case .welcome(_, let buddies, let sessions):
+        case .welcome(_, let buddies, let sessions, let freshSignOn):
+            // A fresh sign-on means the server ended our previous online
+            // session (suspension sweep, >90s drop, sign-off) — everything
+            // conversation-scoped from before it is gone. A reconnect within
+            // the grace window keeps the log intact.
+            if freshSignOn {
+                transcripts = [:]
+                sessionPeers = [:]
+                pendingSends = [:]
+                unreadPeers = []
+                mutedListeners = [:]
+                reportedMutedConversations = []
+            }
             presences = Dictionary(uniqueKeysWithValues: buddies.compactMap { key, value in
                 UUID(uuidString: key).map { ($0, value) }
             })
@@ -577,12 +626,17 @@ final class AppModel {
             } else if !wasOffline && presence.state == .offline {
                 SoundPlayer.play(.buddyOut)
             }
+            // An offline user isn't a muted listener, just gone.
+            if presence.state == .offline {
+                for key in mutedListeners.keys {
+                    mutedListeners[key]?.remove(userID)
+                }
+            }
         case .message(let message):
             let key = groupSessions[message.sessionID] != nil ? message.sessionID : message.senderID
             if key == message.senderID {
                 sessionPeers[message.sessionID] = key
             }
-            startFreshSessionIfEnded(with: key)
             append(.message(message), to: key)
             clearTyping(message.senderID)
             if !activeConversations.contains(key) {
@@ -614,6 +668,11 @@ final class AppModel {
                 append(.notice(id: UUID(), text: "Can't play live audio — \(failure)", at: Date()),
                        to: conversationID)
             }
+            // A silent chat just became audible — if our volume is at zero,
+            // that's the moment the speaker needs to know we can't hear.
+            if (speakingUsers[conversationID] ?? []).isEmpty {
+                reportMutedIfNeeded(in: conversationID)
+            }
             speakingUsers[conversationID, default: []].insert(senderID)
             speakerSpectrum[senderID] = AudioAnalyzer.spectrum(of: chunk)
             speakingExpiry[senderID]?.cancel()
@@ -624,16 +683,20 @@ final class AppModel {
                 self.speakerSpectrum[senderID] = nil
                 self.audio.stopSpeaker(senderID)
             }
+        case .audioMuted(let conversationID, let userID, let muted):
+            guard activeConversations.contains(conversationID) else { return }
+            if muted {
+                mutedListeners[conversationID, default: []].insert(userID)
+            } else {
+                mutedListeners[conversationID]?.remove(userID)
+            }
         case .sessionClosed(let sessionID):
-            // Transcripts live only until the session ends — no history.
-            if groupSessions[sessionID] != nil {
-                endedConversations.insert(sessionID)
-                transcripts[sessionID] = []
-                if liveMicConversation == sessionID { stopMic() }
-                silenceConversation(sessionID)
-            } else if let peerID = sessionPeers.removeValue(forKey: sessionID) {
-                endedConversations.insert(peerID)
-                transcripts[peerID] = []
+            // The peer went offline and the server archived the 1:1 session.
+            // Our own transcript survives — it's scoped to our online session,
+            // not the server's — and the next message simply starts a new
+            // server session under the same conversation key. Only the live
+            // ephemera stop.
+            if let peerID = sessionPeers.removeValue(forKey: sessionID) {
                 clearTyping(peerID)
                 if liveMicConversation == peerID { stopMic() }
                 silenceConversation(peerID)

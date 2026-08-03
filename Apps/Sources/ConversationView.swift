@@ -32,14 +32,20 @@ struct ConversationView: View {
             .sorted { $0.handle < $1.handle }
     }
 
+    private var mutedListenerNames: [String] {
+        (model.mutedListeners[conversationID] ?? [])
+            .compactMap { model.handle(of: $0) }
+            .sorted()
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if peerOffline {
                 banner("\(title) is offline — messages can't be delivered right now.")
-            } else if model.endedConversations.contains(conversationID) {
-                banner("Conversation archived. New messages start a fresh session.")
             }
-            if !speakers.isEmpty {
+            // Also shown while broadcasting with no one talking back — the
+            // speaker is exactly who needs to know a listener can't hear.
+            if !speakers.isEmpty || (micIsLive && !mutedListenerNames.isEmpty) {
                 speakersSection
             }
             transcript
@@ -75,23 +81,36 @@ struct ConversationView: View {
     }
 
     /// Fixed to the top while anyone is audible: two-column grid of speaking
-    /// users, each an initial-letter circle beside their live EQ.
+    /// users, each an initial-letter circle beside their live EQ, plus a
+    /// crossed-out speaker row for participants whose device can't play audio.
     private var speakersSection: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
-                  alignment: .leading, spacing: 8) {
-            ForEach(speakers, id: \.id) { speaker in
-                HStack(spacing: 8) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 28, height: 28)
-                        Text(speaker.handle.prefix(1).uppercased())
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 8) {
+            if !speakers.isEmpty {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())],
+                          alignment: .leading, spacing: 8) {
+                    ForEach(speakers, id: \.id) { speaker in
+                        HStack(spacing: 8) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.accentColor)
+                                    .frame(width: 28, height: 28)
+                                Text(speaker.handle.prefix(1).uppercased())
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.white)
+                            }
+                            AudioMeterView(spectrum: model.speakerSpectrum[speaker.id]
+                                ?? Array(repeating: 0, count: AudioAnalyzer.bandCount))
+                        }
                     }
-                    AudioMeterView(spectrum: model.speakerSpectrum[speaker.id]
-                        ?? Array(repeating: 0, count: AudioAnalyzer.bandCount))
                 }
+            }
+            if !mutedListenerNames.isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "speaker.slash.fill")
+                    Text("\(mutedListenerNames.joined(separator: ", ")) can't hear")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 12)

@@ -15,6 +15,11 @@ public enum ClientFrame: Codable, Sendable {
     /// never stored, never acked, silently dropped for offline recipients.
     case sendAudio(recipientID: UUID, chunk: Data)
     case sendSessionAudio(sessionID: UUID, chunk: Data)
+    /// This user can't hear incoming live audio right now (device volume at
+    /// zero) — or can again. Sent on transitions while audio is audible in
+    /// the chat, so other participants can show a crossed-out speaker.
+    case setAudioMuted(recipientID: UUID, muted: Bool)
+    case setSessionAudioMuted(sessionID: UUID, muted: Bool)
 }
 
 public enum AudioWire {
@@ -40,8 +45,11 @@ public struct SessionInfo: Codable, Hashable, Sendable {
 public enum ServerFrame: Codable, Sendable {
     /// Sent on connect: authoritative snapshot of own presence, all buddies'
     /// (keyed by user UUID string — UUID keys would encode as a JSON array),
-    /// and any open group sessions the user belongs to.
-    case welcome(self_: Presence, buddies: [String: Presence], sessions: [SessionInfo])
+    /// and any open group sessions the user belongs to. `freshSignOn` is true
+    /// when the server considered this user offline before the connect — the
+    /// previous online session ended, so the client must drop its transcripts;
+    /// false means a reconnect within the presence grace window.
+    case welcome(self_: Presence, buddies: [String: Presence], sessions: [SessionInfo], freshSignOn: Bool)
     /// A (group) session was created that includes this user.
     case sessionStarted(SessionInfo)
     case presence(userID: UUID, presence: Presence)
@@ -53,6 +61,9 @@ public enum ServerFrame: Codable, Sendable {
     /// receiving client keys the chat by: the sender's user ID for 1:1, the
     /// session ID for groups.
     case audio(conversationID: UUID, senderID: UUID, chunk: Data)
+    /// A chat participant's device went (or stopped being) unable to play
+    /// live audio. Same `conversationID` keying as `audio`.
+    case audioMuted(conversationID: UUID, userID: UUID, muted: Bool)
     case sessionClosed(sessionID: UUID)
     /// A buddy request arrived (or one of yours was accepted — paired with a
     /// `presence` push). Clients refetch the buddy list rather than patching

@@ -96,7 +96,8 @@ struct GatewayController {
                 sessionInfos.append(try await sessionInfo(session, on: db))
             }
             await connections.send(
-                .welcome(self_: current, buddies: snapshot, sessions: sessionInfos), to: userID)
+                .welcome(self_: current, buddies: snapshot, sessions: sessionInfos,
+                         freshSignOn: wasOffline), to: userID)
             await fanOut(.presence(userID: userID, presence: current), toBuddiesOf: userID)
             if wasOffline {
                 let pusher = self.pusher
@@ -190,6 +191,22 @@ struct GatewayController {
                 for participant in session.participants where participant != userID {
                     await connections.send(
                         .audio(conversationID: sessionID, senderID: userID, chunk: chunk),
+                        to: participant)
+                }
+
+            case .setAudioMuted(let recipientID, let muted):
+                guard try await areAcceptedBuddies(userID, recipientID) else { return }
+                await connections.send(
+                    .audioMuted(conversationID: userID, userID: userID, muted: muted),
+                    to: recipientID)
+
+            case .setSessionAudioMuted(let sessionID, let muted):
+                guard let session = try await SessionModel.find(sessionID, on: db),
+                      session.includes(userID), session.endedAt == nil
+                else { return }
+                for participant in session.participants where participant != userID {
+                    await connections.send(
+                        .audioMuted(conversationID: sessionID, userID: userID, muted: muted),
                         to: participant)
                 }
             }

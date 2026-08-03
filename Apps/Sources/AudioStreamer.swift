@@ -27,6 +27,31 @@ final class AudioStreamer {
     /// Last session/engine failure — playback problems are otherwise
     /// invisible (the meters run off the raw chunks, not the engine).
     private var lastError: String?
+    /// Fires on system output-volume changes so the owner can re-evaluate
+    /// `outputMuted` (the crossed-out-speaker signal to chat peers).
+    var onOutputVolumeChange: (@MainActor () -> Void)?
+    #if os(iOS)
+    private var volumeObservation: NSKeyValueObservation?
+    #endif
+
+    init() {
+        #if os(iOS)
+        volumeObservation = AVAudioSession.sharedInstance().observe(\.outputVolume) { [weak self] _, _ in
+            Task { @MainActor in self?.onOutputVolumeChange?() }
+        }
+        #endif
+    }
+
+    /// True when the device can't render incoming voice: hardware volume at
+    /// zero. The ring/silent switch is irrelevant — the `.playback` /
+    /// `.playAndRecord` categories play through it.
+    var outputMuted: Bool {
+        #if os(iOS)
+        AVAudioSession.sharedInstance().outputVolume == 0
+        #else
+        false
+        #endif
+    }
 
     private static let wireFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16, sampleRate: AudioWire.sampleRate,
@@ -56,6 +81,7 @@ final class AudioStreamer {
         guard tapFormat.sampleRate > 0,
               let converter = AVAudioConverter(from: tapFormat, to: Self.wireFormat)
         else { return false }
+        let normalizer = AudioNormalizer()
 
         input.installTap(onBus: 0, bufferSize: 2048, format: tapFormat) { buffer, _ in
             // Audio thread: resample to the wire format and hand off. The
@@ -78,6 +104,7 @@ final class AudioStreamer {
             }
             guard error == nil, out.frameLength > 0, let channel = out.int16ChannelData
             else { return }
+            normalizer.normalize(channel[0], frames: Int(out.frameLength))
             onChunk(Data(bytes: channel[0], count: Int(out.frameLength) * 2))
         }
 
@@ -208,5 +235,36 @@ final class AudioStreamer {
         #else
         await AVCaptureDevice.requestAccess(for: .audio)
         #endif
+    }
+}
+
+/// Smoothed automatic gain riding on the capture tap: nudges chunk loudness
+/// toward a target peak so quiet and loud mics arrive at comparable levels.
+/// Attack (gain down) is fast to dodge clipping; release (gain up) is slow to
+/// avoid pumping. Like the converter, state is only touched from the serial
+/// tap, never concurrently.
+private final class AudioNormalizer {
+    private var gain: Float = 1
+    private static let targetPeak: Float = 0.7
+    /// Below this peak the chunk is treated as silence/noise — gain holds
+    /// rather than winding up to amplify the noise floor.
+    private static let noiseFloor: Float = 0.02
+    private static let maxGain: Float = 8
+
+    func normalize(_ samples: UnsafeMutablePointer<Int16>, frames: Int) {
+        var peak: Float = 0
+        for i in 0..<frames {
+            peak = max(peak, abs(Float(samples[i])) / 32_768)
+        }
+        if peak >= Self.noiseFloor {
+            let desired = min(Self.targetPeak / peak, Self.maxGain)
+            gain += (desired - gain) * (desired < gain ? 0.5 : 0.05)
+        }
+        // Hard ceiling regardless of smoothing: never let this chunk clip.
+        if peak * gain > 1 { gain = 1 / peak }
+        guard abs(gain - 1) > 0.01 else { return }
+        for i in 0..<frames {
+            samples[i] = Int16(max(-32_768, min(32_767, Float(samples[i]) * gain)))
+        }
     }
 }
