@@ -1,9 +1,60 @@
 import SwiftUI
 import TotemKit
 
-/// Records a soundboard sample (up to 10s, saved on-device with a label) for
-/// the mic button's long-press menu.
-struct RecordSoundSheet: View {
+/// Soundboard sheet: tap a sample to play it into the chat, swipe left to
+/// delete, "New sound" while under the cap. The recorder pushes within this
+/// sheet's own NavigationStack — dismissing one presentation to start
+/// another proved unreliable and left presentation state stuck.
+struct SoundboardSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let conversationID: UUID
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(model.soundSamples) { sample in
+                    Button {
+                        model.playSample(sample, in: conversationID)
+                        dismiss()
+                    } label: {
+                        Label(sample.label, systemImage: "waveform")
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            model.deleteSample(sample)
+                        }
+                    }
+                }
+                if model.soundSamples.count < AppModel.maxSoundSamples {
+                    NavigationLink {
+                        RecordSoundView()
+                    } label: {
+                        Label("New sound", systemImage: "waveform.badge.plus")
+                    }
+                }
+            }
+            .navigationTitle("Soundboard")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        #if os(iOS)
+        .presentationDetents([.medium])
+        #else
+        .frame(minWidth: 320, minHeight: 320)
+        #endif
+    }
+}
+
+/// Records a soundboard sample: up to 10s, saved on-device with a label.
+/// Saving pops back to the list; backing out abandons the take.
+struct RecordSoundView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var label = ""
@@ -19,87 +70,55 @@ struct RecordSoundSheet: View {
         dismiss()
     }
 
-    private func cancel() {
-        model.discardRecordedSample()
-        dismiss()
-    }
-
-    private var recorder: some View {
-        VStack(spacing: 12) {
-            Text(String(format: "%.1fs / %.0fs",
-                        model.sampleRecordingSeconds, AppModel.sampleMaxSeconds))
-                .font(.title3.monospacedDigit())
-            ProgressView(value: model.sampleRecordingSeconds,
-                         total: AppModel.sampleMaxSeconds)
-            Button {
-                if model.isRecordingSample {
-                    model.stopSampleRecording()
-                } else {
-                    Task { await model.startSampleRecording() }
-                }
-            } label: {
-                Image(systemName: model.isRecordingSample ? "stop.circle.fill" : "record.circle")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.red)
-                    .symbolEffect(.pulse, isActive: model.isRecordingSample)
-            }
-            .buttonStyle(.plain)
-            Text(model.isRecordingSample
-                 ? "Recording…"
-                 : model.sampleRecordingSeconds > 0
-                    ? "Tap to re-record"
-                    : "Tap to record")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-    }
-
     var body: some View {
-        #if os(iOS)
-        NavigationStack {
-            List {
-                Section {
-                    TextField("Label", text: $label)
-                        .submitLabel(.done)
-                        .onSubmit(save)
-                }
-                Section { recorder }
+        List {
+            Section {
+                TextField("Label", text: $label)
+                    .submitLabel(.done)
+                    .onSubmit(save)
             }
-            .navigationTitle("New Sound")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: cancel)
+            Section {
+                VStack(spacing: 12) {
+                    Text(String(format: "%.1fs / %.0fs",
+                                model.sampleRecordingSeconds, AppModel.sampleMaxSeconds))
+                        .font(.title3.monospacedDigit())
+                    ProgressView(value: model.sampleRecordingSeconds,
+                                 total: AppModel.sampleMaxSeconds)
+                    Button {
+                        if model.isRecordingSample {
+                            model.stopSampleRecording()
+                        } else {
+                            Task { await model.startSampleRecording() }
+                        }
+                    } label: {
+                        Image(systemName: model.isRecordingSample ? "stop.circle.fill" : "record.circle")
+                            .font(.system(size: 56))
+                            .foregroundStyle(.red)
+                            .symbolEffect(.pulse, isActive: model.isRecordingSample)
+                    }
+                    .buttonStyle(.plain)
+                    Text(model.isRecordingSample
+                         ? "Recording…"
+                         : model.sampleRecordingSeconds > 0
+                            ? "Tap to re-record"
+                            : "Tap to record")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: save)
-                        .disabled(!canSave)
-                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
             }
         }
-        .presentationDetents([.medium])
-        .interactiveDismissDisabled(model.isRecordingSample)
-        .onDisappear { model.stopSampleRecording() }
-        #else
-        VStack(alignment: .leading, spacing: 16) {
-            Text("New Sound")
-                .font(.headline)
-            TextField("Label", text: $label)
-                .textFieldStyle(.roundedBorder)
-            recorder
-            HStack {
-                Button("Cancel", action: cancel)
-                Spacer()
+        .navigationTitle("New Sound")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
                 Button("Save", action: save)
-                    .buttonStyle(.borderedProminent)
                     .disabled(!canSave)
             }
         }
-        .padding()
-        .frame(minWidth: 320)
         .onDisappear { model.stopSampleRecording() }
-        #endif
     }
 }

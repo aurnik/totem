@@ -19,7 +19,11 @@ import TotemKit
 final class AudioStreamer {
     private let playbackEngine: AVAudioEngine
     private let captureEngine: AVAudioEngine
+    /// Player nodes are pooled per sender and NEVER detached — removing a
+    /// node from a live voice-processing graph asserts inside AVAudioEngine
+    /// (SIGABRT in RemoveNode, seen on TestFlight). Quiet speakers just stop.
     private var players: [UUID: AVAudioPlayerNode] = [:]
+    private var activeSpeakers: Set<UUID> = []
     private var micLive = false
     /// Last session/engine failure — playback problems are otherwise
     /// invisible (the meters run off the raw chunks, not the engine).
@@ -127,7 +131,7 @@ final class AudioStreamer {
         captureEngine.inputNode.removeTap(onBus: 0)
         #if os(iOS)
         // Shared engine: keep it alive if playback still needs it.
-        if players.isEmpty { captureEngine.stop() }
+        if activeSpeakers.isEmpty { captureEngine.stop() }
         #else
         captureEngine.stop()
         #endif
@@ -157,20 +161,11 @@ final class AudioStreamer {
         return nil
     }
 
-    /// The speaker went quiet (or their chat closed) — drop their node.
+    /// The speaker went quiet (or their chat closed) — halt their node.
     func stopSpeaker(_ senderID: UUID) {
-        guard let player = players.removeValue(forKey: senderID) else { return }
-        player.stop()
-        playbackEngine.detach(player)
-        #if os(iOS)
-        if players.isEmpty && !micLive {
-            playbackEngine.stop()
-        }
-        #else
-        if players.isEmpty {
-            playbackEngine.stop()
-        }
-        #endif
+        activeSpeakers.remove(senderID)
+        players[senderID]?.stop()
+        stopEngineIfIdle()
     }
 
     func stopAll() {
@@ -181,21 +176,30 @@ final class AudioStreamer {
     }
 
     private func playerNode(for senderID: UUID) -> AVAudioPlayerNode? {
-        if let existing = players[senderID] { return existing }
         if !playbackEngine.isRunning {
             configureSession()
         }
-        let node = AVAudioPlayerNode()
-        playbackEngine.attach(node)
-        playbackEngine.connect(node, to: playbackEngine.mainMixerNode, format: Self.playbackFormat)
-        players[senderID] = node
-        guard startPlaybackEngine() else {
-            players[senderID] = nil
-            playbackEngine.detach(node)
-            return nil
+        let node: AVAudioPlayerNode
+        if let existing = players[senderID] {
+            node = existing
+        } else {
+            node = AVAudioPlayerNode()
+            playbackEngine.attach(node)
+            playbackEngine.connect(node, to: playbackEngine.mainMixerNode, format: Self.playbackFormat)
+            players[senderID] = node
         }
-        node.play()
+        guard startPlaybackEngine() else { return nil }
+        if !node.isPlaying { node.play() }
+        activeSpeakers.insert(senderID)
         return node
+    }
+
+    private func stopEngineIfIdle() {
+        #if os(iOS)
+        if activeSpeakers.isEmpty && !micLive { playbackEngine.stop() }
+        #else
+        if activeSpeakers.isEmpty { playbackEngine.stop() }
+        #endif
     }
 
     private func startPlaybackEngine() -> Bool {

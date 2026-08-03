@@ -378,12 +378,6 @@ final class AppModel {
         audio.stopMic()
     }
 
-    func discardRecordedSample() {
-        stopSampleRecording()
-        sampleRecordingData = Data()
-        sampleRecordingSeconds = 0
-    }
-
     func saveRecordedSample(label: String) {
         stopSampleRecording()
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
