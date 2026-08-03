@@ -56,6 +56,12 @@ struct SettingsSheet: View {
     private var avatarSection: some View {
         @Bindable var model = model
         return Section {
+            HStack {
+                Spacer()
+                AvatarHeadView(avatar: model.avatar, size: 150)
+                Spacer()
+            }
+            .padding(.vertical, 4)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Skin tone")
                 GradientSlider(value: $model.avatar.skinTone, stops: AvatarPalette.skin) {
@@ -70,10 +76,27 @@ struct SettingsSheet: View {
                 }
             }
             .padding(.vertical, 4)
+            Picker("Hairstyle", selection: Binding(
+                get: { model.avatar.hairstyle },
+                set: {
+                    model.avatar.hairstyle = $0
+                    model.commitAvatar()
+                }
+            )) {
+                Text("Spiky").tag(Avatar.Hairstyle.spiky)
+                Text("Bowl").tag(Avatar.Hairstyle.bowl)
+            }
             Toggle("Glasses", isOn: Binding(
                 get: { model.avatar.glasses },
                 set: {
                     model.avatar.glasses = $0
+                    model.commitAvatar()
+                }
+            ))
+            Toggle("Cigarette", isOn: Binding(
+                get: { model.avatar.cigarette },
+                set: {
+                    model.avatar.cigarette = $0
                     model.commitAvatar()
                 }
             ))
@@ -106,44 +129,6 @@ struct SettingsSheet: View {
         } footer: {
             Text("Up to \(AppModel.maxSoundSamples) sounds, kept on this device. Play them from the soundboard button in any chat; swipe to delete.")
         }
-    }
-}
-
-/// Palette stops for the avatar sliders, as RGB triples so the same values
-/// drive the gradient track, the knob preview, and (later) avatar rendering.
-enum AvatarPalette {
-    /// Pale white → dark brown.
-    static let skin: [(Double, Double, Double)] = [
-        (0.98, 0.89, 0.80),
-        (0.94, 0.80, 0.64),
-        (0.83, 0.62, 0.42),
-        (0.62, 0.42, 0.25),
-        (0.42, 0.27, 0.16),
-        (0.28, 0.18, 0.11),
-    ]
-    /// Blonde → ginger → brunette → almost black.
-    static let hair: [(Double, Double, Double)] = [
-        (0.92, 0.78, 0.44),
-        (0.78, 0.42, 0.18),
-        (0.42, 0.28, 0.15),
-        (0.10, 0.08, 0.06),
-    ]
-
-    static func colors(_ stops: [(Double, Double, Double)]) -> [Color] {
-        stops.map { Color(red: $0.0, green: $0.1, blue: $0.2) }
-    }
-
-    /// Piecewise-linear interpolation across the stops at `t` in 0…1.
-    static func color(_ stops: [(Double, Double, Double)], at t: Double) -> Color {
-        let clamped = min(max(t, 0), 1)
-        let position = clamped * Double(stops.count - 1)
-        let index = min(Int(position), stops.count - 2)
-        let fraction = position - Double(index)
-        let (a, b) = (stops[index], stops[index + 1])
-        return Color(
-            red: a.0 + (b.0 - a.0) * fraction,
-            green: a.1 + (b.1 - a.1) * fraction,
-            blue: a.2 + (b.2 - a.2) * fraction)
     }
 }
 

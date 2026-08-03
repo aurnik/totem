@@ -372,6 +372,20 @@ final class AppModel {
         return nil
     }
 
+    /// Last known avatar for a user: own live settings, else the buddy list
+    /// (refreshed continuously), else the snapshot a group session carried
+    /// when it was initiated.
+    func avatar(of userID: UUID) -> Avatar? {
+        if userID == currentUser?.id { return avatar }
+        if let buddyAvatar = buddy(withID: userID)?.user.avatar { return buddyAvatar }
+        for info in groupSessions.values {
+            if let user = info.participants.first(where: { $0.id == userID }) {
+                return user.avatar
+            }
+        }
+        return nil
+    }
+
     // MARK: - Sound samples
 
     /// A short recorded sound the user can broadcast into a chat from the

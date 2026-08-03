@@ -39,6 +39,19 @@ struct ConversationView: View {
             .sorted()
     }
 
+    /// Who to picture in the header: the peer for 1:1, up to three
+    /// participants for groups (matching the title's handle order).
+    private var headerAvatars: [Avatar] {
+        if let group {
+            return group.participants
+                .filter { $0.id != model.currentUser?.id }
+                .sorted { $0.handle < $1.handle }
+                .prefix(3)
+                .map { model.avatar(of: $0.id) ?? $0.avatar ?? Avatar() }
+        }
+        return [model.avatar(of: conversationID) ?? Avatar()]
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if model.isReconnecting {
@@ -61,8 +74,15 @@ struct ConversationView: View {
         .toolbar {
             #if os(iOS)
             ToolbarItem(placement: .principal) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: 6) {
+                    HStack(spacing: -10) {
+                        ForEach(Array(headerAvatars.enumerated()), id: \.offset) { _, avatar in
+                            AvatarHeadView(avatar: avatar, size: 26, animated: false)
+                        }
+                    }
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                }
             }
             #endif
             ToolbarItem(placement: .primaryAction) {
@@ -105,14 +125,9 @@ struct ConversationView: View {
                           alignment: .leading, spacing: 8) {
                     ForEach(speakers, id: \.id) { speaker in
                         HStack(spacing: 8) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.accentColor)
-                                    .frame(width: 28, height: 28)
-                                Text(speaker.handle.prefix(1).uppercased())
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.white)
-                            }
+                            AvatarHeadView(
+                                avatar: model.avatar(of: speaker.id) ?? Avatar(),
+                                size: 28, animated: false)
                             AudioMeterView(spectrum: model.speakerSpectrum[speaker.id]
                                 ?? Array(repeating: 0, count: AudioAnalyzer.bandCount))
                         }
@@ -157,6 +172,8 @@ struct ConversationView: View {
                                     isMine: isMine,
                                     senderName: (group != nil && !isMine)
                                         ? model.handle(of: message.senderID) : nil,
+                                    senderAvatar: (group != nil && !isMine)
+                                        ? model.avatar(of: message.senderID) ?? Avatar() : nil,
                                     recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
                                 )
                             case .notice(_, let text, _):
@@ -342,6 +359,8 @@ struct MessageRow: View {
     let message: ChatMessage
     let isMine: Bool
     var senderName: String?
+    /// Group chats only: the sender's avatar beside their bubble.
+    var senderAvatar: Avatar?
     var recencyFraction: Double = 1
 
     private var incomingBackground: Color {
@@ -366,8 +385,11 @@ struct MessageRow: View {
     }
 
     var body: some View {
-        HStack {
+        HStack(alignment: .bottom, spacing: 6) {
             if isMine { Spacer(minLength: 48) }
+            if let senderAvatar {
+                AvatarHeadView(avatar: senderAvatar, size: 24, animated: false)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 if let senderName {
                     Text(senderName)

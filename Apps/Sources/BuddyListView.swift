@@ -177,7 +177,7 @@ struct BuddyListView: View {
     private var selfSection: some View {
         Section {
             HStack {
-                StateDot(state: model.selfState)
+                PresenceAvatar(avatar: model.avatar, state: model.selfState)
                 VStack(alignment: .leading) {
                     Text(model.currentUser?.handle ?? "")
                         .bold()
@@ -244,7 +244,7 @@ struct BuddyRow: View {
     private var label: some View {
         let presence = model.presence(of: buddy)
         return HStack {
-            StateDot(state: presence.state)
+            PresenceAvatar(avatar: buddy.user.avatar, state: presence.state)
             VStack(alignment: .leading) {
                 Text(buddy.user.handle)
                     .fontWeight(unread ? .bold : .regular)
@@ -256,25 +256,6 @@ struct BuddyRow: View {
                 }
             }
         }
-    }
-}
-
-struct StateDot: View {
-    let state: PresenceState
-
-    var color: Color {
-        switch state {
-        case .online: .green
-        case .away: .orange
-        case .idle: .yellow
-        case .offline: .gray
-        }
-    }
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 10, height: 10)
     }
 }
 

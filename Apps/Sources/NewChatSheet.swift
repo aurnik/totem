@@ -130,13 +130,13 @@ struct NewChatSheet: View {
         let isSelected = selected.contains(buddy.user.id)
         let offline = model.presence(of: buddy).state == .offline
         // Row tap only selects; the chat opens from the Chat button.
-        // Offline friends stay visible (the gray dot says why) but can't be
-        // chatted — the server refuses delivery to them.
+        // Offline friends stay visible (the greyscale avatar says why) but
+        // can't be chatted — the server refuses delivery to them.
         return Button {
             toggle(buddy.user.id)
         } label: {
             HStack {
-                StateDot(state: model.presence(of: buddy).state)
+                PresenceAvatar(avatar: buddy.user.avatar, state: model.presence(of: buddy).state)
                 Text(buddy.user.handle)
                     .foregroundStyle(offline ? .secondary : .primary)
                 Spacer()
