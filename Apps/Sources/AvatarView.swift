@@ -48,27 +48,19 @@ enum AvatarPalette {
 /// animates, in its own 30fps TimelineView so a lit cigarette never forces
 /// the head itself to redraw.
 struct AvatarHeadView: View {
-    var skin: Color
-    var hairColor: Color
-    var hairstyle: Avatar.Hairstyle
-    var glasses: Bool
-    var cigarette: Bool
+    var avatar: Avatar
     var size: CGFloat
     /// Small list/badge renders skip the smoke entirely — no TimelineView,
     /// no per-frame work; the cigarette itself still shows.
-    var animated: Bool
+    var animated: Bool = true
 
     @Environment(\.colorScheme) private var colorScheme
 
-    init(avatar: Avatar, size: CGFloat, animated: Bool = true) {
-        skin = AvatarPalette.color(AvatarPalette.skin, at: avatar.skinTone)
-        hairColor = AvatarPalette.color(AvatarPalette.hair, at: avatar.hair)
-        hairstyle = avatar.hairstyle
-        glasses = avatar.glasses
-        cigarette = avatar.cigarette
-        self.size = size
-        self.animated = animated
-    }
+    private var skin: Color { AvatarPalette.color(AvatarPalette.skin, at: avatar.skinTone) }
+    private var hairColor: Color { AvatarPalette.color(AvatarPalette.hair, at: avatar.hair) }
+    private var hairstyle: Avatar.Hairstyle { avatar.hairstyle }
+    private var glasses: Bool { avatar.glasses }
+    private var cigarette: Bool { avatar.cigarette }
 
     var body: some View {
         ZStack {

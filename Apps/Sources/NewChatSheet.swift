@@ -29,30 +29,27 @@ struct NewChatSheet: View {
         }
     }
 
-    private var results: [Buddy] {
-        let friends = model.acceptedBuddies
-        guard !trimmedQuery.isEmpty else { return friends }
-        return friends
-            .compactMap { buddy in
-                fuzzyScore(needle: trimmedQuery, in: buddy.user.handle.lowercased())
-                    .map { (buddy, $0) }
+    /// Best fuzzy matches for the query, most relevant first; everything when
+    /// the query is empty.
+    private func ranked<T>(_ items: [T], by handle: (T) -> String) -> [T] {
+        guard !trimmedQuery.isEmpty else { return items }
+        return items
+            .compactMap { item in
+                fuzzyScore(needle: trimmedQuery, in: handle(item).lowercased())
+                    .map { (item, $0) }
             }
             .sorted { $0.1 > $1.1 }
             .map(\.0)
     }
 
+    private var results: [Buddy] {
+        ranked(model.acceptedBuddies) { $0.user.handle }
+    }
+
     /// Group-chat co-participants who aren't friends yet — one tap sends the
-    /// request. Filtered by the same fuzzy match as friends.
+    /// request.
     private var recentResults: [User] {
-        let recents = model.recentNonFriends
-        guard !trimmedQuery.isEmpty else { return recents }
-        return recents
-            .compactMap { user in
-                fuzzyScore(needle: trimmedQuery, in: user.handle.lowercased())
-                    .map { (user, $0) }
-            }
-            .sorted { $0.1 > $1.1 }
-            .map(\.0)
+        ranked(model.recentNonFriends) { $0.handle }
     }
 
     private var selectedHandles: [String] {

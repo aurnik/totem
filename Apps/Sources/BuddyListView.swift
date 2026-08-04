@@ -265,6 +265,15 @@ struct AwayMessageSheet: View {
         dismiss()
     }
 
+    private func recentButton(_ recent: String) -> some View {
+        Button {
+            model.setAwayMessage(recent)
+            dismiss()
+        } label: {
+            Label(recent, systemImage: "clock.arrow.circlepath")
+        }
+    }
+
     var body: some View {
         #if os(iOS)
         NavigationStack {
@@ -277,14 +286,7 @@ struct AwayMessageSheet: View {
                 }
                 if !model.recentAwayMessages.isEmpty {
                     Section("Recent") {
-                        ForEach(model.recentAwayMessages, id: \.self) { recent in
-                            Button {
-                                model.setAwayMessage(recent)
-                                dismiss()
-                            } label: {
-                                Label(recent, systemImage: "clock.arrow.circlepath")
-                            }
-                        }
+                        ForEach(model.recentAwayMessages, id: \.self, content: recentButton)
                     }
                 }
             }
@@ -313,14 +315,9 @@ struct AwayMessageSheet: View {
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(set)
             ForEach(model.recentAwayMessages, id: \.self) { recent in
-                Button {
-                    model.setAwayMessage(recent)
-                    dismiss()
-                } label: {
-                    Label(recent, systemImage: "clock.arrow.circlepath")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                recentButton(recent)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
             }
             HStack {
                 Spacer()

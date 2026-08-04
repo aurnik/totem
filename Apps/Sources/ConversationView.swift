@@ -79,9 +79,7 @@ struct ConversationView: View {
             composer
         }
         .navigationTitle(title)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        .inlineTitle()
         .toolbar {
             #if os(iOS)
             ToolbarItem(placement: .principal) {
@@ -514,13 +512,7 @@ struct TypingIndicatorBubble: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background {
-            #if os(iOS)
-            Color(.systemGray5)
-            #else
-            Color.gray.opacity(0.2)
-            #endif
-        }
+        .background { Color.incomingBubble }
         .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 }
@@ -548,13 +540,7 @@ struct MessageRow: View {
     var senderAvatar: Avatar?
     var recencyFraction: Double = 1
 
-    private var incomingBackground: Color {
-        #if os(iOS)
-        Color(.systemGray5)
-        #else
-        Color.gray.opacity(0.2)
-        #endif
-    }
+    private var incomingBackground: Color { .incomingBubble }
 
     /// iMessage blue (#007AFF) for the newest messages, washing out toward a
     /// pale sky blue deeper into history. Each bubble spans a small slice of

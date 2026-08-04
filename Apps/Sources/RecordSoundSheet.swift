@@ -13,31 +13,13 @@ struct SoundboardSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(model.soundSamples) { sample in
-                    Button {
-                        model.playSample(sample, in: conversationID)
-                        dismiss()
-                    } label: {
-                        Label(sample.label, systemImage: "waveform")
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button("Delete", systemImage: "trash", role: .destructive) {
-                            model.deleteSample(sample)
-                        }
-                    }
-                }
-                if model.soundSamples.count < AppModel.maxSoundSamples {
-                    NavigationLink {
-                        RecordSoundView()
-                    } label: {
-                        Label("New sound", systemImage: "waveform.badge.plus")
-                    }
+                SoundSampleRows { sample in
+                    model.playSample(sample, in: conversationID)
+                    dismiss()
                 }
             }
             .navigationTitle("Soundboard")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
@@ -49,6 +31,43 @@ struct SoundboardSheet: View {
         #else
         .frame(minWidth: 320, minHeight: 320)
         #endif
+    }
+}
+
+/// Every sample with swipe-to-delete, plus "New sound" while under the cap.
+/// With `onTap` the rows play; without it they are inert labels, which is what
+/// the Settings copy of the list wants.
+struct SoundSampleRows: View {
+    @Environment(AppModel.self) private var model
+    var onTap: ((AppModel.SoundSample) -> Void)?
+
+    var body: some View {
+        ForEach(model.soundSamples) { sample in
+            row(sample)
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        model.deleteSample(sample)
+                    }
+                }
+        }
+        if model.soundSamples.count < AppModel.maxSoundSamples {
+            NavigationLink {
+                RecordSoundView()
+            } label: {
+                Label("New sound", systemImage: "waveform.badge.plus")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ sample: AppModel.SoundSample) -> some View {
+        if let onTap {
+            Button { onTap(sample) } label: {
+                Label(sample.label, systemImage: "waveform")
+            }
+        } else {
+            Label(sample.label, systemImage: "waveform")
+        }
     }
 }
 
@@ -110,9 +129,7 @@ struct RecordSoundView: View {
             }
         }
         .navigationTitle("New Sound")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        .inlineTitle()
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save", action: save)

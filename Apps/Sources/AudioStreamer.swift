@@ -46,8 +46,7 @@ final class AudioStreamer {
         // ever starts. Setting the category alone doesn't activate the
         // session, so other apps' audio isn't interrupted at launch.
         do {
-            try AVAudioSession.sharedInstance().setCategory(
-                .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+            try AVAudioSession.sharedInstance().setVoiceChatCategory()
             try shared.inputNode.setVoiceProcessingEnabled(true)
         } catch {
             lastError = "voice processing: \(error.localizedDescription)"
@@ -238,8 +237,7 @@ final class AudioStreamer {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(
-                .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setVoiceChatCategory()
             try session.setActive(true)
             // .voiceChat prefers the quiet receiver up top; voice chat
             // belongs on the loudspeaker.
@@ -290,3 +288,14 @@ private final class AudioNormalizer {
         }
     }
 }
+
+#if os(iOS)
+private extension AVAudioSession {
+    /// The one category live voice runs under: duplex, echo-cancelling, and
+    /// routed to the loudspeaker rather than the receiver.
+    func setVoiceChatCategory() throws {
+        try setCategory(.playAndRecord, mode: .voiceChat,
+                        options: [.defaultToSpeaker, .allowBluetooth])
+    }
+}
+#endif

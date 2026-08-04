@@ -39,9 +39,7 @@ struct SettingsSheet: View {
                 soundboardSection
             }
             .navigationTitle("Settings")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -109,21 +107,7 @@ struct SettingsSheet: View {
 
     private var soundboardSection: some View {
         Section {
-            ForEach(model.soundSamples) { sample in
-                Label(sample.label, systemImage: "waveform")
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button("Delete", systemImage: "trash", role: .destructive) {
-                            model.deleteSample(sample)
-                        }
-                    }
-            }
-            if model.soundSamples.count < AppModel.maxSoundSamples {
-                NavigationLink {
-                    RecordSoundView()
-                } label: {
-                    Label("New sound", systemImage: "waveform.badge.plus")
-                }
-            }
+            SoundSampleRows()
         } header: {
             Text("Soundboard")
         } footer: {

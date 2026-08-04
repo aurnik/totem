@@ -278,9 +278,8 @@ final class AppModel {
         api.token = nil
         buddies = []
         presences = [:]
-        transcripts = [:]
         groupSessions = [:]
-        unreadPeers = []
+        clearSessionScopedState()
         UserDefaults.standard.removeObject(forKey: "authToken")
         UserDefaults.standard.removeObject(forKey: "currentUser")
     }
@@ -351,6 +350,18 @@ final class AppModel {
         }
     }
 
+    /// Session-scoped ephemerality: none of this outlives the local user's own
+    /// online session, so it is cleared on sign-off, on a fresh sign-on that
+    /// ended the previous session, and on log-out.
+    private func clearSessionScopedState() {
+        transcripts = [:]
+        sessionPeers = [:]
+        pendingSends = [:]
+        unreadPeers = []
+        mutedListeners = [:]
+        reportedMutedConversations = []
+    }
+
     func signOff() {
         apply(machine.handle(.signOff(at: Date())))
         socketTask?.cancel()
@@ -360,20 +371,13 @@ final class AppModel {
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
-        // Session-scoped ephemerality: transcripts do not outlive the local
-        // user's own online session.
-        transcripts = [:]
-        sessionPeers = [:]
-        pendingSends = [:]
-        unreadPeers = []
+        clearSessionScopedState()
         typingPeers = []
         typingExpiry.values.forEach { $0.cancel() }
         typingExpiry = [:]
         stopMic()
         audio.stopAll()
         speakingUsers = [:]
-        mutedListeners = [:]
-        reportedMutedConversations = []
         speakerSpectrum = [:]
         playbackFailureNoticed = []
         speakingExpiry.values.forEach { $0.cancel() }
@@ -585,10 +589,8 @@ final class AppModel {
             var offset = 0
             while offset < data.count {
                 let chunk = data.subdata(in: offset..<min(offset + step, data.count))
-                let frame: ClientFrame = isGroup
-                    ? .sendSessionAudio(sessionID: conversationID, chunk: chunk)
-                    : .sendAudio(recipientID: conversationID, chunk: chunk)
-                try? await socket?.send(frame)
+                try? await socket?.send(
+                    Self.audioFrame(chunk, to: conversationID, isGroup: isGroup))
                 if let self, let selfID {
                     self.receiveAudio(conversationID: conversationID, senderID: selfID, chunk: chunk)
                 }
@@ -700,10 +702,8 @@ final class AppModel {
             chunkSink = { continuation.yield($0) }
             micSendTask = Task { [weak self] in
                 for await chunk in stream {
-                    let frame: ClientFrame = isGroup
-                        ? .sendSessionAudio(sessionID: conversationID, chunk: chunk)
-                        : .sendAudio(recipientID: conversationID, chunk: chunk)
-                    try? await socket.send(frame)
+                    try? await socket.send(
+                        Self.audioFrame(chunk, to: conversationID, isGroup: isGroup))
                     // Meter-only self monitor (no playback — that would echo)
                     // so the speaker can see their own audio going out.
                     if let self, let selfID = self.currentUser?.id {
@@ -765,7 +765,10 @@ final class AppModel {
         }
     }
 
+    /// Voice is scoped to having the chat open, both directions: drop the mic
+    /// if it was live here, and stop anything still coming in.
     private func silenceConversation(_ conversationID: UUID) {
+        if micConversation == conversationID { stopMic() }
         mutedListeners[conversationID] = nil
         reportedMutedConversations.remove(conversationID)
         for senderID in speakingUsers.removeValue(forKey: conversationID) ?? [] {
@@ -800,9 +803,23 @@ final class AppModel {
     }
 
     private func sendAudioMuted(_ muted: Bool, in conversationID: UUID) {
-        let frame: ClientFrame = groupSessions[conversationID] != nil
+        fire(groupSessions[conversationID] != nil
             ? .setSessionAudioMuted(sessionID: conversationID, muted: muted)
-            : .setAudioMuted(recipientID: conversationID, muted: muted)
+            : .setAudioMuted(recipientID: conversationID, muted: muted))
+    }
+
+    /// Live audio is session-addressed in a group and peer-addressed in a 1:1.
+    /// Static so the send loops can build frames without capturing the model.
+    private static func audioFrame(_ chunk: Data, to conversationID: UUID,
+                                   isGroup: Bool) -> ClientFrame {
+        isGroup
+            ? .sendSessionAudio(sessionID: conversationID, chunk: chunk)
+            : .sendAudio(recipientID: conversationID, chunk: chunk)
+    }
+
+    /// Best-effort send: these frames carry no promise to the user, so a
+    /// failure is dropped. `sendMessage` reports its own instead.
+    private func fire(_ frame: ClientFrame) {
         let socket = self.socket
         Task { try? await socket?.send(frame) }
     }
@@ -812,8 +829,7 @@ final class AppModel {
         let now = Date()
         if let last = lastTypingSentAt[peerID], now.timeIntervalSince(last) < 3 { return }
         lastTypingSentAt[peerID] = now
-        let socket = self.socket
-        Task { try? await socket?.send(.typing(recipientID: peerID)) }
+        fire(.typing(recipientID: peerID))
     }
 
     func isTyping(_ peerID: UUID) -> Bool {
@@ -855,8 +871,6 @@ final class AppModel {
 
     func conversationClosed(_ peerID: UUID) {
         activeConversations.remove(peerID)
-        // Voice is scoped to having the chat open, both directions.
-        if micConversation == peerID { stopMic() }
         silenceConversation(peerID)
     }
 
@@ -939,8 +953,7 @@ final class AppModel {
         for effect in effects {
             switch effect {
             case .sendPresence(let state, let awayMessage):
-                let socket = self.socket
-                Task { try? await socket?.send(.setPresence(state: state, awayMessage: awayMessage)) }
+                fire(.setPresence(state: state, awayMessage: awayMessage))
             case .playSignOnSound:
                 SoundPlayer.play(.signOn)
             case .playSignOffSound:
@@ -971,12 +984,7 @@ final class AppModel {
             // conversation-scoped from before it is gone. A reconnect within
             // the grace window keeps the log intact.
             if freshSignOn {
-                transcripts = [:]
-                sessionPeers = [:]
-                pendingSends = [:]
-                unreadPeers = []
-                mutedListeners = [:]
-                reportedMutedConversations = []
+                clearSessionScopedState()
             }
             presences = Dictionary(uniqueKeysWithValues: buddies.compactMap { key, value in
                 UUID(uuidString: key).map { ($0, value) }
@@ -1077,7 +1085,6 @@ final class AppModel {
             // ephemera stop.
             if let peerID = sessionPeers.removeValue(forKey: sessionID) {
                 clearTyping(peerID)
-                if micConversation == peerID { stopMic() }
                 silenceConversation(peerID)
             }
         case .buddyRequest:
