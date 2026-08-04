@@ -879,15 +879,6 @@ final class AppModel {
         apply(machine.handle(.clearAwayMessage(at: Date())))
     }
 
-    func scenePhaseChanged(to phase: ScenePhase) {
-        switch phase {
-        case .background: apply(machine.handle(.appBackgrounded(at: Date())))
-        case .active:
-            apply(machine.handle(.appForegrounded(at: Date())))
-        default: break
-        }
-    }
-
     #if os(macOS)
     /// System sleep is the "I'm away" boundary. Without this, the reconnect
     /// loop re-establishes the socket during dark wakes (Power Nap), which the

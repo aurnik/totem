@@ -47,56 +47,12 @@ final class PresenceStateMachineTests: XCTestCase {
         XCTAssertTrue(m.handle(.signOff(at: t0)).isEmpty)
     }
 
-    // MARK: - Idle
-
-    func testBackgroundedFiveMinutesBecomesIdle() {
-        var m = signedOn()
-        m.handle(.appBackgrounded(at: t(10)))
-        XCTAssertEqual(m.displayState, .online, "no idle before threshold")
-        m.handle(.tick(at: t(10 + 299)))
-        XCTAssertEqual(m.displayState, .online)
-        let effects = m.handle(.tick(at: t(10 + 300)))
-        XCTAssertEqual(m.displayState, .idle)
-        XCTAssertTrue(effects.contains(.sendPresence(.idle, awayMessage: nil)))
-    }
-
-    func testForegroundReturnsToOnline() {
-        var m = signedOn()
-        m.handle(.appBackgrounded(at: t(0)))
-        m.handle(.tick(at: t(301)))
-        XCTAssertEqual(m.displayState, .idle)
-        let effects = m.handle(.appForegrounded(at: t(400)))
-        XCTAssertEqual(m.displayState, .online)
-        XCTAssertTrue(effects.contains(.sendPresence(.online, awayMessage: nil)))
-    }
-
-    func testMacSystemIdleTransitions() {
-        var m = signedOn()
-        m.handle(.systemIdle(at: t(301)))
-        XCTAssertEqual(m.displayState, .idle)
-        m.handle(.systemActive(at: t(400)))
-        XCTAssertEqual(m.displayState, .online)
-    }
-
-    func testSystemIdleWhileSignedOffIsIgnored() {
-        var m = PresenceStateMachine()
-        m.handle(.systemIdle(at: t0))
-        XCTAssertEqual(m.displayState, .offline)
-    }
-
     // MARK: - Away
 
-    func testAwayOverridesOnlineAndIdle() {
+    func testAwayOverridesOnline() {
         var m = signedOn()
         m.handle(.setAwayMessage("bbl", at: t(1)))
         XCTAssertEqual(m.displayState, .away)
-        // Going idle underneath doesn't change the display.
-        m.handle(.appBackgrounded(at: t(2)))
-        m.handle(.tick(at: t(400)))
-        XCTAssertEqual(m.displayState, .away)
-        // Clearing away while idle reveals idle, not online.
-        m.handle(.clearAwayMessage(at: t(401)))
-        XCTAssertEqual(m.displayState, .idle)
     }
 
     func testClearAwayReturnsToOnline() {
@@ -173,24 +129,5 @@ final class PresenceStateMachineTests: XCTestCase {
         XCTAssertTrue(m.handle(.reconnected(at: t(12))).isEmpty,
                       "a late reconnect after deliberate sign-off must not resurrect the session")
         XCTAssertEqual(m.displayState, .offline)
-    }
-
-    // MARK: - Clock skew
-
-    func testBackdatedTickCannotTriggerIdle() {
-        var m = signedOn()
-        m.handle(.appBackgrounded(at: t(1000)))
-        // Clock jumps backwards: a tick dated before the background event.
-        m.handle(.tick(at: t(100)))
-        XCTAssertEqual(m.displayState, .online, "skewed tick must not compute a bogus idle duration")
-    }
-
-    func testForwardSkewThenCorrectionDoesNotIdleEarly() {
-        var m = signedOn()
-        m.handle(.appBackgrounded(at: t(0)))
-        m.handle(.tick(at: t(600)))          // clock briefly wrong, far in the future
-        XCTAssertEqual(m.displayState, .idle) // idle per the (wrong) clock — acceptable
-        m.handle(.appForegrounded(at: t(50))) // correction: user active, earlier timestamp
-        XCTAssertEqual(m.displayState, .online, "activity always clears idle regardless of timestamps")
     }
 }

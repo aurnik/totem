@@ -57,7 +57,6 @@ struct TotemApp: App {
     @UIApplicationDelegateAdaptor(PhoneAppDelegate.self) private var appDelegate
     #endif
     @State private var model: AppModel
-    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let model = AppModel()
@@ -74,9 +73,6 @@ struct TotemApp: App {
             ContentView()
                 .environment(model)
                 .preferredColorScheme(model.colorScheme)
-                .onChange(of: scenePhase) { _, phase in
-                    model.scenePhaseChanged(to: phase)
-                }
         }
         #if os(macOS)
         // One window per conversation — the AIM interaction model (spec §7).
