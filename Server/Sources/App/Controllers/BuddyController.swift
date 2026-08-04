@@ -10,7 +10,6 @@ struct BuddyController: RouteCollection {
         buddies.get(use: list)
         buddies.post("requests", use: request)
         buddies.post("requests", ":id", "accept", use: accept)
-        buddies.delete(":id", use: remove)
     }
 
     /// Own rows plus incoming pending requests, as TotemKit.Buddy DTOs.
@@ -112,24 +111,6 @@ struct BuddyController: RouteCollection {
                 .save(on: req.db)
         }
         await gateway.buddyshipFormed(userID, row.$user.id)
-        return .ok
-    }
-
-    /// Removes both directions.
-    func remove(req: Request) async throws -> HTTPStatus {
-        let userID = try req.auth.require(UserModel.self).requireID()
-        guard let id = req.parameters.get("id", as: UUID.self),
-              let row = try await BuddyModel.find(id, on: req.db),
-              row.$user.id == userID || row.$buddy.id == userID
-        else { throw Abort(.notFound) }
-
-        let (a, b) = (row.$user.id, row.$buddy.id)
-        try await BuddyModel.query(on: req.db)
-            .group(.or) { or in
-                or.group(.and) { $0.filter(\.$user.$id == a).filter(\.$buddy.$id == b) }
-                or.group(.and) { $0.filter(\.$user.$id == b).filter(\.$buddy.$id == a) }
-            }
-            .delete()
         return .ok
     }
 }

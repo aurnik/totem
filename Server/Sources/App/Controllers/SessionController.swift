@@ -8,7 +8,6 @@ struct SessionController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let sessions = routes.grouped("sessions")
         sessions.post(use: create)
-        sessions.get(":id", use: get)
     }
 
     struct CreateRequest: Content {
@@ -53,15 +52,6 @@ struct SessionController: RouteCollection {
             }
         }
         return info
-    }
-
-    func get(req: Request) async throws -> SessionInfo {
-        let userID = try req.auth.require(UserModel.self).requireID()
-        guard let id = req.parameters.get("id", as: UUID.self),
-              let session = try await SessionModel.find(id, on: req.db),
-              session.includes(userID)
-        else { throw Abort(.notFound) }
-        return try await gateway.sessionInfo(session, on: req.db)
     }
 }
 
