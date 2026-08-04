@@ -13,14 +13,15 @@ enum AvatarPalette {
         (0.42, 0.27, 0.16),
         (0.28, 0.18, 0.11),
     ]
-    /// Blonde → ginger → brunette → almost black → greys.
+    /// Blonde → ginger → brunette → almost black → greys, stopping at medium
+    /// grey rather than running all the way to white.
     static let hair: [(Double, Double, Double)] = [
         (0.92, 0.78, 0.44),
         (0.78, 0.42, 0.18),
         (0.42, 0.28, 0.15),
         (0.10, 0.08, 0.06),
-        (0.45, 0.45, 0.47),
-        (0.82, 0.82, 0.84),
+        (0.32, 0.32, 0.34),
+        (0.55, 0.55, 0.57),
     ]
 
     static func colors(_ stops: [(Double, Double, Double)]) -> [Color] {
@@ -58,7 +59,6 @@ struct AvatarHeadView: View {
 
     private var skin: Color { AvatarPalette.color(AvatarPalette.skin, at: avatar.skinTone) }
     private var hairColor: Color { AvatarPalette.color(AvatarPalette.hair, at: avatar.hair) }
-    private var hairstyle: Avatar.Hairstyle { avatar.hairstyle }
     private var glasses: Bool { avatar.glasses }
     private var cigarette: Bool { avatar.cigarette }
 
@@ -93,27 +93,13 @@ struct AvatarHeadView: View {
             (60, 5), (90, 20), (95, 55), (85, 80), (35, 80), (25, 55), (30, 20),
         ]), with: .color(skin))
 
-        switch hairstyle {
-        case .spiky:
-            // Bottom corners sit exactly on the face side edges
-            // (x = 90 + 20/7 and 30 - 20/7 at y=40) so the hair seams with
-            // the face silhouette — not rounded to integers on purpose.
-            context.fill(g.polygon([
-                (60, 2), (95, 18), (90 + 20.0 / 7, 40), (75, 35),
-                (60, 38), (45, 35), (30 - 20.0 / 7, 40), (25, 18),
-            ]), with: .color(hairColor))
-        case .long:
-            // One horseshoe polygon: the same angular fringe as the spiky
-            // style, then down the outside of each strand, across the bottom
-            // of the viewBox (y = 84 of 85) and back up its inner edge.
-            context.fill(g.polygon([
-                (60, 2), (95, 18), (97, 42), (97, 58), (88, 84),
-                (81, 84), (90, 58), (89, 42), (90, 26),
-                (75, 35), (60, 38), (45, 35),
-                (30, 26), (31, 42), (30, 58), (39, 84),
-                (32, 84), (23, 58), (23, 42), (25, 18),
-            ]), with: .color(hairColor))
-        }
+        // Bottom corners sit exactly on the face side edges
+        // (x = 90 + 20/7 and 30 - 20/7 at y=40) so the hair seams with
+        // the face silhouette — not rounded to integers on purpose.
+        context.fill(g.polygon([
+            (60, 2), (95, 18), (90 + 20.0 / 7, 40), (75, 35),
+            (60, 38), (45, 35), (30 - 20.0 / 7, 40), (25, 18),
+        ]), with: .color(hairColor))
 
         if glasses {
             let frame = Color(red: 26 / 255, green: 26 / 255, blue: 26 / 255)

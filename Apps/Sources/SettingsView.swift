@@ -74,16 +74,6 @@ struct SettingsSheet: View {
                 }
             }
             .padding(.vertical, 4)
-            Picker("Hairstyle", selection: Binding(
-                get: { model.avatarSetting.hairstyle },
-                set: {
-                    model.avatarSetting.hairstyle = $0
-                    model.commitAvatar()
-                }
-            )) {
-                Text("Spiky").tag(Avatar.Hairstyle.spiky)
-                Text("Long").tag(Avatar.Hairstyle.long)
-            }
             Toggle("Glasses", isOn: Binding(
                 get: { model.avatarSetting.glasses },
                 set: {

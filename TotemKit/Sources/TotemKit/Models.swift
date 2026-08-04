@@ -13,38 +13,29 @@ public struct User: Codable, Identifiable, Hashable, Sendable {
 }
 
 /// Cartoon-avatar settings: positions (0…1) into the client-defined skin and
-/// hair palettes, a hairstyle, and accessory toggles. Rides on the User DTO
-/// so buddy lists and session participants always carry everyone's latest
-/// look; rendering is a client concern.
+/// hair palettes plus accessory toggles. Rides on the User DTO so buddy lists
+/// and session participants always carry everyone's latest look; rendering is
+/// a client concern.
 public struct Avatar: Codable, Hashable, Sendable {
-    public enum Hairstyle: String, Codable, CaseIterable, Sendable {
-        case spiky = "default"
-        case long
-    }
-
     public var skinTone: Double
     public var hair: Double
-    public var hairstyle: Hairstyle
     public var glasses: Bool
     public var cigarette: Bool
 
-    public init(skinTone: Double = 0.25, hair: Double = 0.36, hairstyle: Hairstyle = .spiky,
+    public init(skinTone: Double = 0.25, hair: Double = 0.36,
                 glasses: Bool = false, cigarette: Bool = false) {
         self.skinTone = skinTone
         self.hair = hair
-        self.hairstyle = hairstyle
         self.glasses = glasses
         self.cigarette = cigarette
     }
 
-    /// Every field defaults, so avatars encoded before a field existed (or by
-    /// a newer client with an unknown hairstyle) still decode.
+    /// Every field defaults, so avatars encoded before a field existed still
+    /// decode; retired fields decode as unknown keys and are dropped.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         skinTone = try c.decodeIfPresent(Double.self, forKey: .skinTone) ?? 0.25
         hair = try c.decodeIfPresent(Double.self, forKey: .hair) ?? 0.36
-        hairstyle = ((try? c.decodeIfPresent(String.self, forKey: .hairstyle))
-            .flatMap { $0 }.flatMap(Hairstyle.init(rawValue:))) ?? .spiky
         glasses = try c.decodeIfPresent(Bool.self, forKey: .glasses) ?? false
         cigarette = try c.decodeIfPresent(Bool.self, forKey: .cigarette) ?? false
     }
