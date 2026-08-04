@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 import SwiftUI
@@ -83,6 +84,19 @@ final class AppModel {
     private var speakingExpiry: [UUID: Task<Void, Never>] = [:]
     private var micSendTask: Task<Void, Never>?
     private var micChunks: AsyncStream<Data>.Continuation?
+    private var captureTask: Task<Void, Never>?
+    /// Dictation: the conversation the mic is being transcribed into (one at a
+    /// time, and the same mic the broadcast uses) plus the words not yet
+    /// finished — shown only to the speaker, never sent as-is.
+    var dictationConversation: UUID?
+    var dictationPreview = ""
+    /// True while the language model downloads — first use only, but it can
+    /// take a while, and nothing is heard until it lands.
+    var dictationPreparing = false
+    /// `VoiceTranscriber` where the OS has it; stored untyped because stored
+    /// properties can't carry an availability annotation.
+    private var dictationTranscriber: AnyObject?
+    private var dictationSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     private let audio = AudioStreamer()
 
     private var api = APIClient()
@@ -494,9 +508,9 @@ final class AppModel {
         stopMic()
         sampleRecordingData = Data()
         sampleRecordingSeconds = 0
-        let started = await audio.startMic { [weak self] chunk in
+        let started = await audio.startMic(onChunk: { [weak self] chunk in
             Task { @MainActor in self?.appendSampleChunk(chunk) }
-        }
+        })
         isRecordingSample = started
         return started
     }
@@ -581,29 +595,104 @@ final class AppModel {
 
     // MARK: - Live voice
 
+    /// Stream the mic to the conversation.
     func toggleMic(in conversationID: UUID) {
         if liveMicConversation == conversationID {
-            stopMic()
+            liveMicConversation = nil
         } else {
-            startMic(in: conversationID)
+            claimMic(for: conversationID)
+            liveMicConversation = conversationID
+        }
+        applyCapture(in: conversationID)
+    }
+
+    /// Transcribe the mic on-device and send each utterance as an ordinary
+    /// message — indistinguishable from typing at the other end.
+    func toggleDictation(in conversationID: UUID) {
+        if dictationConversation == conversationID {
+            dictationConversation = nil
+        } else {
+            guard dictationSupported else { return }
+            claimMic(for: conversationID)
+            dictationConversation = conversationID
+        }
+        applyCapture(in: conversationID)
+    }
+
+    /// The mic serves one conversation at a time; opening it elsewhere closes
+    /// whatever it was doing before.
+    private func claimMic(for conversationID: UUID) {
+        guard let previous = liveMicConversation ?? dictationConversation,
+              previous != conversationID
+        else { return }
+        liveMicConversation = nil
+        dictationConversation = nil
+        applyCapture(in: previous)
+    }
+
+    func stopMic() {
+        captureTask?.cancel()
+        captureTask = nil
+        liveMicConversation = nil
+        dictationConversation = nil
+        micChunks?.finish()
+        micChunks = nil
+        micSendTask?.cancel()
+        micSendTask = nil
+        dictationPreview = ""
+        let transcriber = dictationTranscriber
+        dictationTranscriber = nil
+        dictationSink = nil
+        audio.stopMic()
+        if #available(iOS 26.0, macOS 26.0, *), let transcriber = transcriber as? VoiceTranscriber {
+            Task { await transcriber.stop() }
         }
     }
 
-    private func startMic(in conversationID: UUID) {
-        stopMic()
-        guard let socket else { return }
-        let isGroup = groupSessions[conversationID] != nil
-        // Chunks flow through one stream consumed by one task so sends stay
-        // ordered — racing per-chunk Tasks would garble the audio.
-        let (stream, continuation) = AsyncStream<Data>.makeStream(
-            bufferingPolicy: .bufferingNewest(8))
-        Task {
-            guard await audio.startMic(onChunk: { continuation.yield($0) }) else {
-                continuation.finish()
-                return
-            }
-            liveMicConversation = conversationID
+    /// Reconciles the mic tap with the two toggles: the tap carries exactly
+    /// the sinks currently wanted and is torn down once both are off. Runs
+    /// serially so rapid toggling can't interleave two setups.
+    private func applyCapture(in conversationID: UUID) {
+        let previous = captureTask
+        captureTask = Task { [weak self] in
+            _ = await previous?.value
+            // `stopMic` cancels the chain, so a toggle queued before it can't
+            // reclaim the mic afterwards — sample recording borrows it too.
+            guard !Task.isCancelled else { return }
+            await self?.reconcileCapture(in: conversationID)
+        }
+    }
+
+    private func reconcileCapture(in conversationID: UUID) async {
+        // The outbound pump is rebuilt below if broadcast is still wanted.
+        micChunks?.finish()
+        micChunks = nil
+        micSendTask?.cancel()
+        micSendTask = nil
+
+        if dictationConversation == conversationID {
+            await startDictation(in: conversationID)
+        } else {
+            await stopDictation()
+        }
+        if liveMicConversation == conversationID, socket == nil {
+            liveMicConversation = nil
+        }
+        let broadcasting = liveMicConversation == conversationID
+        guard broadcasting || dictationSink != nil else {
+            audio.stopMic()
+            return
+        }
+
+        var chunkSink: (@Sendable (Data) -> Void)?
+        if broadcasting, let socket {
+            let isGroup = groupSessions[conversationID] != nil
+            // Chunks flow through one stream consumed by one task so sends
+            // stay ordered — racing per-chunk Tasks would garble the audio.
+            let (stream, continuation) = AsyncStream<Data>.makeStream(
+                bufferingPolicy: .bufferingNewest(8))
             micChunks = continuation
+            chunkSink = { continuation.yield($0) }
             micSendTask = Task { [weak self] in
                 for await chunk in stream {
                     let frame: ClientFrame = isGroup
@@ -618,15 +707,65 @@ final class AppModel {
                 }
             }
         }
+
+        guard await audio.startMic(onChunk: chunkSink, onBuffer: dictationSink) else {
+            stopMic()
+            return
+        }
     }
 
-    func stopMic() {
-        audio.stopMic()
-        liveMicConversation = nil
-        micChunks?.finish()
-        micChunks = nil
-        micSendTask?.cancel()
-        micSendTask = nil
+    // MARK: - Dictation
+
+    /// The conversation the mic is open for, whichever way it's being used.
+    private var micConversation: UUID? { liveMicConversation ?? dictationConversation }
+
+    var dictationSupported: Bool {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            return VoiceTranscriber.isSupported
+        }
+        return false
+    }
+
+    private func startDictation(in conversationID: UUID) async {
+        guard dictationSink == nil else { return }
+        guard #available(iOS 26.0, macOS 26.0, *) else {
+            dictationConversation = nil
+            return
+        }
+        let transcriber = VoiceTranscriber(
+            onUtterance: { [weak self] text in
+                self?.sendMessage(to: conversationID, body: text)
+            },
+            onPreview: { [weak self] text in
+                guard self?.dictationConversation == conversationID else { return }
+                self?.dictationPreview = text
+                // Peers see the same "typing…" they'd see for a keyboard.
+                if !text.isEmpty, self?.groupSessions[conversationID] == nil {
+                    self?.sendTyping(to: conversationID)
+                }
+            })
+        dictationPreparing = true
+        defer { dictationPreparing = false }
+        do {
+            dictationSink = try await transcriber.start()
+            dictationTranscriber = transcriber
+        } catch {
+            print("dictation failed to start: \(error)")
+            dictationConversation = nil
+            append(.notice(id: UUID(), text: "Dictation isn't available right now",
+                           at: Date()),
+                   to: conversationID)
+        }
+    }
+
+    private func stopDictation() async {
+        guard let transcriber = dictationTranscriber else { return }
+        dictationTranscriber = nil
+        dictationSink = nil
+        dictationPreview = ""
+        if #available(iOS 26.0, macOS 26.0, *), let transcriber = transcriber as? VoiceTranscriber {
+            await transcriber.stop()
+        }
     }
 
     private func silenceConversation(_ conversationID: UUID) {
@@ -720,7 +859,7 @@ final class AppModel {
     func conversationClosed(_ peerID: UUID) {
         activeConversations.remove(peerID)
         // Voice is scoped to having the chat open, both directions.
-        if liveMicConversation == peerID { stopMic() }
+        if micConversation == peerID { stopMic() }
         silenceConversation(peerID)
     }
 
@@ -950,7 +1089,7 @@ final class AppModel {
             // ephemera stop.
             if let peerID = sessionPeers.removeValue(forKey: sessionID) {
                 clearTyping(peerID)
-                if liveMicConversation == peerID { stopMic() }
+                if micConversation == peerID { stopMic() }
                 silenceConversation(peerID)
             }
         case .buddyRequest:

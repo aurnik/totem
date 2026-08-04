@@ -82,12 +82,14 @@ final class AudioStreamer {
 
     // MARK: - Capture
 
-    /// Requests permission, taps the mic, and emits wire-format chunks on an
-    /// audio thread. Returns false if permission was denied or the engine
-    /// couldn't start.
-    func startMic(onChunk: @escaping @Sendable (Data) -> Void) async -> Bool {
+    /// Requests permission and taps the mic, emitting wire-format chunks for
+    /// broadcast and/or raw buffers for on-device transcription — both on an
+    /// audio thread. Sinks are fixed when the tap is installed, so calling
+    /// this while already live reinstalls the tap with the new pair. Returns
+    /// false if permission was denied or the engine couldn't start.
+    func startMic(onChunk: (@Sendable (Data) -> Void)? = nil,
+                  onBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)? = nil) async -> Bool {
         guard await Self.requestMicPermission() else { return false }
-        guard !micLive else { return true }
 
         configureSession()
         let input = captureEngine.inputNode
@@ -96,11 +98,15 @@ final class AudioStreamer {
               let converter = AVAudioConverter(from: tapFormat, to: Self.wireFormat)
         else { return false }
         let normalizer = AudioNormalizer()
+        if micLive { input.removeTap(onBus: 0) }
 
         input.installTap(onBus: 0, bufferSize: 2048, format: tapFormat) { buffer, _ in
-            // Audio thread: resample to the wire format and hand off. The
-            // converter is stateful (resampler carry-over) but only ever
-            // touched from this serial tap.
+            // Audio thread. Transcription gets the buffer untouched; the wire
+            // path resamples and normalizes its own copy. The converter is
+            // stateful (resampler carry-over) but only ever touched from this
+            // serial tap.
+            onBuffer?(buffer)
+            guard let onChunk else { return }
             let ratio = AudioWire.sampleRate / buffer.format.sampleRate
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
             guard let out = AVAudioPCMBuffer(pcmFormat: Self.wireFormat, frameCapacity: capacity)

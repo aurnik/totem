@@ -28,6 +28,10 @@ struct ConversationView: View {
         model.liveMicConversation == conversationID
     }
 
+    private var dictating: Bool {
+        model.dictationConversation == conversationID
+    }
+
     private var speakers: [(id: UUID, handle: String)] {
         (model.speakingUsers[conversationID] ?? [])
             .map { (id: $0, handle: model.handle(of: $0) ?? "?") }
@@ -107,6 +111,19 @@ struct ConversationView: View {
                     Image(systemName: "waveform")
                 }
                 .disabled(peerOffline)
+            }
+            if model.dictationSupported {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.toggleDictation(in: conversationID)
+                    } label: {
+                        Image(systemName: dictating
+                              ? "text.bubble.fill" : "text.bubble")
+                            .foregroundStyle(dictating ? Color.red : Color.accentColor)
+                            .symbolEffect(.pulse, isActive: dictating)
+                    }
+                    .disabled(peerOffline)
+                }
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -334,8 +351,34 @@ struct ConversationView: View {
         !draft.trimmingCharacters(in: .whitespaces).isEmpty && !peerOffline
     }
 
+    /// What the recognizer has heard but hasn't finished — it goes out as a
+    /// message on the next pause, so this is the speaker's only look at it
+    /// first.
+    private var previewText: String {
+        if model.dictationPreparing { return "Getting dictation ready…" }
+        return model.dictationPreview.isEmpty ? "Listening…" : model.dictationPreview
+    }
+
+    private var dictationBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "waveform")
+                .symbolEffect(.variableColor.iterative, isActive: true)
+            Text(previewText)
+                .italic()
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 16)
+        .transition(.opacity)
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if dictating {
+                dictationBar
+            }
             #if os(iOS)
             HStack(alignment: .bottom, spacing: 0) {
                 TextField("Message", text: $draft, axis: .vertical)
