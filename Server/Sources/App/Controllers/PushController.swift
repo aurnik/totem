@@ -55,6 +55,8 @@ struct PushController: RouteCollection {
 /// Sends "X signed on" alerts, mirroring the client-side local-notification
 /// throttle (one per watched buddy per 30 minutes, per recipient).
 actor SignOnPusher {
+    static let bundleID = "com.deadsimple.totem"
+
     private let app: Application
     private var lastSent: [String: Date] = [:]
 
@@ -103,7 +105,7 @@ actor SignOnPusher {
                     expiration: .timeIntervalSince1970InSeconds(
                         Int(Date().timeIntervalSince1970) + 1800),
                     priority: .immediately,
-                    topic: OnboardController.bundleID,
+                    topic: Self.bundleID,
                     payload: EmptyPayload()),
                 deviceToken: row.token)
         } catch let error as APNSError where error.reason == .badDeviceToken

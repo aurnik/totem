@@ -28,18 +28,6 @@ struct BuddyListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                #if os(iOS)
-                if model.updateAvailable {
-                    Section {
-                        Button {
-                            model.openUpdate()
-                        } label: {
-                            Label("Update Totem", systemImage: "arrow.down.circle.fill")
-                                .fontWeight(.semibold)
-                        }
-                    }
-                }
-                #endif
                 if !model.isSignedOn {
                     signedOffHeader
                 } else {

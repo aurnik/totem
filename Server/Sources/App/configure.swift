@@ -56,7 +56,6 @@ func configure(_ app: Application) async throws {
         await gateway.handleUpgrade(req: req, ws: ws)
     }
     try app.register(collection: AuthController())
-    try app.register(collection: OnboardController())
 
     gateway.startLivenessSweep()
     print("configure: done")

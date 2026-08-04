@@ -11,7 +11,7 @@ struct APIClient {
     /// corrupts inbound WebSocket frames.
     static var defaultServerURL: String {
         // Distributed builds carry their server baked in (set by
-        // Server/onboard/sign.sh) so a friend signs in with just a handle.
+        // Server/onboard/testflight.sh) so a friend signs in with just a handle.
         if let baked = Bundle.main.object(forInfoDictionaryKey: "TotemDefaultServerURL") as? String,
            !baked.isEmpty {
             return baked
@@ -69,22 +69,6 @@ struct APIClient {
 
     func setPushSettings(_ settings: PushSettings) async throws {
         let _: PushSettings = try await post("push/settings", body: settings)
-    }
-
-    struct BuildInfo: Codable {
-        let build: Int
-    }
-
-    /// Latest ad-hoc build published by the server's onboarding pipeline.
-    func latestBuild() async throws -> Int {
-        let info: BuildInfo = try await get("app/version")
-        return info.build
-    }
-
-    var updateManifestURL: URL {
-        let manifest = baseURL.appending(path: "app/manifest").absoluteString
-        let encoded = manifest.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? manifest
-        return URL(string: "itms-services://?action=download-manifest&url=\(encoded)")!
     }
 
     var socketURL: URL {

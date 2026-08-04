@@ -10,5 +10,5 @@ FROM swift:6.2-jammy-slim
 COPY --from=build /build/.build/release/App /app/App
 WORKDIR /app
 # Railway injects PORT; persistent state lives on the mounted volume via
-# DB_PATH and ONBOARD_DIR (see MINI_SETUP.md).
+# DB_PATH (see MINI_SETUP.md).
 CMD /app/App serve --env production --hostname 0.0.0.0 --port ${PORT:-8080}

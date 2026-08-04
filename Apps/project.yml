@@ -12,9 +12,8 @@ settings:
     SWIFT_VERSION: "5.10"
     DEVELOPMENT_TEAM: TKXA365JX2
     CODE_SIGN_STYLE: Automatic
-    # Overridden by Server/onboard/sign.sh: distributed builds get a
-    # date-stamped build number (drives the in-app update check) and a baked
-    # default server URL. Dev builds stay at "1" (update check disabled).
+    # Overridden by Server/onboard/testflight.sh: distributed builds get a
+    # date-stamped build number and a baked default server URL.
     CURRENT_PROJECT_VERSION: "1"
     # User-facing version. TestFlight only needs a unique build number per
     # marketing version, so this is bumped by hand at release time.

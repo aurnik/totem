@@ -1,6 +1,6 @@
 #!/bin/bash
-# Archives and uploads a TestFlight build to App Store Connect. Same
-# API-driven manual signing as sign.sh, but with the App Store profile and
+# Archives and uploads a TestFlight build to App Store Connect. Signing is
+# API-driven manual signing (provision.py) with the App Store profile, and
 # xcodebuild's built-in upload (no Transporter needed). The app record
 # (com.deadsimple.totem) must already exist in App Store Connect.
 # Requires:

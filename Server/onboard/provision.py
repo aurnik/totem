@@ -1,10 +1,10 @@
 """Ensure signing prerequisites exist, all via the App Store Connect API:
 the bundle ID, an Apple Distribution certificate (created with a locally
-generated key, imported into the login keychain), and a fresh ad-hoc
-provisioning profile covering every registered device.
+generated key, imported into the login keychain), and a fresh App Store
+provisioning profile.
 
-Profiles are immutable, so the profile is recreated on every run — that is
-how newly registered devices get included. Idempotent otherwise.
+Profiles are immutable, so the profile is recreated on every run.
+Idempotent otherwise.
 
 Env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH, TOTEM_TEAM_ID (for the cert
 subject check only). State lives in ~/.appstoreconnect/dist/.
@@ -22,7 +22,6 @@ import urllib.request
 import jwt
 
 BUNDLE_ID = "com.deadsimple.totem"
-PROFILE_NAME = "Totem AdHoc"
 APPSTORE_PROFILE_NAME = "Totem AppStore"
 API = "https://api.appstoreconnect.apple.com/v1"
 STATE = os.path.expanduser("~/.appstoreconnect/dist")
@@ -154,30 +153,6 @@ def import_into_keychain(cert):
         sys.exit(f"distribution identity missing after import: {identities.strip()[:300]}")
 
 
-def ensure_profile(bundle_id_res, cert_id):
-    for profile in api("GET", f"profiles?filter[name]={PROFILE_NAME.replace(' ', '%20')}")["data"]:
-        api("DELETE", f"profiles/{profile['id']}")
-    devices = [d["id"] for d in api("GET", "devices?limit=200")["data"]
-               if d["attributes"]["platform"] == "IOS"
-               and d["attributes"]["status"] == "ENABLED"]
-    if not devices:
-        sys.exit("no registered iOS devices — profile would be empty")
-    created = api("POST", "profiles", {"data": {"type": "profiles",
-        "attributes": {"name": PROFILE_NAME, "profileType": "IOS_APP_ADHOC"},
-        "relationships": {
-            "bundleId": {"data": {"type": "bundleIds", "id": bundle_id_res}},
-            "certificates": {"data": [{"type": "certificates", "id": cert_id}]},
-            "devices": {"data": [{"type": "devices", "id": d} for d in devices]},
-        }}})
-    content = base64.b64decode(created["data"]["attributes"]["profileContent"])
-    for directory in ("~/Library/MobileDevice/Provisioning Profiles",
-                      "~/Library/Developer/Xcode/UserData/Provisioning Profiles"):
-        directory = os.path.expanduser(directory)
-        os.makedirs(directory, exist_ok=True)
-        open(f"{directory}/totem-adhoc.mobileprovision", "wb").write(content)
-    print(f"profile refreshed with {len(devices)} device(s)")
-
-
 def ensure_appstore_profile(bundle_id_res, cert_id):
     for profile in api("GET",
                        f"profiles?filter[name]={APPSTORE_PROFILE_NAME.replace(' ', '%20')}")["data"]:
@@ -201,6 +176,5 @@ ensure_keychain()
 bundle = ensure_bundle_id()
 ensure_push_capability(bundle)
 certificate = ensure_certificate()
-ensure_profile(bundle, certificate)
 ensure_appstore_profile(bundle, certificate)
 print("provisioning ready")
