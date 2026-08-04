@@ -54,10 +54,13 @@ explain reasoning, which is usually where the user-facing consequence hides.
 
 - **Forces the tester to act** — they must update, or something they set up is
   gone, or a habit no longer works. This leads, always, in the first line.
-- **They will notice it** — new thing, changed thing, fixed annoyance.
+- **They will notice it** — new thing, changed thing, fixed annoyance. This is
+  the body of the notes and very nearly all of them.
 - **They will notice nothing** — refactors, dead-code removal, server-side
-  cleanup. These do not get described. If one touched a risky area, convert it
-  into a request to try that area instead.
+  cleanup. These produce no text at all. Not a summary, not a caveat, not a
+  request to go and check the areas they touched. A release of nothing but
+  internal work produces one plain line, like "Small fixes." — the work being
+  large is not a reason to mention it.
 
 **4. Write the notes.**
 
@@ -102,33 +105,44 @@ needs one of those words, it is describing the wrong thing.
 **Name features the way the app does.** Buddy list, away message, soundboard,
 voice chat, dictation, avatar — the words on the screen.
 
-**Turn risky cleanups into asks.** When a release moves code under voice,
-dictation or group chat without meaning to change it, say so and ask them to
-try exactly those flows. A tester who knows where to look is worth more than
-one who reads a summary.
+**Nothing but the updates.** No asking testers to try particular flows, no
+flagging which areas were touched, no requests for feedback. Feedback is what
+the group is for; the notes are the list of what is new.
+
+**Third person, never first.** These read as an app's release notes, not a
+message from whoever built it. No "I", no "me", no "I want to hear about it".
 
 **Keep it short and specific.** No marketing voice, no "various improvements
-and bug fixes", no emoji, no version headers. If nothing user-facing changed,
-say that honestly and ask for the specific check you want.
+and bug fixes", no emoji, no version headers.
 </voice>
 
 <example>
-A release that was pure internal cleanup plus one breaking change:
+A release carrying four user-facing features, one breaking change, and roughly
+twenty commits of internal cleanup:
 
 ```
-Housekeeping release — no new features, but everyone needs it.
+Update when you get a chance — older builds can't sign in anymore.
 
-Older builds can't sign in anymore, so update when you get a chance.
+New since the last build you got:
 
-A lot of unused code came out behind the scenes, including bits near voice
-chat, dictation and group chats. None of it should look any different — so
-if something does, that's a bug and I want to hear about it. Worth a quick
-try: voice in a group chat, the dictation toggle, and signing out and back in.
+Avatars. Make a face for yourself in Settings and your friends will see it
+next to you in chats and on their buddy list. Until you pick one, nobody sees
+a face for you.
+
+Dictation. Start voice in a chat and a dictation toggle appears above the
+message box. Turn it on and whatever you say gets sent as a normal message.
+
+Friend requests now reach you even when the app is closed, and if you and
+someone have both added each other you're friends straight away — no
+accepting.
+
+Settings picked up soundboard management and a light/dark choice.
 ```
 
-Why it works: the forced update is line two, no internal vocabulary survives,
-and the twenty-odd refactor commits become one honest sentence plus a specific
-request.
+Why it works: the forced update is the first line, every entry is something a
+tester can see or do and is described in the words on the screen, and the
+cleanup commits produced no text whatsoever — no summary of them, no note that
+they were near voice or group chat, no invitation to go and test anything.
 </example>
 
 <success_criteria>
@@ -136,7 +150,8 @@ request.
 - Every commit was read, not just its subject line
 - Anything forcing tester action leads the notes
 - No internal vocabulary reached the notes
-- Changes with no visible effect were either omitted or turned into a request to test
+- Changes with no visible effect produced no text, in any form
+- Nothing is written in first person, and nothing asks the tester to try or report anything
 - The user saw the draft before it was sent
 - `--status` afterwards shows the notes in place and review `WAITING_FOR_REVIEW` or `APPROVED`
 </success_criteria>
