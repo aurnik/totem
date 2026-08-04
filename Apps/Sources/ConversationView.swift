@@ -159,14 +159,14 @@ struct ConversationView: View {
     }
 
     /// The chat's actions, collapsed behind the header's overflow button so the bar
-    /// carries one control instead of three. Icons only — each is its own
-    /// affordance, and labels would make this a menu rather than a palette.
+    /// carries one control instead of three.
     private var actionMenu: some View {
-        VStack(spacing: 2) {
-            actionButton("waveform") { showingSoundboard = true }
-            // Once something is on the stage this closes it; the picker is how
-            // you put something up in the first place.
-            actionButton(youTubeIsOnStage ? "xmark" : YouTubeExtension.symbol) {
+        VStack(alignment: .leading, spacing: 2) {
+            actionButton("waveform", "Sounds") { showingSoundboard = true }
+            // Lit red while something is on the stage, the way the mic is while
+            // it's open — and the glyph says what tapping it now does: stop.
+            actionButton(youTubeIsOnStage ? "stop.fill" : YouTubeExtension.symbol,
+                         "YouTube", tint: youTubeIsOnStage ? .red : nil) {
                 if youTubeIsOnStage {
                     model.closeStage(in: conversationID)
                 } else {
@@ -174,11 +174,14 @@ struct ConversationView: View {
                 }
             }
             .disabled(stageIsProtected)
-            actionButton(micIsLive ? "mic.fill" : "mic",
+            actionButton(micIsLive ? "mic.fill" : "mic", "Voice",
                          tint: micIsLive ? .red : nil, pulsing: micIsLive) {
                 model.toggleMic(in: conversationID)
             }
         }
+        // Sizes the sheet to its widest label, then stretches the rest to match
+        // so every row is one full-width tap target.
+        .fixedSize(horizontal: true, vertical: false)
         .padding(5)
         .background(.regularMaterial, in: .rect(cornerRadius: 18))
         .overlay {
@@ -189,18 +192,27 @@ struct ConversationView: View {
         .disabled(peerOffline)
     }
 
-    private func actionButton(_ symbol: String, tint: Color? = nil, pulsing: Bool = false,
+    private func actionButton(_ symbol: String, _ label: String, tint: Color? = nil,
+                              pulsing: Bool = false,
                               action: @escaping () -> Void) -> some View {
         Button {
             toggleActions()
             action()
         } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 16))
-                .foregroundStyle(tint ?? Color.accentColor)
-                .symbolEffect(.pulse, isActive: pulsing)
-                .frame(width: 40, height: 38)
-                .contentShape(Rectangle())
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 16))
+                    .foregroundStyle(tint ?? Color.accentColor)
+                    .symbolEffect(.pulse, isActive: pulsing)
+                    .frame(width: 22)
+                Text(label)
+                    .font(.subheadline)
+                    .foregroundStyle(tint ?? Color.primary)
+            }
+            .frame(height: 38)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
