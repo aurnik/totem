@@ -5,7 +5,13 @@ import Vapor
 /// Profile data beyond auth — currently just the avatar settings.
 struct ProfileController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        routes.grouped("me").post("avatar", use: setAvatar)
+        let me = routes.grouped("me")
+        me.get(use: current)
+        me.post("avatar", use: setAvatar)
+    }
+
+    func current(req: Request) async throws -> TotemKit.User {
+        try req.auth.require(UserModel.self).dto
     }
 
     func setAvatar(req: Request) async throws -> HTTPStatus {

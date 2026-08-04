@@ -20,10 +20,12 @@ struct NewChatSheet: View {
     }
 
     /// Show "Add friend" whenever the typed text isn't an existing friend's
-    /// exact handle — no separate add-buddy flow.
+    /// exact handle (or a Recents row already offering the same add).
     private var showsAddFriendRow: Bool {
         trimmedQuery.count >= 3 && !model.acceptedBuddies.contains {
             $0.user.handle.lowercased() == trimmedQuery
+        } && !model.recentNonFriends.contains {
+            $0.handle.lowercased() == trimmedQuery
         }
     }
 
@@ -34,6 +36,20 @@ struct NewChatSheet: View {
             .compactMap { buddy in
                 fuzzyScore(needle: trimmedQuery, in: buddy.user.handle.lowercased())
                     .map { (buddy, $0) }
+            }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+    }
+
+    /// Group-chat co-participants who aren't friends yet — one tap sends the
+    /// request. Filtered by the same fuzzy match as friends.
+    private var recentResults: [User] {
+        let recents = model.recentNonFriends
+        guard !trimmedQuery.isEmpty else { return recents }
+        return recents
+            .compactMap { user in
+                fuzzyScore(needle: trimmedQuery, in: user.handle.lowercased())
+                    .map { (user, $0) }
             }
             .sorted { $0.1 > $1.1 }
             .map(\.0)
@@ -119,6 +135,13 @@ struct NewChatSheet: View {
                     Text(statusMessage)
                 }
             }
+            if !recentResults.isEmpty {
+                Section("Recents") {
+                    ForEach(recentResults) { user in
+                        recentRow(user)
+                    }
+                }
+            }
         }
         .onChange(of: query) {
             errorMessage = nil
@@ -152,6 +175,24 @@ struct NewChatSheet: View {
         .disabled(offline)
     }
 
+    /// From group chats together but not friends: the whole row is the
+    /// one-tap "add friend".
+    private func recentRow(_ user: User) -> some View {
+        Button {
+            sendRequest(to: user.handle)
+        } label: {
+            HStack {
+                UserAvatar(avatar: user.avatar, size: 32)
+                Text(user.handle)
+                Spacer()
+                Image(systemName: "person.badge.plus")
+                    .foregroundStyle(Color.accentColor)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func toggle(_ id: UUID) {
         if selected.contains(id) {
             selected.remove(id)
@@ -162,7 +203,10 @@ struct NewChatSheet: View {
     }
 
     private func addFriend() {
-        let handle = trimmedQuery
+        sendRequest(to: trimmedQuery)
+    }
+
+    private func sendRequest(to handle: String) {
         errorMessage = nil
         Task {
             do {

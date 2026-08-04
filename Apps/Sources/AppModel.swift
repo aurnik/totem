@@ -141,6 +141,28 @@ final class AppModel {
         Task { try? await api.setAvatar(avatar) }
     }
 
+    /// Reconciles this device with the account on every sign-on. Buddies who
+    /// have never published an avatar render without one, so an account that
+    /// has none yet must publish this device's — installs signed in before
+    /// avatars existed never pass through `signIn` again. When the account
+    /// does have one it wins, so a second device can't overwrite it with a
+    /// stale local copy.
+    private func syncAvatar() {
+        let api = self.api
+        Task { [weak self] in
+            guard let remote = try? await api.me(), let self else { return }
+            guard let stored = remote.avatar else {
+                commitAvatar()
+                return
+            }
+            avatar = stored
+            currentUser?.avatar = stored
+            UserDefaults.standard.set(try? JSONEncoder().encode(stored), forKey: "avatar")
+            UserDefaults.standard.set(
+                try? WireCoder.encoder().encode(currentUser), forKey: "currentUser")
+        }
+    }
+
     init() {
         NotificationManager.shared.activate()
         audio.onOutputVolumeChange = { [weak self] in self?.outputVolumeChanged() }
@@ -201,14 +223,6 @@ final class AppModel {
         let response = try await api.devLogin(handle: handle)
         api.token = response.token
         currentUser = response.user
-        // The account's avatar wins over whatever a previous user of this
-        // device left behind; a fresh account gets this device's settings.
-        if let remote = response.user.avatar {
-            avatar = remote
-            UserDefaults.standard.set(try? JSONEncoder().encode(remote), forKey: "avatar")
-        } else {
-            commitAvatar()
-        }
 
         let defaults = UserDefaults.standard
         defaults.set(response.token, forKey: "authToken")
@@ -262,6 +276,25 @@ final class AppModel {
         try await refreshBuddies()
     }
 
+    /// The buddy record for a user in any state (accepted or pending, either
+    /// direction), or nil when there's no relationship at all.
+    func relationship(with userID: UUID) -> Buddy? {
+        buddies.first { $0.user.id == userID }
+    }
+
+    /// Group-chat co-participants with no buddy relationship: quick-add
+    /// candidates, most recent session first.
+    var recentNonFriends: [User] {
+        let related = Set(buddies.map(\.user.id))
+        var seen = Set<UUID>()
+        return groupSessions.values
+            .sorted { $0.session.startedAt > $1.session.startedAt }
+            .flatMap(\.participants)
+            .filter {
+                $0.id != currentUser?.id && !related.contains($0.id) && seen.insert($0.id).inserted
+            }
+    }
+
     func acceptRequest(_ buddy: Buddy) async throws {
         try await api.acceptBuddyRequest(id: buddy.id)
         try await refreshBuddies()
@@ -273,6 +306,7 @@ final class AppModel {
         guard let token = api.token, !isSignedOn else { return }
         apply(machine.handle(.signOn(at: Date())))
         refreshPushSettings()
+        syncAvatar()
         let socket = SocketClient(url: api.socketURL, token: token)
         self.socket = socket
         socketTask = Task { [weak self] in

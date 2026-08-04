@@ -268,26 +268,82 @@ struct AvatarHeadView: View {
     }
 }
 
+/// A user's avatar wherever one appears inline. Users who haven't published
+/// one (a friend still on an older build) get nothing at all — the unset
+/// default look is only ever shown to its owner, in settings.
+struct UserAvatar: View {
+    let avatar: Avatar?
+    var size: CGFloat = 28
+
+    var body: some View {
+        if let avatar {
+            AvatarHeadView(avatar: avatar, size: size, animated: false)
+        }
+    }
+}
+
 /// Buddy-list presence badge: the avatar itself is the status indicator.
 /// Full color means online; greyscale means offline; away and idle get a
-/// yellow duotone. Falls back to the default look for users who haven't set
-/// an avatar. Never animates — these appear by the dozen in lists.
+/// yellow duotone. Without a published avatar it degrades to the colored
+/// state dot. Never animates — these appear by the dozen in lists.
 struct PresenceAvatar: View {
     let avatar: Avatar?
     let state: PresenceState
     var size: CGFloat = 32
 
     var body: some View {
-        let head = AvatarHeadView(avatar: avatar ?? Avatar(), size: size, animated: false)
-        switch state {
-        case .online:
-            head
-        case .offline:
-            head.grayscale(1).opacity(0.55)
-        case .away, .idle:
-            head.grayscale(1)
-                .colorMultiply(Color(red: 1, green: 0.84, blue: 0.35))
+        if let avatar {
+            let head = AvatarHeadView(avatar: avatar, size: size, animated: false)
+            switch state {
+            case .online:
+                head
+            case .offline:
+                head.grayscale(1).opacity(0.55)
+            case .away, .idle:
+                head.grayscale(1)
+                    .colorMultiply(Color(red: 1, green: 0.84, blue: 0.35))
+            }
+        } else {
+            StateDot(state: state)
+                .frame(width: size, height: size)
         }
+    }
+}
+
+struct StateDot: View {
+    let state: PresenceState
+
+    var color: Color {
+        switch state {
+        case .online: .green
+        case .away: .orange
+        case .idle: .yellow
+        case .offline: .gray
+        }
+    }
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 10, height: 10)
+    }
+}
+
+/// Stands in for a missing avatar only where a row would otherwise be
+/// anonymous — the live-audio meters carry no handle of their own.
+struct MonogramCircle: View {
+    let handle: String
+    var size: CGFloat = 28
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.accentColor)
+            Text(handle.prefix(1).uppercased())
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: size, height: size)
     }
 }
 

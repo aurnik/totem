@@ -10,6 +10,7 @@ struct ConversationView: View {
     let conversationID: UUID
     @State private var draft = ""
     @State private var showingSoundboard = false
+    @State private var showingMembers = false
 
     private var group: SessionInfo? {
         model.groupSessions[conversationID]
@@ -41,15 +42,16 @@ struct ConversationView: View {
 
     /// Who to picture in the header: the peer for 1:1, up to three
     /// participants for groups (matching the title's handle order).
+    /// Participants without a published avatar are simply left out.
     private var headerAvatars: [Avatar] {
         if let group {
             return group.participants
                 .filter { $0.id != model.currentUser?.id }
                 .sorted { $0.handle < $1.handle }
                 .prefix(3)
-                .map { model.avatar(of: $0.id) ?? $0.avatar ?? Avatar() }
+                .compactMap { model.avatar(of: $0.id) ?? $0.avatar }
         }
-        return [model.avatar(of: conversationID) ?? Avatar()]
+        return [model.avatar(of: conversationID)].compactMap { $0 }
     }
 
     var body: some View {
@@ -58,6 +60,10 @@ struct ConversationView: View {
                 banner("Reconnecting — messages can't be sent right now.")
             } else if peerOffline {
                 banner("\(title) is offline — messages can't be delivered right now.")
+            }
+            if showingMembers, let group {
+                memberList(group)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
             // Also shown while broadcasting with no one talking back — the
             // speaker is exactly who needs to know a listener can't hear.
@@ -74,14 +80,23 @@ struct ConversationView: View {
         .toolbar {
             #if os(iOS)
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    HStack(spacing: -10) {
-                        ForEach(Array(headerAvatars.enumerated()), id: \.offset) { _, avatar in
-                            AvatarHeadView(avatar: avatar, size: 26, animated: false)
-                        }
+                // For groups the title is a button: tapping drops down the
+                // member list (handles, quick-add for non-friends).
+                if group != nil {
+                    Button(action: toggleMembers) {
+                        headerLabel
                     }
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.plain)
+                } else {
+                    headerLabel
+                }
+            }
+            #else
+            if group != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: toggleMembers) {
+                        Image(systemName: "person.2")
+                    }
                 }
             }
             #endif
@@ -115,6 +130,84 @@ struct ConversationView: View {
         }
     }
 
+    private var headerLabel: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: -10) {
+                ForEach(Array(headerAvatars.enumerated()), id: \.offset) { _, avatar in
+                    AvatarHeadView(avatar: avatar, size: 26, animated: false)
+                }
+            }
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            if group != nil {
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(showingMembers ? 180 : 0))
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func toggleMembers() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            showingMembers.toggle()
+        }
+    }
+
+    /// Dropped down from the header title: every other participant, with
+    /// their avatar — or, for non-friends, a one-tap add-friend button.
+    private func memberList(_ group: SessionInfo) -> some View {
+        let members = group.participants
+            .filter { $0.id != model.currentUser?.id }
+            .sorted { $0.handle < $1.handle }
+        return VStack(alignment: .leading, spacing: 10) {
+            ForEach(members) { member in
+                HStack(spacing: 10) {
+                    memberAccessory(member)
+                        .frame(width: 30)
+                    Text(member.handle)
+                        .font(.subheadline)
+                    Spacer()
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.quaternary.opacity(0.5))
+    }
+
+    @ViewBuilder
+    private func memberAccessory(_ member: User) -> some View {
+        let relationship = model.relationship(with: member.id)
+        if relationship?.status == .accepted {
+            PresenceAvatar(
+                avatar: model.avatar(of: member.id) ?? member.avatar,
+                state: model.presences[member.id]?.state ?? .offline,
+                size: 28)
+        } else if let relationship, !relationship.incoming {
+            // Request already sent — nothing more to do here.
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+        } else {
+            // One tap makes friends: accepts their pending request if there
+            // is one, otherwise sends ours.
+            Button {
+                Task {
+                    if let relationship {
+                        try? await model.acceptRequest(relationship)
+                    } else {
+                        try? await model.addBuddy(handle: member.handle)
+                    }
+                }
+            } label: {
+                Image(systemName: "person.badge.plus")
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     /// Fixed to the top while anyone is audible: two-column grid of speaking
     /// users, each an initial-letter circle beside their live EQ, plus a
     /// crossed-out speaker row for participants whose device can't play audio.
@@ -125,9 +218,11 @@ struct ConversationView: View {
                           alignment: .leading, spacing: 8) {
                     ForEach(speakers, id: \.id) { speaker in
                         HStack(spacing: 8) {
-                            AvatarHeadView(
-                                avatar: model.avatar(of: speaker.id) ?? Avatar(),
-                                size: 28, animated: false)
+                            if let avatar = model.avatar(of: speaker.id) {
+                                AvatarHeadView(avatar: avatar, size: 28, animated: false)
+                            } else {
+                                MonogramCircle(handle: speaker.handle)
+                            }
                             AudioMeterView(spectrum: model.speakerSpectrum[speaker.id]
                                 ?? Array(repeating: 0, count: AudioAnalyzer.bandCount))
                         }
@@ -173,7 +268,7 @@ struct ConversationView: View {
                                     senderName: (group != nil && !isMine)
                                         ? model.handle(of: message.senderID) : nil,
                                     senderAvatar: (group != nil && !isMine)
-                                        ? model.avatar(of: message.senderID) ?? Avatar() : nil,
+                                        ? model.avatar(of: message.senderID) : nil,
                                     recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
                                 )
                             case .notice(_, let text, _):
