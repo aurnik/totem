@@ -5,6 +5,7 @@ DerivedData/
 xcuserdata/
 .swiftpm/
 Server/db.sqlite
+dump.rdb
 Server/onboard/build/
 Server/onboard/.venv/
 .claude/

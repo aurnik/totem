@@ -1,18 +1,17 @@
 """Ensure signing prerequisites exist, all via the App Store Connect API:
 the bundle ID, an Apple Distribution certificate (created with a locally
-generated key, imported into the login keychain), and a fresh App Store
-provisioning profile.
+generated key, imported into the dedicated signing keychain), and a fresh
+App Store provisioning profile.
 
 Profiles are immutable, so the profile is recreated on every run.
 Idempotent otherwise.
 
-Env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH, TOTEM_TEAM_ID (for the cert
-subject check only). State lives in ~/.appstoreconnect/dist/.
+Env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH. State lives in
+~/.appstoreconnect/dist/.
 """
 import base64
 import json
 import os
-import plistlib
 import subprocess
 import sys
 import time
