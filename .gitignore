@@ -9,3 +9,4 @@ dump.rdb
 Server/onboard/build/
 Server/onboard/.venv/
 .claude/
+__pycache__/
