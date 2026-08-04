@@ -8,7 +8,7 @@ import Vapor
 struct GatewayController {
     let app: Application
     let connections: ConnectionManager
-    let pusher: SignOnPusher
+    let pusher: Pusher
 
     var presence: PresenceStore { PresenceStore(redis: app.redis) }
     var db: Database { app.db }
@@ -57,9 +57,16 @@ struct GatewayController {
     }
 
     /// A new request pushes to the target's socket so no client ever needs a
-    /// manual refresh to see it.
+    /// manual refresh to see it. A registered socket is no proof the app is
+    /// awake to render that, though, so verify liveness and fall back to APNs
+    /// — off the request path, since the ping costs 3s.
     func buddyRequestReceived(by targetID: UUID, from user: User) async {
         await connections.send(.buddyRequest(from: user), to: targetID)
+        let (connections, pusher) = (self.connections, self.pusher)
+        Task {
+            guard await !connections.verifyAlive(targetID) else { return }
+            await pusher.buddyRequested(from: user.handle, to: targetID)
+        }
     }
 
     /// After a mutual accept, each party's welcome snapshot predates the

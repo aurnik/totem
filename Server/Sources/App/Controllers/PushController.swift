@@ -52,9 +52,9 @@ struct PushController: RouteCollection {
     }
 }
 
-/// Sends "X signed on" alerts, mirroring the client-side local-notification
-/// throttle (one per watched buddy per 30 minutes, per recipient).
-actor SignOnPusher {
+/// APNs alerts for the two things that happen while the app isn't looking:
+/// buddies signing on, and buddy requests arriving.
+actor Pusher {
     static let bundleID = "com.deadsimple.totem"
 
     private let app: Application
@@ -70,7 +70,8 @@ actor SignOnPusher {
 
     /// Push to every accepted buddy of `userID` who wants sign-on pushes and
     /// isn't currently connected (connected clients get the presence frame
-    /// and raise a local notification themselves).
+    /// and raise a local notification themselves). Throttled to one per
+    /// watched buddy per 30 minutes, mirroring the client-side throttle.
     func buddySignedOn(_ userID: UUID, buddyIDs: [UUID], connections: ConnectionManager) async {
         guard isConfigured else { return }
         do {
@@ -89,7 +90,8 @@ actor SignOnPusher {
                 guard !tokens.isEmpty else { continue }
                 lastSent[throttleKey] = Date()
                 for row in tokens {
-                    await send(handle: handle, to: row)
+                    // A sign-on notice is stale once the buddy signs off again.
+                    await send("\(handle) signed on", expiresIn: 30 * 60, to: row)
                 }
             }
         } catch {
@@ -97,13 +99,28 @@ actor SignOnPusher {
         }
     }
 
-    private func send(handle: String, to row: PushTokenModel) async {
+    /// A buddy request leaves no trace the recipient will see until they next
+    /// open the app, so it isn't gated on a setting or a throttle — the server
+    /// refuses duplicate requests, making this at most one alert per requester.
+    func buddyRequested(from handle: String, to targetID: UUID) async {
+        guard isConfigured else { return }
+        do {
+            for row in try await PushTokenModel.query(on: app.db)
+                .filter(\.$user.$id == targetID).all() {
+                await send("\(handle) sent you a friend request", expiresIn: 24 * 60 * 60, to: row)
+            }
+        } catch {
+            app.logger.report(error: error)
+        }
+    }
+
+    private func send(_ title: String, expiresIn: TimeInterval, to row: PushTokenModel) async {
         do {
             try await app.apns.client.sendAlertNotification(
                 APNSAlertNotification(
-                    alert: .init(title: .raw("\(handle) signed on")),
+                    alert: .init(title: .raw(title)),
                     expiration: .timeIntervalSince1970InSeconds(
-                        Int(Date().timeIntervalSince1970) + 1800),
+                        Int(Date().timeIntervalSince1970 + expiresIn)),
                     priority: .immediately,
                     topic: Self.bundleID,
                     payload: EmptyPayload()),

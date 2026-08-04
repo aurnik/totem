@@ -45,7 +45,7 @@ func configure(_ app: Application) async throws {
 
     let connections = ConnectionManager()
     let gateway = GatewayController(
-        app: app, connections: connections, pusher: SignOnPusher(app: app))
+        app: app, connections: connections, pusher: Pusher(app: app))
 
     let authed = app.grouped(TokenAuthenticator(), UserModel.guardMiddleware())
     try authed.register(collection: BuddyController(gateway: gateway))
