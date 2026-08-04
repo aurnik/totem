@@ -33,9 +33,14 @@ struct SignInView: View {
                 .keyboardType(.URL)
                 #endif
             if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+                ScrollView {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: 300, maxHeight: 220)
             }
         }
         .padding()
@@ -50,7 +55,10 @@ struct SignInView: View {
         do {
             try await model.signIn(handle: handle, serverURL: serverURL)
         } catch {
-            errorMessage = "Couldn't sign in. Is the server running?"
+            // Name the failure. A generic "is the server running?" sends you
+            // chasing the network when the server answered fine and the
+            // response simply didn't decode.
+            errorMessage = "Couldn't sign in: \(error)"
         }
     }
 }
