@@ -1,4 +1,5 @@
 import Foundation
+import TotemKit
 import UserNotifications
 #if os(iOS)
 import UIKit
@@ -11,7 +12,7 @@ import UIKit
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
 
-    static let throttle: TimeInterval = 30 * 60
+    static let throttle = Limits.signOnPushThrottle
     private var lastNotified: [UUID: Date] = [:]
 
     func activate() {

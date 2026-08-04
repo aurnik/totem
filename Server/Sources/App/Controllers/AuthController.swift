@@ -27,11 +27,6 @@ struct AuthController: RouteCollection {
         let handle: String
     }
 
-    struct LoginResponse: Content {
-        let token: String
-        let user: TotemKit.User
-    }
-
     func devLogin(req: Request) async throws -> LoginResponse {
         let body = try req.content.decode(DevLoginRequest.self)
         let handle = body.handle.lowercased()
@@ -54,3 +49,5 @@ struct AuthController: RouteCollection {
         return LoginResponse(token: token.value, user: user.dto)
     }
 }
+
+extension TotemKit.LoginResponse: Content {}

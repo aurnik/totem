@@ -126,7 +126,7 @@ struct GatewayController {
     /// reconnected when the grace elapses, they go offline.
     private func handleClose(userID: UUID, ws: WebSocket, generation: Int) async {
         await connections.unregister(userID, ifStill: ws)
-        try? await Task.sleep(for: .seconds(90))
+        try? await Task.sleep(for: .seconds(PresenceStore.ttlSeconds))
         guard await connections.generation(of: userID) == generation,
               await !connections.isConnected(userID)
         else { return }
@@ -197,14 +197,10 @@ struct GatewayController {
 
             case .sendSessionAudio(let sessionID, let chunk):
                 guard chunk.count <= AudioWire.chunkMaxBytes,
-                      let session = try await SessionModel.find(sessionID, on: db),
-                      session.includes(userID), session.endedAt == nil
+                      let session = try await openSession(sessionID, memberedBy: userID)
                 else { return }
-                for participant in session.participants where participant != userID {
-                    await connections.send(
-                        .audio(conversationID: sessionID, senderID: userID, chunk: chunk),
-                        to: participant)
-                }
+                await send(.audio(conversationID: sessionID, senderID: userID, chunk: chunk),
+                           toMembersOf: session, except: userID)
 
             case .setAudioMuted(let recipientID, let muted):
                 guard try await areAcceptedBuddies(userID, recipientID) else { return }
@@ -213,14 +209,10 @@ struct GatewayController {
                     to: recipientID)
 
             case .setSessionAudioMuted(let sessionID, let muted):
-                guard let session = try await SessionModel.find(sessionID, on: db),
-                      session.includes(userID), session.endedAt == nil
+                guard let session = try await openSession(sessionID, memberedBy: userID)
                 else { return }
-                for participant in session.participants where participant != userID {
-                    await connections.send(
-                        .audioMuted(conversationID: sessionID, userID: userID, muted: muted),
-                        to: participant)
-                }
+                await send(.audioMuted(conversationID: sessionID, userID: userID, muted: muted),
+                           toMembersOf: session, except: userID)
             }
         } catch {
             app.logger.report(error: error)
@@ -265,18 +257,14 @@ struct GatewayController {
         from senderID: UUID, sessionID: UUID, body: String, clientMessageID: UUID,
         dictated: Bool?
     ) async throws {
-        guard let session = try await SessionModel.find(sessionID, on: db),
-              session.includes(senderID), session.endedAt == nil
-        else {
+        guard let session = try await openSession(sessionID, memberedBy: senderID) else {
             await connections.send(.error("No such session."), to: senderID)
             return
         }
         let message = ChatMessage(
             id: UUID(), sessionID: sessionID, senderID: senderID, body: body, sentAt: Date(),
             dictated: dictated)
-        for participant in session.participants where participant != senderID {
-            await connections.send(.message(message), to: participant)
-        }
+        await send(.message(message), toMembersOf: session, except: senderID)
         await connections.send(
             .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
     }
@@ -286,6 +274,23 @@ struct GatewayController {
             .filter(\.$id ~~ session.participants)
             .all()
         return SessionInfo(session: session.dto, participants: users.map(\.dto))
+    }
+
+    /// An open session the user belongs to. Callers disagree on whether a miss
+    /// deserves an error frame — messages answer, audio stays silent — so this
+    /// only reports the miss.
+    private func openSession(_ sessionID: UUID, memberedBy userID: UUID) async throws -> SessionModel? {
+        guard let session = try await SessionModel.find(sessionID, on: db),
+              session.includes(userID), session.endedAt == nil
+        else { return nil }
+        return session
+    }
+
+    private func send(_ frame: ServerFrame, toMembersOf session: SessionModel,
+                      except senderID: UUID) async {
+        for participant in session.participants where participant != senderID {
+            await connections.send(frame, to: participant)
+        }
     }
 
     private func openGroupSessions(of userID: UUID) async throws -> [SessionModel] {
@@ -337,7 +342,7 @@ struct GatewayController {
             .map { $0.$buddy.id }
     }
 
-    private func areAcceptedBuddies(_ a: UUID, _ b: UUID) async throws -> Bool {
+    func areAcceptedBuddies(_ a: UUID, _ b: UUID) async throws -> Bool {
         try await BuddyModel.query(on: db)
             .filter(\.$user.$id == a)
             .filter(\.$buddy.$id == b)

@@ -8,7 +8,9 @@ import Vapor
 struct PresenceStore {
     let redis: RedisClient
 
-    static let ttl: TimeAmount = .seconds(90)
+    /// Expiry of this key *is* the offline timeout, so the grace period the
+    /// gateway waits out before reaping a dropped socket matches it.
+    static let ttlSeconds = 90
 
     private func presenceKey(_ userID: UUID) -> RedisKey { "presence:\(userID.uuidString)" }
 
@@ -16,12 +18,12 @@ struct PresenceStore {
         let json = String(decoding: try WireCoder.encoder().encode(presence), as: UTF8.self)
         _ = try await redis.set(
             presenceKey(userID), to: json,
-            onCondition: .none, expiration: .seconds(90)
+            onCondition: .none, expiration: .seconds(Self.ttlSeconds)
         ).get()
     }
 
     func refresh(for userID: UUID) async throws {
-        _ = try await redis.expire(presenceKey(userID), after: Self.ttl).get()
+        _ = try await redis.expire(presenceKey(userID), after: .seconds(Int64(Self.ttlSeconds))).get()
     }
 
     func get(for userID: UUID) async throws -> Presence {

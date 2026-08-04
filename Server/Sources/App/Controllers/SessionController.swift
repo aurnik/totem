@@ -27,12 +27,7 @@ struct SessionController: RouteCollection {
         }
 
         for id in others {
-            let isBuddy = try await BuddyModel.query(on: req.db)
-                .filter(\.$user.$id == userID)
-                .filter(\.$buddy.$id == id)
-                .filter(\.$status == .accepted)
-                .count() > 0
-            guard isBuddy else {
+            guard try await gateway.areAcceptedBuddies(userID, id) else {
                 throw Abort(.forbidden, reason: "All participants must be your buddies.")
             }
         }

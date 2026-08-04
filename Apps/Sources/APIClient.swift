@@ -26,11 +26,6 @@ struct APIClient {
     var baseURL = URL(string: APIClient.defaultServerURL)!
     var token: String?
 
-    struct LoginResponse: Codable {
-        let token: String
-        let user: User
-    }
-
     func devLogin(handle: String) async throws -> LoginResponse {
         try await post("auth/dev", body: ["handle": handle])
     }
@@ -53,10 +48,6 @@ struct APIClient {
 
     func setAvatar(_ avatar: Avatar) async throws {
         let _: EmptyResponse = try await post("me/avatar", body: avatar)
-    }
-
-    struct PushSettings: Codable {
-        let signOnPushes: Bool
     }
 
     func registerPushToken(_ token: String) async throws {

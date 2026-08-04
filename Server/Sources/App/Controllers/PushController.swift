@@ -1,5 +1,6 @@
 import APNSCore
 import Fluent
+import TotemKit
 import Vapor
 import VaporAPNS
 
@@ -14,10 +15,6 @@ struct PushController: RouteCollection {
 
     struct TokenBody: Content {
         let token: String
-    }
-
-    struct Settings: Content {
-        let signOnPushes: Bool
     }
 
     private func registerToken(_ req: Request) async throws -> HTTPStatus {
@@ -38,14 +35,14 @@ struct PushController: RouteCollection {
         return .ok
     }
 
-    private func getSettings(_ req: Request) async throws -> Settings {
+    private func getSettings(_ req: Request) async throws -> PushSettings {
         let user = try req.auth.require(UserModel.self)
-        return Settings(signOnPushes: user.signOnPushes)
+        return PushSettings(signOnPushes: user.signOnPushes)
     }
 
-    private func setSettings(_ req: Request) async throws -> Settings {
+    private func setSettings(_ req: Request) async throws -> PushSettings {
         let user = try req.auth.require(UserModel.self)
-        let settings = try req.content.decode(Settings.self)
+        let settings = try req.content.decode(PushSettings.self)
         user.signOnPushes = settings.signOnPushes
         try await user.save(on: req.db)
         return settings
@@ -70,8 +67,9 @@ actor Pusher {
 
     /// Push to every accepted buddy of `userID` who wants sign-on pushes and
     /// isn't currently connected (connected clients get the presence frame
-    /// and raise a local notification themselves). Throttled to one per
-    /// watched buddy per 30 minutes, mirroring the client-side throttle.
+    /// and raise a local notification themselves). Shares one throttle window
+    /// with the client's local alerts, so a buddy hears about a sign-on at the
+    /// same rate whichever path delivers it.
     func buddySignedOn(_ userID: UUID, buddyIDs: [UUID], connections: ConnectionManager) async {
         guard isConfigured else { return }
         do {
@@ -82,7 +80,8 @@ actor Pusher {
                       buddy.signOnPushes
                 else { continue }
                 let throttleKey = "\(buddyID)-\(userID)"
-                if let last = lastSent[throttleKey], Date().timeIntervalSince(last) < 30 * 60 {
+                if let last = lastSent[throttleKey],
+                   Date().timeIntervalSince(last) < Limits.signOnPushThrottle {
                     continue
                 }
                 let tokens = try await PushTokenModel.query(on: app.db)
@@ -133,3 +132,5 @@ actor Pusher {
         }
     }
 }
+
+extension TotemKit.PushSettings: Content {}

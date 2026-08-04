@@ -126,8 +126,31 @@ public struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// Body of `POST /auth/dev`'s response.
+public struct LoginResponse: Codable, Sendable {
+    public let token: String
+    public let user: User
+
+    public init(token: String, user: User) {
+        self.token = token
+        self.user = user
+    }
+}
+
+/// Body of `GET`/`POST /push/settings`.
+public struct PushSettings: Codable, Sendable {
+    public let signOnPushes: Bool
+
+    public init(signOnPushes: Bool) {
+        self.signOnPushes = signOnPushes
+    }
+}
+
 public enum Limits {
     public static let maxBuddies = 100
     public static let awayMessageMaxLength = 140
     public static let handleLength = 3...16
+    /// At most one "signed on" alert per buddy per window, local and pushed
+    /// alike — unthrottled sign-on alerts are uninstall-inducing (spec §7).
+    public static let signOnPushThrottle: TimeInterval = 30 * 60
 }
