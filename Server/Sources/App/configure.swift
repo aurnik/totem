@@ -51,7 +51,7 @@ func configure(_ app: Application) async throws {
     try authed.register(collection: BuddyController(gateway: gateway))
     try authed.register(collection: SessionController(gateway: gateway))
     try authed.register(collection: PushController())
-    try authed.register(collection: ProfileController())
+    try authed.register(collection: ProfileController(gateway: gateway))
     authed.webSocket("ws") { req, ws in
         await gateway.handleUpgrade(req: req, ws: ws)
     }

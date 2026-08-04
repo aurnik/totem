@@ -16,6 +16,9 @@ settings:
     # date-stamped build number (drives the in-app update check) and a baked
     # default server URL. Dev builds stay at "1" (update check disabled).
     CURRENT_PROJECT_VERSION: "1"
+    # User-facing version. TestFlight only needs a unique build number per
+    # marketing version, so this is bumped by hand at release time.
+    MARKETING_VERSION: "1.0"
     TOTEM_SERVER_URL: ""
 targets:
   Totem-iOS:
@@ -31,12 +34,17 @@ targets:
     info:
       path: Generated/Info-iOS.plist
       properties:
+        # Target is Totem-iOS so the scheme/IPA names stay distinct, but the
+        # home screen must read "Totem".
+        CFBundleName: Totem
+        CFBundleDisplayName: Totem
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSMicrophoneUsageDescription: Totem streams your voice live to buddies in an open chat.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         TotemDefaultServerURL: $(TOTEM_SERVER_URL)
   Totem-macOS:
@@ -48,6 +56,10 @@ targets:
     info:
       path: Generated/Info-macOS.plist
       properties:
+        CFBundleName: Totem
+        CFBundleDisplayName: Totem
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         LSUIElement: false

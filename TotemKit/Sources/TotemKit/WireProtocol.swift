@@ -49,7 +49,12 @@ public enum ServerFrame: Codable, Sendable {
     /// when the server considered this user offline before the connect — the
     /// previous online session ended, so the client must drop its transcripts;
     /// false means a reconnect within the presence grace window.
-    case welcome(self_: Presence, buddies: [String: Presence], sessions: [SessionInfo], freshSignOn: Bool)
+    /// `selfAvatar` is the account's stored avatar (nil if it has never
+    /// published one), so a client reconciles its own without a separate
+    /// request. Optional associated values decode as nil when absent, so this
+    /// stays readable in both directions across versions.
+    case welcome(self_: Presence, buddies: [String: Presence], sessions: [SessionInfo],
+                 freshSignOn: Bool, selfAvatar: Avatar?)
     /// A (group) session was created that includes this user.
     case sessionStarted(SessionInfo)
     case presence(userID: UUID, presence: Presence)
@@ -64,6 +69,10 @@ public enum ServerFrame: Codable, Sendable {
     /// A chat participant's device went (or stopped being) unable to play
     /// live audio. Same `conversationID` keying as `audio`.
     case audioMuted(conversationID: UUID, userID: UUID, muted: Bool)
+    /// A buddy (or group co-participant) published a new avatar, or signed on
+    /// carrying one the recipient's cached buddy list predates. Clients patch
+    /// their cached copy — nothing else about the user changed.
+    case avatarChanged(userID: UUID, avatar: Avatar)
     case sessionClosed(sessionID: UUID)
     /// A buddy request arrived (or one of yours was accepted — paired with a
     /// `presence` push). Clients refetch the buddy list rather than patching

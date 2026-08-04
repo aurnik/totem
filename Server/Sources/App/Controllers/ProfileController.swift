@@ -2,16 +2,13 @@ import Fluent
 import TotemKit
 import Vapor
 
-/// Profile data beyond auth — currently just the avatar settings.
+/// Profile data beyond auth — currently just the avatar settings. Reads go
+/// out with the `welcome` frame rather than through a route here.
 struct ProfileController: RouteCollection {
-    func boot(routes: RoutesBuilder) throws {
-        let me = routes.grouped("me")
-        me.get(use: current)
-        me.post("avatar", use: setAvatar)
-    }
+    let gateway: GatewayController
 
-    func current(req: Request) async throws -> TotemKit.User {
-        try req.auth.require(UserModel.self).dto
+    func boot(routes: RoutesBuilder) throws {
+        routes.grouped("me").post("avatar", use: setAvatar)
     }
 
     func setAvatar(req: Request) async throws -> HTTPStatus {
@@ -22,6 +19,9 @@ struct ProfileController: RouteCollection {
         }
         user.avatarJSON = String(decoding: try JSONEncoder().encode(avatar), as: UTF8.self)
         try await user.save(on: req.db)
+        // Everyone already looking at this user updates in place; nobody has
+        // to refetch a buddy list to stop seeing the old face.
+        await gateway.fanOutAvatar(avatar, of: try user.requireID())
         return .ok
     }
 }

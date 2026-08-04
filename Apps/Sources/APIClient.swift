@@ -51,10 +51,6 @@ struct APIClient {
         try await post("sessions", body: ["participantIDs": participantIDs.map(\.uuidString)])
     }
 
-    func me() async throws -> User {
-        try await get("me")
-    }
-
     func setAvatar(_ avatar: Avatar) async throws {
         let _: EmptyResponse = try await post("me/avatar", body: avatar)
     }

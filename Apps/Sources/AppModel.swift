@@ -130,37 +130,60 @@ final class AppModel {
         return avatar
     }()
 
+    /// Set while an edit hasn't reached the server. Survives relaunch so a
+    /// change made offline still wins the next reconciliation instead of
+    /// being silently overwritten by the server's older copy.
+    private var avatarNeedsUpload = UserDefaults.standard.bool(forKey: "avatarNeedsUpload")
+
     /// Persist locally and push to the server, which embeds it in this
-    /// user's DTO so every chat initiated from now on carries the new look.
+    /// user's DTO — and fans it out to everyone currently rendering us.
     func commitAvatar() {
+        storeAvatarLocally(avatar)
+        setAvatarNeedsUpload(true)
+        let (api, committed) = (self.api, self.avatar)
+        Task { [weak self] in
+            do {
+                try await api.setAvatar(committed)
+            } catch {
+                return
+            }
+            // A newer edit may have landed mid-flight; that one still owes an
+            // upload of its own.
+            guard let self, avatar == committed else { return }
+            setAvatarNeedsUpload(false)
+        }
+    }
+
+    /// Reconciles this device with the account using the `welcome` frame's
+    /// copy. An account with no avatar gets this device's — installs signed
+    /// in before avatars existed never pass through `signIn` again. Otherwise
+    /// the account's copy wins, so a second device can't overwrite it with a
+    /// stale local one, unless this device is still holding an edit the
+    /// server never received.
+    private func reconcileAvatar(remote: Avatar?) {
+        guard !avatarNeedsUpload else {
+            commitAvatar()
+            return
+        }
+        guard let remote else {
+            commitAvatar()
+            return
+        }
+        guard remote != avatar else { return }
+        avatar = remote
+        storeAvatarLocally(remote)
+    }
+
+    private func storeAvatarLocally(_ avatar: Avatar) {
         UserDefaults.standard.set(try? JSONEncoder().encode(avatar), forKey: "avatar")
         currentUser?.avatar = avatar
         UserDefaults.standard.set(
             try? WireCoder.encoder().encode(currentUser), forKey: "currentUser")
-        let (api, avatar) = (self.api, self.avatar)
-        Task { try? await api.setAvatar(avatar) }
     }
 
-    /// Reconciles this device with the account on every sign-on. Buddies who
-    /// have never published an avatar render without one, so an account that
-    /// has none yet must publish this device's — installs signed in before
-    /// avatars existed never pass through `signIn` again. When the account
-    /// does have one it wins, so a second device can't overwrite it with a
-    /// stale local copy.
-    private func syncAvatar() {
-        let api = self.api
-        Task { [weak self] in
-            guard let remote = try? await api.me(), let self else { return }
-            guard let stored = remote.avatar else {
-                commitAvatar()
-                return
-            }
-            avatar = stored
-            currentUser?.avatar = stored
-            UserDefaults.standard.set(try? JSONEncoder().encode(stored), forKey: "avatar")
-            UserDefaults.standard.set(
-                try? WireCoder.encoder().encode(currentUser), forKey: "currentUser")
-        }
+    private func setAvatarNeedsUpload(_ pending: Bool) {
+        avatarNeedsUpload = pending
+        UserDefaults.standard.set(pending, forKey: "avatarNeedsUpload")
     }
 
     init() {
@@ -306,7 +329,6 @@ final class AppModel {
         guard let token = api.token, !isSignedOn else { return }
         apply(machine.handle(.signOn(at: Date())))
         refreshPushSettings()
-        syncAvatar()
         let socket = SocketClient(url: api.socketURL, token: token)
         self.socket = socket
         socketTask = Task { [weak self] in
@@ -406,9 +428,28 @@ final class AppModel {
         return nil
     }
 
-    /// Last known avatar for a user: own live settings, else the buddy list
-    /// (refreshed continuously), else the snapshot a group session carried
-    /// when it was initiated.
+    /// Patches every cached copy of a user's avatar. Both caches are DTO
+    /// snapshots — the buddy list is fetched at launch, group participants
+    /// when the session opened — so a live change has to be written into
+    /// each of them rather than waiting on a refetch.
+    private func applyAvatar(_ avatar: Avatar, of userID: UUID) {
+        for index in buddies.indices where buddies[index].user.id == userID {
+            buddies[index].user.avatar = avatar
+        }
+        for (sessionID, info) in groupSessions {
+            guard info.participants.contains(where: { $0.id == userID }) else { continue }
+            var participants = info.participants
+            for index in participants.indices where participants[index].id == userID {
+                participants[index].avatar = avatar
+            }
+            groupSessions[sessionID] = SessionInfo(
+                session: info.session, participants: participants)
+        }
+    }
+
+    /// Last known avatar for a user: own live settings, else the buddy list,
+    /// else the snapshot a group session carried when it was initiated —
+    /// both kept current by `avatarChanged` pushes.
     func avatar(of userID: UUID) -> Avatar? {
         if userID == currentUser?.id { return avatar }
         if let buddyAvatar = buddy(withID: userID)?.user.avatar { return buddyAvatar }
@@ -828,7 +869,8 @@ final class AppModel {
 
     private func handle(_ frame: ServerFrame) {
         switch frame {
-        case .welcome(_, let buddies, let sessions, let freshSignOn):
+        case .welcome(_, let buddies, let sessions, let freshSignOn, let selfAvatar):
+            reconcileAvatar(remote: selfAvatar)
             // A fresh sign-on means the server ended our previous online
             // session (suspension sweep, >90s drop, sign-off) — everything
             // conversation-scoped from before it is gone. A reconnect within
@@ -850,6 +892,8 @@ final class AppModel {
             if info.isGroup {
                 groupSessions[info.session.id] = info
             }
+        case .avatarChanged(let userID, let avatar):
+            applyAvatar(avatar, of: userID)
         case .presence(let userID, let presence):
             let previous = presences[userID]
             let wasOffline = (previous?.state ?? .offline) == .offline

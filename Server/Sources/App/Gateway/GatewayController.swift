@@ -33,7 +33,7 @@ struct GatewayController {
             Task { await handleClose(userID: userID, ws: ws, generation: generation) }
         }
 
-        await signOn(userID: userID)
+        await signOn(user: user, userID: userID)
     }
 
     /// A suspended iOS app never closes its socket — heartbeats just stop and
@@ -75,7 +75,7 @@ struct GatewayController {
 
     // MARK: - Lifecycle
 
-    private func signOn(userID: UUID) async {
+    private func signOn(user: UserModel, userID: UUID) async {
         do {
             // Preserve an existing away state on reconnect; otherwise online.
             let existing = try await presence.get(for: userID)
@@ -95,10 +95,16 @@ struct GatewayController {
             for session in groupSessions {
                 sessionInfos.append(try await sessionInfo(session, on: db))
             }
+            let avatar = user.dto.avatar
             await connections.send(
                 .welcome(self_: current, buddies: snapshot, sessions: sessionInfos,
-                         freshSignOn: wasOffline), to: userID)
+                         freshSignOn: wasOffline, selfAvatar: avatar), to: userID)
             await fanOut(.presence(userID: userID, presence: current), toBuddiesOf: userID)
+            // Buddies' cached lists were fetched at their own launch and can
+            // predate this user ever publishing an avatar.
+            if let avatar {
+                await fanOutAvatar(avatar, of: userID)
+            }
             if wasOffline {
                 let pusher = self.pusher
                 let connections = self.connections
@@ -334,6 +340,19 @@ struct GatewayController {
         guard let buddyIDs = try? await acceptedBuddyIDs(of: userID) else { return }
         for id in buddyIDs {
             await connections.send(frame, to: id)
+        }
+    }
+
+    /// Everyone who renders this user right now: accepted buddies plus
+    /// co-participants of open group sessions, who may not be buddies at all.
+    func fanOutAvatar(_ avatar: Avatar, of userID: UUID) async {
+        var recipients = Set((try? await acceptedBuddyIDs(of: userID)) ?? [])
+        for session in (try? await openGroupSessions(of: userID)) ?? [] {
+            recipients.formUnion(session.participants)
+        }
+        recipients.remove(userID)
+        for id in recipients {
+            await connections.send(.avatarChanged(userID: userID, avatar: avatar), to: id)
         }
     }
 }
