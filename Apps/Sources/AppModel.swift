@@ -132,14 +132,22 @@ final class AppModel {
 
     // MARK: - Avatar
 
-    /// Live value behind the settings sliders — views mutate it freely while
-    /// dragging; `commitAvatar()` persists and uploads on release.
-    var avatar: Avatar = {
-        guard let data = UserDefaults.standard.data(forKey: "avatar"),
-              let avatar = try? JSONDecoder().decode(Avatar.self, from: data)
-        else { return Avatar() }
-        return avatar
+    /// This account's look, or nil while its owner has never picked one — an
+    /// unchosen avatar is never published, so nobody renders a face this user
+    /// didn't pick.
+    var avatar: Avatar? = {
+        guard let data = UserDefaults.standard.data(forKey: "avatar") else { return nil }
+        return try? JSONDecoder().decode(Avatar.self, from: data)
     }()
+
+    /// Live value behind the settings sliders — views mutate it freely while
+    /// dragging, and `commitAvatar()` persists and uploads on release. The
+    /// default look stands in for the editor until the first edit makes it
+    /// this owner's actual choice.
+    var avatarSetting: Avatar {
+        get { avatar ?? Avatar() }
+        set { avatar = newValue }
+    }
 
     /// Set while an edit hasn't reached the server. Survives relaunch so a
     /// change made offline still wins the next reconciliation instead of
@@ -149,9 +157,10 @@ final class AppModel {
     /// Persist locally and push to the server, which embeds it in this
     /// user's DTO — and fans it out to everyone currently rendering us.
     func commitAvatar() {
-        storeAvatarLocally(avatar)
+        let committed = avatarSetting
+        storeAvatarLocally(committed)
         setAvatarNeedsUpload(true)
-        let (api, committed) = (self.api, self.avatar)
+        let api = self.api
         Task { [weak self] in
             do {
                 try await api.setAvatar(committed)
@@ -166,26 +175,29 @@ final class AppModel {
     }
 
     /// Reconciles this device with the account using the `welcome` frame's
-    /// copy. An account with no avatar gets this device's — installs signed
-    /// in before avatars existed never pass through `signIn` again. Otherwise
-    /// the account's copy wins, so a second device can't overwrite it with a
-    /// stale local one, unless this device is still holding an edit the
-    /// server never received.
+    /// copy. An account with no avatar gets this device's chosen one —
+    /// installs signed in before avatars existed never pass through `signIn`
+    /// again — while a device whose owner never picked one publishes nothing.
+    /// Otherwise the account's copy wins, so a second device can't overwrite
+    /// it with a stale local one, unless this device is still holding an edit
+    /// the server never received.
     private func reconcileAvatar(remote: Avatar?) {
         guard !avatarNeedsUpload else {
             commitAvatar()
             return
         }
         guard let remote else {
-            commitAvatar()
+            if avatar != nil {
+                commitAvatar()
+            }
             return
         }
         guard remote != avatar else { return }
-        avatar = remote
         storeAvatarLocally(remote)
     }
 
     private func storeAvatarLocally(_ avatar: Avatar) {
+        self.avatar = avatar
         UserDefaults.standard.set(try? JSONEncoder().encode(avatar), forKey: "avatar")
         currentUser?.avatar = avatar
         UserDefaults.standard.set(

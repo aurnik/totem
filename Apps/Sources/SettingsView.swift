@@ -58,28 +58,28 @@ struct SettingsSheet: View {
         return Section {
             HStack {
                 Spacer()
-                AvatarHeadView(avatar: model.avatar, size: 150)
+                AvatarHeadView(avatar: model.avatarSetting, size: 150)
                 Spacer()
             }
             .padding(.vertical, 4)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Skin tone")
-                GradientSlider(value: $model.avatar.skinTone, stops: AvatarPalette.skin) {
+                GradientSlider(value: $model.avatarSetting.skinTone, stops: AvatarPalette.skin) {
                     model.commitAvatar()
                 }
             }
             .padding(.vertical, 4)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Hair")
-                GradientSlider(value: $model.avatar.hair, stops: AvatarPalette.hair) {
+                GradientSlider(value: $model.avatarSetting.hair, stops: AvatarPalette.hair) {
                     model.commitAvatar()
                 }
             }
             .padding(.vertical, 4)
             Picker("Hairstyle", selection: Binding(
-                get: { model.avatar.hairstyle },
+                get: { model.avatarSetting.hairstyle },
                 set: {
-                    model.avatar.hairstyle = $0
+                    model.avatarSetting.hairstyle = $0
                     model.commitAvatar()
                 }
             )) {
@@ -87,16 +87,16 @@ struct SettingsSheet: View {
                 Text("Long").tag(Avatar.Hairstyle.long)
             }
             Toggle("Glasses", isOn: Binding(
-                get: { model.avatar.glasses },
+                get: { model.avatarSetting.glasses },
                 set: {
-                    model.avatar.glasses = $0
+                    model.avatarSetting.glasses = $0
                     model.commitAvatar()
                 }
             ))
             Toggle("Cigarette", isOn: Binding(
-                get: { model.avatar.cigarette },
+                get: { model.avatarSetting.cigarette },
                 set: {
-                    model.avatar.cigarette = $0
+                    model.avatarSetting.cigarette = $0
                     model.commitAvatar()
                 }
             ))
