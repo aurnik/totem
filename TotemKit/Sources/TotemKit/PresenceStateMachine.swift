@@ -3,18 +3,18 @@ import Foundation
 /// Client-side presence state machine. The server is authoritative; this machine
 /// decides what the client should propose and what it should display for itself.
 ///
-/// Pure value type with all time injected through events, so it can be tested
-/// against reconnect races without a real clock.
+/// Pure value type that never reads a clock: every transition is driven by an
+/// event, so reconnect races are testable directly.
 public struct PresenceStateMachine: Equatable, Sendable {
 
     public enum Event: Equatable, Sendable {
-        case signOn(at: Date)
-        case signOff(at: Date)
-        case setAwayMessage(String, at: Date)
-        case clearAwayMessage(at: Date)
+        case signOn
+        case signOff
+        case setAwayMessage(String)
+        case clearAwayMessage
         /// Socket dropped without a deliberate sign-off.
-        case connectionLost(at: Date)
-        case reconnected(at: Date)
+        case connectionLost
+        case reconnected
     }
 
     public enum Effect: Equatable, Sendable {
@@ -57,7 +57,7 @@ public struct PresenceStateMachine: Equatable, Sendable {
             awayMessage = nil
             effects.append(.playSignOffSound)
 
-        case .setAwayMessage(let message, _):
+        case .setAwayMessage(let message):
             let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
             guard isSignedOn, !trimmed.isEmpty else { break }
             awayMessage = String(trimmed.prefix(Limits.awayMessageMaxLength))

@@ -254,10 +254,18 @@ struct AvatarHeadView: View {
 struct UserAvatar: View {
     let avatar: Avatar?
     var size: CGFloat = 28
+    /// Handle to fall back to when this user has published no avatar. Supply
+    /// it only where the slot itself carries information — who is speaking,
+    /// who a row is about — since losing it would lose that. Purely decorative
+    /// slots leave it nil and render nothing, because a stand-in face would be
+    /// a look its owner never chose.
+    var monogram: String?
 
     var body: some View {
         if let avatar {
             AvatarHeadView(avatar: avatar, size: size, animated: false)
+        } else if let monogram {
+            MonogramCircle(handle: monogram, size: size)
         }
     }
 }

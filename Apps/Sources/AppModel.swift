@@ -189,9 +189,6 @@ final class AppModel {
     private func storeAvatarLocally(_ avatar: Avatar) {
         self.avatar = avatar
         UserDefaults.standard.set(try? JSONEncoder().encode(avatar), forKey: "avatar")
-        currentUser?.avatar = avatar
-        UserDefaults.standard.set(
-            try? WireCoder.encoder().encode(currentUser), forKey: "currentUser")
     }
 
     private func setAvatarNeedsUpload(_ pending: Bool) {
@@ -339,7 +336,7 @@ final class AppModel {
 
     func signOn() {
         guard let token = api.token, !isSignedOn else { return }
-        apply(machine.handle(.signOn(at: Date())))
+        apply(machine.handle(.signOn))
         refreshPushSettings()
         let socket = SocketClient(url: api.socketURL, token: token)
         self.socket = socket
@@ -363,7 +360,7 @@ final class AppModel {
     }
 
     func signOff() {
-        apply(machine.handle(.signOff(at: Date())))
+        apply(machine.handle(.signOff))
         socketTask?.cancel()
         let socket = self.socket
         Task { await socket?.close() }
@@ -646,14 +643,25 @@ final class AppModel {
         micChunks = nil
         micSendTask?.cancel()
         micSendTask = nil
+        let stopDictating = takeDictationStop()
+        audio.stopMic()
+        if let stopDictating { Task { await stopDictating() } }
+    }
+
+    /// Drops dictation state now and hands back the stop the transcriber still
+    /// owes. Clearing has to be synchronous — a caller that returns before the
+    /// fields are nil would let the next toggle see a transcriber that is on
+    /// its way out — while the stop itself can only be awaited. The two
+    /// callers differ in nothing but whether they are able to await it.
+    private func takeDictationStop() -> (@Sendable () async -> Void)? {
         dictationPreparing = false
+        dictationSink = nil
         let transcriber = dictationTranscriber
         dictationTranscriber = nil
-        dictationSink = nil
-        audio.stopMic()
-        if #available(iOS 26.0, macOS 26.0, *), let transcriber = transcriber as? VoiceTranscriber {
-            Task { await transcriber.stop() }
-        }
+        guard #available(iOS 26.0, macOS 26.0, *),
+              let transcriber = transcriber as? VoiceTranscriber
+        else { return nil }
+        return { await transcriber.stop() }
     }
 
     /// Reconciles the mic tap with the two toggles: the tap carries exactly
@@ -756,13 +764,8 @@ final class AppModel {
     }
 
     private func stopDictation() async {
-        guard let transcriber = dictationTranscriber else { return }
-        dictationTranscriber = nil
-        dictationSink = nil
-        dictationPreparing = false
-        if #available(iOS 26.0, macOS 26.0, *), let transcriber = transcriber as? VoiceTranscriber {
-            await transcriber.stop()
-        }
+        guard dictationTranscriber != nil else { return }
+        if let stopDictating = takeDictationStop() { await stopDictating() }
     }
 
     /// Voice is scoped to having the chat open, both directions: drop the mic
@@ -857,7 +860,7 @@ final class AppModel {
     /// process winds down. UI cleanup is skipped — the process is dying.
     func detachSocketForTermination() -> SocketClient? {
         guard isSignedOn else { return nil }
-        machine.handle(.signOff(at: Date()))
+        machine.handle(.signOff)
         socketTask?.cancel()
         let detached = socket
         socket = nil
@@ -880,7 +883,7 @@ final class AppModel {
         UserDefaults.standard.stringArray(forKey: "recentAwayMessages") ?? []
 
     func setAwayMessage(_ message: String) {
-        apply(machine.handle(.setAwayMessage(message, at: Date())))
+        apply(machine.handle(.setAwayMessage(message)))
         // Record what the machine actually kept (trimmed, truncated).
         guard let saved = machine.awayMessage else { return }
         recentAwayMessages.removeAll { $0 == saved }
@@ -890,7 +893,7 @@ final class AppModel {
     }
 
     func clearAwayMessage() {
-        apply(machine.handle(.clearAwayMessage(at: Date())))
+        apply(machine.handle(.clearAwayMessage))
     }
 
     #if os(macOS)
@@ -967,9 +970,9 @@ final class AppModel {
     private func handle(_ event: SocketClient.ConnectionEvent) {
         switch event {
         case .connected:
-            apply(machine.handle(.reconnected(at: Date())))
+            apply(machine.handle(.reconnected))
         case .disconnected:
-            apply(machine.handle(.connectionLost(at: Date())))
+            apply(machine.handle(.connectionLost))
         case .frame(let frame):
             handle(frame)
         }

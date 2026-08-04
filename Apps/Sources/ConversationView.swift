@@ -54,7 +54,7 @@ struct ConversationView: View {
                 .filter { $0.id != model.currentUser?.id }
                 .sorted { $0.handle < $1.handle }
                 .prefix(3)
-                .compactMap { model.avatar(of: $0.id) ?? $0.avatar }
+                .compactMap { model.avatar(of: $0.id) }
         }
         return [model.avatar(of: conversationID)].compactMap { $0 }
     }
@@ -185,7 +185,7 @@ struct ConversationView: View {
         let relationship = model.relationship(with: member.id)
         if relationship?.status == .accepted {
             PresenceAvatar(
-                avatar: model.avatar(of: member.id) ?? member.avatar,
+                avatar: model.avatar(of: member.id),
                 state: model.presences[member.id]?.state ?? .offline,
                 size: 28)
         } else if let relationship, !relationship.incoming {
@@ -221,11 +221,8 @@ struct ConversationView: View {
                           alignment: .leading, spacing: 8) {
                     ForEach(speakers, id: \.id) { speaker in
                         HStack(spacing: 8) {
-                            if let avatar = model.avatar(of: speaker.id) {
-                                AvatarHeadView(avatar: avatar, size: 28, animated: false)
-                            } else {
-                                MonogramCircle(handle: speaker.handle)
-                            }
+                            UserAvatar(avatar: model.avatar(of: speaker.id),
+                                       monogram: speaker.handle)
                             AudioMeterView(spectrum: model.speakerSpectrum[speaker.id]
                                 ?? Array(repeating: 0, count: AudioAnalyzer.bandCount))
                         }
@@ -566,9 +563,7 @@ struct MessageRow: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if isMine { Spacer(minLength: 48) }
-            if let senderAvatar {
-                AvatarHeadView(avatar: senderAvatar, size: 24, animated: false)
-            }
+            UserAvatar(avatar: senderAvatar, size: 24)
             VStack(alignment: .leading, spacing: 2) {
                 if let senderName {
                     Text(senderName)
