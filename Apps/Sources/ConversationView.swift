@@ -112,19 +112,6 @@ struct ConversationView: View {
                 }
                 .disabled(peerOffline)
             }
-            if model.dictationSupported {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        model.toggleDictation(in: conversationID)
-                    } label: {
-                        Image(systemName: dictating
-                              ? "text.bubble.fill" : "text.bubble")
-                            .foregroundStyle(dictating ? Color.red : Color.accentColor)
-                            .symbolEffect(.pulse, isActive: dictating)
-                    }
-                    .disabled(peerOffline)
-                }
-            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     model.toggleMic(in: conversationID)
@@ -355,17 +342,24 @@ struct ConversationView: View {
     /// message on the next pause, so this is the speaker's only look at it
     /// first.
     private var previewText: String {
-        if model.dictationPreparing { return "Getting dictation ready…" }
+        if model.dictationPreparing { return "Preparing…" }
         return model.dictationPreview.isEmpty ? "Listening…" : model.dictationPreview
     }
 
     private var dictationBar: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: 6) {
             Image(systemName: "waveform")
                 .symbolEffect(.variableColor.iterative, isActive: true)
-            Text(previewText)
-                .italic()
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(previewText)
+                    .italic()
+                    .lineLimit(2)
+                if model.dictationPreparing {
+                    // A silent multi-second wait otherwise reads as a hang.
+                    Text("Downloading the language model")
+                        .font(.caption2)
+                }
+            }
             Spacer(minLength: 0)
         }
         .font(.footnote)
@@ -374,10 +368,54 @@ struct ConversationView: View {
         .transition(.opacity)
     }
 
+    /// Off, it's an empty outgoing bubble offering the mode; on, it fills in
+    /// like a sent one — inverted against the transcript so it still reads as
+    /// a control rather than something already said.
+    private var dictationToggle: some View {
+        Button {
+            model.toggleDictation(in: conversationID)
+        } label: {
+            Text("Voice → text")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(dictating ? dictationLabelColor : Color.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background {
+                    let shape = RoundedRectangle(cornerRadius: 15)
+                    if dictating {
+                        shape.fill(Color.primary.opacity(0.85))
+                    } else {
+                        shape.strokeBorder(
+                            Color.secondary,
+                            style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(peerOffline)
+        .animation(.easeInOut(duration: 0.15), value: dictating)
+    }
+
+    /// Reads against `Color.primary`, so it flips with the color scheme.
+    private var dictationLabelColor: Color {
+        #if os(iOS)
+        Color(.systemBackground)
+        #else
+        Color(nsColor: .textBackgroundColor)
+        #endif
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
             if dictating {
                 dictationBar
+            }
+            if model.dictationSupported {
+                HStack {
+                    Spacer(minLength: 0)
+                    dictationToggle
+                }
+                .padding(.horizontal, 14)
             }
             #if os(iOS)
             HStack(alignment: .bottom, spacing: 0) {

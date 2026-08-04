@@ -752,8 +752,7 @@ final class AppModel {
         } catch {
             print("dictation failed to start: \(error)")
             dictationConversation = nil
-            append(.notice(id: UUID(), text: "Dictation isn't available right now",
-                           at: Date()),
+            append(.notice(id: UUID(), text: "Dictation unavailable", at: Date()),
                    to: conversationID)
         }
     }
