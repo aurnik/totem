@@ -3,17 +3,12 @@ import Foundation
 public struct User: Codable, Identifiable, Hashable, Sendable {
     public let id: UUID
     public var handle: String
-    public var displayName: String
     public var avatar: Avatar?
-    public var createdAt: Date
 
-    public init(id: UUID, handle: String, displayName: String,
-                avatar: Avatar? = nil, createdAt: Date) {
+    public init(id: UUID, handle: String, avatar: Avatar? = nil) {
         self.id = id
         self.handle = handle
-        self.displayName = displayName
         self.avatar = avatar
-        self.createdAt = createdAt
     }
 }
 

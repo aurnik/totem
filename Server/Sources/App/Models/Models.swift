@@ -18,9 +18,9 @@ final class UserModel: Model, Content, @unchecked Sendable {
 
     init() {}
 
-    init(handle: String, displayName: String) {
+    init(handle: String) {
         self.handle = handle
-        self.displayName = displayName
+        self.displayName = handle
         self.signOnPushes = true
     }
 
@@ -28,11 +28,9 @@ final class UserModel: Model, Content, @unchecked Sendable {
         User(
             id: id!,
             handle: handle,
-            displayName: displayName,
             avatar: avatarJSON.flatMap {
                 try? JSONDecoder().decode(Avatar.self, from: Data($0.utf8))
-            },
-            createdAt: createdAt ?? Date()
+            }
         )
     }
 }

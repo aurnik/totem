@@ -45,7 +45,7 @@ struct AuthController: RouteCollection {
         if let existing = try await UserModel.query(on: req.db).filter(\.$handle == handle).first() {
             user = existing
         } else {
-            user = UserModel(handle: handle, displayName: handle)
+            user = UserModel(handle: handle)
             try await user.save(on: req.db)
         }
 
