@@ -45,13 +45,18 @@ func configure(_ app: Application) async throws {
 
     let connections = ConnectionManager()
     let gateway = GatewayController(
-        app: app, connections: connections, pusher: Pusher(app: app))
+        app: app, connections: connections, stages: StageStore(), pusher: Pusher(app: app))
 
     let authed = app.grouped(TokenAuthenticator(), UserModel.guardMiddleware())
     try authed.register(collection: BuddyController(gateway: gateway))
     try authed.register(collection: SessionController(gateway: gateway))
     try authed.register(collection: PushController())
     try authed.register(collection: ProfileController(gateway: gateway))
+    try authed.register(collection: YouTubeController())
+    // The stage's YouTube player must load from a real HTTP origin — YouTube
+    // refuses embeds without one — so it can't be authenticated: a WKWebView
+    // carries no bearer token. It's a static page keyed only by video ID.
+    try app.register(collection: PlayerPageController())
     authed.webSocket("ws") { req, ws in
         await gateway.handleUpgrade(req: req, ws: ws)
     }

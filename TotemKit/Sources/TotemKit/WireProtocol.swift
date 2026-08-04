@@ -24,6 +24,16 @@ public enum ClientFrame: Codable, Sendable {
     /// the chat, so other participants can show a crossed-out speaker.
     case setAudioMuted(recipientID: UUID, muted: Bool)
     case setSessionAudioMuted(sessionID: UUID, muted: Bool)
+    /// Drive the conversation's stage. Unlike the pairs above there's one
+    /// frame for both shapes: `conversationID` is the peer's user ID for 1:1
+    /// and the session ID for groups, and the server works out which.
+    /// `expectedVersion` is the stage version the sender was looking at,
+    /// required for conditional actions and ignored otherwise.
+    case stageAction(conversationID: UUID, action: StageAction, expectedVersion: Int?)
+    /// Ask for the current stage — sent when a conversation is opened, and
+    /// again after a reconnect, since stage pushes during the gap were missed.
+    case requestStage(conversationID: UUID)
+    case closeStage(conversationID: UUID)
 }
 
 public enum AudioWire {
@@ -82,6 +92,12 @@ public enum ServerFrame: Codable, Sendable {
     /// `presence` push). Clients refetch the buddy list rather than patching
     /// local state.
     case buddyRequest
+    /// The conversation's stage, authoritative. Same `conversationID` keying as
+    /// `audio`. `senderID` is whoever acted, and nil when this is a snapshot
+    /// reply or a re-sync after a rejected action — clients only post a
+    /// transcript notice when someone actually did something. A nil `stage`
+    /// means the stage is empty.
+    case stage(conversationID: UUID, senderID: UUID?, stage: Stage?)
     case error(String)
 }
 

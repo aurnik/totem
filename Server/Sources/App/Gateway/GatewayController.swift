@@ -8,6 +8,7 @@ import Vapor
 struct GatewayController {
     let app: Application
     let connections: ConnectionManager
+    let stages: StageStore
     let pusher: Pusher
 
     var presence: PresenceStore { PresenceStore(redis: app.redis) }
@@ -49,6 +50,7 @@ struct GatewayController {
                         await self.goOffline(userID: userID)
                     }
                 }
+                await self.reapAbandonedStages()
             }
         }
     }
@@ -138,6 +140,9 @@ struct GatewayController {
             try await presence.markOffline(for: userID)
             await fanOut(.presence(userID: userID, presence: .offline), toBuddiesOf: userID)
             try await closeOpenSessions(of: userID)
+            // The peer clears its own copy off the offline presence frame, so
+            // this needs no fan-out of its own.
+            await stages.clearPairs(involving: userID)
         } catch {
             app.logger.report(error: error)
         }
@@ -213,6 +218,25 @@ struct GatewayController {
                 else { return }
                 await send(.audioMuted(conversationID: sessionID, userID: userID, muted: muted),
                            toMembersOf: session, except: userID)
+
+            case .stageAction(let conversationID, let action, let expectedVersion):
+                try await applyStageAction(action, expectedVersion: expectedVersion,
+                                           in: conversationID, from: userID)
+
+            case .requestStage(let conversationID):
+                guard let conversation = try await stageConversation(conversationID, for: userID),
+                      let key = stageKey(conversation, actedBy: userID)
+                else { return }
+                await connections.send(
+                    .stage(conversationID: conversationID, senderID: nil, stage: await stages.get(key)),
+                    to: userID)
+
+            case .closeStage(let conversationID):
+                guard let conversation = try await stageConversation(conversationID, for: userID),
+                      let key = stageKey(conversation, actedBy: userID)
+                else { return }
+                await stages.clear(key)
+                await sendStage(nil, in: conversation, from: userID, actedBy: userID)
             }
         } catch {
             app.logger.report(error: error)
@@ -267,6 +291,102 @@ struct GatewayController {
         await send(.message(message), toMembersOf: session, except: senderID)
         await connections.send(
             .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
+    }
+
+    // MARK: - Stage
+
+    /// A stage lives in one of two shapes, and the wire doesn't say which:
+    /// clients send the same conversation key they render by, so a group
+    /// session wins if the ID names one the sender belongs to, and otherwise
+    /// it's read as a buddy's user ID.
+    private enum StageConversation {
+        case group(SessionModel)
+        case pair(peerID: UUID)
+    }
+
+    private func stageConversation(_ conversationID: UUID, for userID: UUID) async throws -> StageConversation? {
+        if let session = try await openSession(conversationID, memberedBy: userID) {
+            return .group(session)
+        }
+        guard try await areAcceptedBuddies(userID, conversationID) else { return nil }
+        return .pair(peerID: conversationID)
+    }
+
+    private func stageKey(_ conversation: StageConversation, actedBy userID: UUID) -> StageStore.Key? {
+        switch conversation {
+        case .group(let session): (try? session.requireID()).map { .group($0) }
+        case .pair(let peerID): .forPair(userID, peerID)
+        }
+    }
+
+    private func stageParticipants(_ conversation: StageConversation, actedBy userID: UUID) -> [UUID] {
+        switch conversation {
+        case .group(let session): session.participants
+        case .pair(let peerID): [userID, peerID]
+        }
+    }
+
+    /// The server is authoritative: it orders actions, runs the shared reducer,
+    /// and echoes the result to everyone including whoever acted — that echo is
+    /// their confirmation, so no client applies anything optimistically.
+    private func applyStageAction(_ action: StageAction, expectedVersion: Int?,
+                                  in conversationID: UUID, from userID: UUID) async throws {
+        guard let conversation = try await stageConversation(conversationID, for: userID),
+              let key = stageKey(conversation, actedBy: userID)
+        else {
+            await connections.send(.error("No such conversation."), to: userID)
+            return
+        }
+        let applied = await stages.apply(
+            action, expectedVersion: expectedVersion, to: key,
+            participants: stageParticipants(conversation, actedBy: userID), at: Date())
+        switch applied {
+        case .updated(let stage):
+            await sendStage(stage, in: conversation, from: userID, actedBy: userID)
+        case .unchanged:
+            break
+        case .rejected(let current):
+            // They acted on a stage that has since moved on. Re-sync them alone
+            // and quietly — nobody else's view was wrong.
+            await connections.send(
+                .stage(conversationID: conversationID, senderID: nil, stage: current), to: userID)
+        }
+    }
+
+    /// Every recipient gets the stage keyed the way they render it: the session
+    /// ID in a group, the other party's user ID in a 1:1.
+    private func sendStage(_ stage: Stage?, in conversation: StageConversation,
+                           from senderID: UUID?, actedBy userID: UUID) async {
+        switch conversation {
+        case .group(let session):
+            guard let sessionID = try? session.requireID() else { return }
+            for participant in session.participants {
+                await connections.send(
+                    .stage(conversationID: sessionID, senderID: senderID, stage: stage), to: participant)
+            }
+        case .pair(let peerID):
+            await connections.send(
+                .stage(conversationID: peerID, senderID: senderID, stage: stage), to: userID)
+            await connections.send(
+                .stage(conversationID: userID, senderID: senderID, stage: stage), to: peerID)
+        }
+    }
+
+    /// Group stages survive their participants signing off, so without this
+    /// they'd accumulate for the life of the process.
+    private func reapAbandonedStages() async {
+        for (key, participants) in await stages.groupEntries() {
+            var anyConnected = false
+            for id in participants {
+                if await connections.isConnected(id) {
+                    anyConnected = true
+                    break
+                }
+            }
+            if !anyConnected {
+                await stages.clear(key)
+            }
+        }
     }
 
     func sessionInfo(_ session: SessionModel, on db: Database) async throws -> SessionInfo {

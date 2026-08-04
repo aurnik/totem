@@ -46,6 +46,24 @@ struct APIClient {
         try await post("sessions", body: ["participantIDs": participantIDs.map(\.uuidString)])
     }
 
+    /// Throws `URLError.resourceUnavailable` (404) when the server has no
+    /// YouTube key configured — the picker falls back to pasted links.
+    func searchYouTube(_ query: String) async throws -> [YouTubeVideo] {
+        let escaped = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        return try await get("youtube/search?q=\(escaped)")
+    }
+
+    /// The stage's player page, which must be served from a real HTTP origin —
+    /// YouTube refuses to embed into a web view fed raw HTML.
+    func playerURL(videoID: String, start: Double, playing: Bool) -> URL {
+        baseURL.appending(path: "player")
+            .appending(queryItems: [
+                .init(name: "v", value: videoID),
+                .init(name: "t", value: String(Int(start))),
+                .init(name: "playing", value: playing ? "1" : "0"),
+            ])
+    }
+
     func setAvatar(_ avatar: Avatar) async throws {
         let _: EmptyResponse = try await post("me/avatar", body: avatar)
     }

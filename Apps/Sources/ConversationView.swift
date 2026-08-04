@@ -11,7 +11,9 @@ struct ConversationView: View {
     @State private var draft = ""
     @State private var pulsing = false
     @State private var showingSoundboard = false
+    @State private var showingYouTube = false
     @State private var showingMembers = false
+    @State private var showingActions = false
 
     private var group: SessionInfo? {
         model.groupSessions[conversationID]
@@ -45,6 +47,18 @@ struct ConversationView: View {
             .sorted()
     }
 
+    /// Another extension holds the stage and would lose real state if YouTube
+    /// took it — the server refuses that anyway, so don't offer it.
+    private var stageIsProtected: Bool {
+        guard let stage = model.stages[conversationID] else { return false }
+        let id = stage.state.extensionID
+        return id != YouTubeExtension.id && id.preservesState
+    }
+
+    private var youTubeIsOnStage: Bool {
+        model.stages[conversationID]?.state.extensionID == YouTubeExtension.id
+    }
+
     /// Who to picture in the header: the peer for 1:1, up to three
     /// participants for groups (matching the title's handle order).
     /// Participants without a published avatar are simply left out.
@@ -70,6 +84,11 @@ struct ConversationView: View {
                 memberList(group)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+            // Above the voice strip, which comes and goes: reflowing the stage
+            // would restart the video every time someone started talking.
+            if let stage = model.stages[conversationID] {
+                StageArea(conversationID: conversationID, stage: stage)
+            }
             // Also shown while broadcasting with no one talking back — the
             // speaker is exactly who needs to know a listener can't hear.
             if !speakers.isEmpty || (micIsLive && !mutedListenerNames.isEmpty) {
@@ -77,6 +96,21 @@ struct ConversationView: View {
             }
             transcript
             composer
+        }
+        .overlay {
+            if showingActions {
+                ZStack(alignment: .topTrailing) {
+                    // Anywhere else dismisses, the way a menu does.
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: toggleActions)
+                    actionMenu
+                        .padding(.top, 6)
+                        .padding(.trailing, 10)
+                        .transition(.scale(scale: 0.86, anchor: .topTrailing)
+                            .combined(with: .opacity))
+                }
+            }
         }
         .navigationTitle(title)
         .inlineTitle()
@@ -104,32 +138,77 @@ struct ConversationView: View {
             }
             #endif
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showingSoundboard = true
-                } label: {
-                    Image(systemName: "waveform")
+                Button(action: toggleActions) {
+                    Image(systemName: "chevron.down")
+                        .rotationEffect(.degrees(showingActions ? 180 : 0))
                 }
-                .disabled(peerOffline)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.toggleMic(in: conversationID)
-                } label: {
-                    Image(systemName: micIsLive ? "mic.fill" : "mic")
-                        .foregroundStyle(micIsLive ? Color.red : Color.accentColor)
-                        .symbolEffect(.pulse, isActive: micIsLive)
-                }
-                .disabled(peerOffline)
             }
         }
         .sheet(isPresented: $showingSoundboard) {
             SoundboardSheet(conversationID: conversationID)
                 .environment(model)
         }
+        .sheet(isPresented: $showingYouTube) {
+            YouTubePickerSheet(conversationID: conversationID)
+                .environment(model)
+        }
         .onAppear { model.conversationOpened(conversationID) }
         .onDisappear { model.conversationClosed(conversationID) }
         .onChange(of: model.isSignedOn) { _, signedOn in
             if !signedOn { dismiss() }
+        }
+    }
+
+    /// The chat's actions, collapsed behind the header chevron so the bar
+    /// carries one control instead of three. Icons only — each is its own
+    /// affordance, and labels would make this a menu rather than a palette.
+    private var actionMenu: some View {
+        VStack(spacing: 2) {
+            actionButton("waveform") { showingSoundboard = true }
+            // Once something is on the stage this closes it; the picker is how
+            // you put something up in the first place.
+            actionButton(youTubeIsOnStage ? "xmark" : YouTubeExtension.symbol) {
+                if youTubeIsOnStage {
+                    model.closeStage(in: conversationID)
+                } else {
+                    showingYouTube = true
+                }
+            }
+            .disabled(stageIsProtected)
+            actionButton(micIsLive ? "mic.fill" : "mic",
+                         tint: micIsLive ? .red : nil, pulsing: micIsLive) {
+                model.toggleMic(in: conversationID)
+            }
+        }
+        .padding(5)
+        .background(.regularMaterial, in: .rect(cornerRadius: 18))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(.separator.opacity(0.6), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+        .disabled(peerOffline)
+    }
+
+    private func actionButton(_ symbol: String, tint: Color? = nil, pulsing: Bool = false,
+                              action: @escaping () -> Void) -> some View {
+        Button {
+            toggleActions()
+            action()
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 16))
+                .foregroundStyle(tint ?? Color.accentColor)
+                .symbolEffect(.pulse, isActive: pulsing)
+                .frame(width: 40, height: 38)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggleActions() {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+            showingActions.toggle()
         }
     }
 

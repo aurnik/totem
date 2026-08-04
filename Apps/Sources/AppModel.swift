@@ -71,6 +71,10 @@ final class AppModel {
     private var reportedMutedConversations: Set<UUID> = []
     /// Per-chunk spectrum frames for the speaker meters, keyed by speaking user.
     var speakerSpectrum: [UUID: [Float]] = [:]
+    /// What's on each conversation's stage, keyed by conversation ID. The
+    /// server owns this: clients send actions and render whatever comes back,
+    /// never applying anything optimistically.
+    var stages: [UUID: Stage] = [:]
     /// Conversations already told (via notice) that playback is broken —
     /// throttles the notice to once per sign-on.
     private var playbackFailureNoticed: Set<UUID> = []
@@ -357,6 +361,7 @@ final class AppModel {
         unreadPeers = []
         mutedListeners = [:]
         reportedMutedConversations = []
+        stages = [:]
     }
 
     func signOff() {
@@ -870,6 +875,74 @@ final class AppModel {
     func conversationOpened(_ peerID: UUID) {
         activeConversations.insert(peerID)
         unreadPeers.remove(peerID)
+        // Stage pushes that landed while this chat was closed were dropped, so
+        // ask for the current one rather than rendering a stale stage.
+        fire(.requestStage(conversationID: peerID))
+    }
+
+    // MARK: - Stage
+
+    /// Conditional actions carry the version they were aimed at, so the server
+    /// can drop one that no longer applies to what's on the stage now.
+    func sendStageAction(_ action: StageAction, in conversationID: UUID) {
+        fire(.stageAction(conversationID: conversationID, action: action,
+                          expectedVersion: action.isConditional ? stages[conversationID]?.version : nil))
+    }
+
+    func closeStage(in conversationID: UUID) {
+        fire(.closeStage(conversationID: conversationID))
+    }
+
+    func searchYouTube(_ query: String) async throws -> [YouTubeVideo] {
+        try await api.searchYouTube(query)
+    }
+
+    /// Where the player web view loads from. The start position is resolved
+    /// against the shared clock, so a late joiner opens mid-song where
+    /// everyone else already is.
+    func playerURL(for youtube: YouTubeState) -> URL {
+        api.playerURL(videoID: youtube.videoID,
+                      start: youtube.position(at: Date()),
+                      playing: youtube.isPlaying)
+    }
+
+    /// After a reconnect the stage may have moved on without us — anything
+    /// pushed during the gap never arrived.
+    private func refreshOpenStages() {
+        for conversationID in activeConversations {
+            fire(.requestStage(conversationID: conversationID))
+        }
+    }
+
+    private func applyStage(_ stage: Stage?, in conversationID: UUID, from senderID: UUID?) {
+        let previous = stages[conversationID]
+        stages[conversationID] = stage
+        // Snapshot replies and re-syncs after a rejected action carry no
+        // sender: nobody did anything, so nothing is worth announcing.
+        guard let senderID, let handle = handle(of: senderID),
+              let text = Self.stageNotice(from: previous, to: stage, by: handle)
+        else { return }
+        append(.notice(id: UUID(), text: text, at: Date()), to: conversationID)
+    }
+
+    /// Only stage changes worth interrupting the transcript for. Play and pause
+    /// are deliberately silent — they're visible on the stage and would bury
+    /// the conversation.
+    private static func stageNotice(from previous: Stage?, to stage: Stage?,
+                                    by handle: String) -> String? {
+        guard let stage else {
+            guard let previous else { return nil }
+            switch previous.state {
+            case .youtube: return "\(handle) closed the video"
+            }
+        }
+        switch stage.state {
+        case .youtube(let youtube):
+            if case .youtube(let old)? = previous?.state, old.videoID == youtube.videoID {
+                return nil
+            }
+            return "\(handle) put on \"\(youtube.title)\""
+        }
     }
 
     func conversationClosed(_ peerID: UUID) {
@@ -994,6 +1067,7 @@ final class AppModel {
             })
             groupSessions = Dictionary(
                 uniqueKeysWithValues: sessions.filter(\.isGroup).map { ($0.session.id, $0) })
+            refreshOpenStages()
         case .sessionStarted(let info):
             if info.isGroup {
                 groupSessions[info.session.id] = info
@@ -1043,6 +1117,9 @@ final class AppModel {
                 for key in mutedListeners.keys {
                     mutedListeners[key]?.remove(userID)
                 }
+                // A 1:1 stage dies with the conversation, same as the server's
+                // copy — group stages outlive any one member going offline.
+                stages[userID] = nil
             }
         case .message(let message):
             let key = groupSessions[message.sessionID] != nil ? message.sessionID : message.senderID
@@ -1090,6 +1167,8 @@ final class AppModel {
                 clearTyping(peerID)
                 silenceConversation(peerID)
             }
+        case .stage(let conversationID, let senderID, let stage):
+            applyStage(stage, in: conversationID, from: senderID)
         case .buddyRequest:
             Task { try? await refreshBuddies() }
         case .error(let message):
