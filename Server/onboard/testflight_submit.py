@@ -12,6 +12,7 @@ Env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH (same key as provision.py).
 """
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -21,6 +22,7 @@ import jwt
 
 BUNDLE_ID = "com.deadsimple.totem"
 API = "https://api.appstoreconnect.apple.com/v1"
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def token():
@@ -64,6 +66,32 @@ def latest_build(app, version=None):
     if not builds:
         sys.exit("no builds found")
     return builds[0]
+
+
+def previous_version(app, current):
+    """Highest build number below `current`. Zero-padded stamps of equal width,
+    so string ordering is chronological."""
+    versions = sorted(
+        (b["attributes"]["version"]
+         for b in api("GET", f"builds?filter[app]={app}&limit=200")["data"]),
+        reverse=True)
+    return next((v for v in versions if v < current), None)
+
+
+def commit_titles(previous, current):
+    """Commit subjects this build carries. testflight.sh stamps build numbers
+    with `date +%Y%m%d%H%M`, so two of them bound the range directly — no tag
+    or recorded SHA needed."""
+    def when(stamp):
+        return f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[8:10]}:{stamp[10:12]}"
+
+    result = subprocess.run(
+        ["git", "log", "--no-merges", "--pretty=format:%s",
+         f"--since={when(previous)}", f"--until={when(current)}"],
+        capture_output=True, text=True, cwd=REPO)
+    if result.returncode != 0:
+        sys.exit(f"git log failed: {result.stderr.strip()[:200]}")
+    return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 def external_groups(app):
@@ -157,7 +185,17 @@ def submit_for_review(build_id):
     return result["data"]["attributes"].get("betaReviewState", "submitted")
 
 
-def submit(version, notes):
+def notes_for(app, version):
+    previous = previous_version(app, version)
+    if not previous:
+        sys.exit(f"no build before {version} to diff against")
+    titles = commit_titles(previous, version)
+    if not titles:
+        sys.exit(f"no commits between builds {previous} and {version}")
+    return previous, "\n".join(titles)
+
+
+def submit(version, dry_run=False):
     app = app_id()
     build = latest_build(app, version)
     build_id = build["id"]
@@ -165,34 +203,27 @@ def submit(version, notes):
     if state != "VALID":
         sys.exit(f"build {version} is {state}, not VALID — wait for processing")
 
-    print(f"build {build['attributes']['version']} ({build_id}) is VALID")
-    print(f"whats-new: {set_whats_new(build_id, notes)}")
+    previous, notes = notes_for(app, version)
+    print(f"build {version} ({build_id}) is VALID; {notes.count(chr(10)) + 1} "
+          f"commits since build {previous}\n")
+    print(notes)
+    if dry_run:
+        print("\n(dry run — nothing submitted)")
+        return
 
+    print(f"\nwhats-new: {set_whats_new(build_id, notes)}")
     for group in external_groups(app):
         name = group["attributes"]["name"]
         print(f"group {name}: {add_to_group(group['id'], build_id)}")
-
     print(f"review submission: {submit_for_review(build_id)}")
 
-
-NOTES = """\
-Housekeeping release — no new features, but everyone needs it.
-
-The server changed how it sends account details, so builds older than this \
-one can no longer sign in. Update and you're fine.
-
-Under the hood a lot of unused code came out, including paths that touched \
-voice, dictation, group chats and avatars. Nothing there should look any \
-different — so if something does, that's a bug and I want to hear about it. \
-Worth a quick try: live voice in a group chat, the dictation toggle, and \
-signing out and back in.\
-"""
 
 if __name__ == "__main__":
     if "--status" in sys.argv:
         status()
     elif "--submit" in sys.argv:
         version = sys.argv[sys.argv.index("--submit") + 1]
-        submit(version, NOTES)
+        submit(version, dry_run="--dry-run" in sys.argv)
     else:
-        sys.exit("usage: testflight_submit.py --status | --submit <build-number>")
+        sys.exit("usage: testflight_submit.py --status "
+                 "| --submit <build-number> [--dry-run]")
