@@ -48,7 +48,7 @@ struct YouTubeStageView: View {
                     initialURL: initialURL,
                     youtube: youtube,
                     onTime: { position.value = $0 },
-                    onEnded: { send(.setPlaying(false, positionSeconds: 0)) },
+                    onEnded: { send(.ended) },
                     onUnplayable: { unplayable = true })
                     // The web view never takes a tap: YouTube's own controls
                     // would change playback for one person and desync the

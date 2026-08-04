@@ -345,6 +345,10 @@ struct GatewayController {
             await sendStage(stage, in: conversation, from: userID, actedBy: userID)
         case .unchanged:
             break
+        case .cleared:
+            // Unattributed: the video ran out, nobody closed it, so this posts
+            // no notice.
+            await sendStage(nil, in: conversation, from: nil, actedBy: userID)
         case .rejected(let current):
             // They acted on a stage that has since moved on. Re-sync them alone
             // and quietly — nobody else's view was wrong.

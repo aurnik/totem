@@ -27,6 +27,9 @@ actor StageStore {
     enum Applied {
         case updated(Stage)
         case unchanged
+        /// The stage emptied itself — a video running out, not someone
+        /// pressing close.
+        case cleared
         /// Carries what's actually on the stage, to re-sync whoever acted.
         case rejected(current: Stage?)
     }
@@ -44,6 +47,9 @@ actor StageStore {
             return .updated(stage)
         case .unchanged:
             return .unchanged
+        case .cleared:
+            entries[key] = nil
+            return .cleared
         case .rejected:
             return .rejected(current: current)
         }

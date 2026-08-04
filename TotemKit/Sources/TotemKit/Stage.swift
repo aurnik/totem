@@ -57,6 +57,9 @@ public enum YouTubeAction: Codable, Sendable {
     /// `setPlaying` because that one is a no-op when the play state already
     /// matches, which is exactly the case a skip needs to survive.
     case seek(positionSeconds: Double)
+    /// The video reached its end, so the stage goes away. Every client
+    /// watching reports this; the version check keeps only the first.
+    case ended
 
     public static let skipInterval: Double = 15
 }
@@ -90,7 +93,7 @@ public enum StageAction: Codable, Sendable {
     public var isConditional: Bool {
         switch self {
         case .youtube(.setVideo): false
-        case .youtube(.setPlaying), .youtube(.seek): true
+        case .youtube(.setPlaying), .youtube(.seek), .youtube(.ended): true
         }
     }
 }
@@ -115,6 +118,9 @@ public enum StageReducer {
         /// A no-op — don't broadcast, or N clients reporting the same thing
         /// would make everyone re-seek.
         case unchanged
+        /// The stage is finished and should be emptied. Nobody chose this, so
+        /// it goes out unattributed and posts no notice.
+        case cleared
         /// Stale version, or a takeover of a stage worth preserving. Re-sync
         /// the sender only.
         case rejected
@@ -156,6 +162,12 @@ public enum StageReducer {
             state.positionSeconds = max(0, positionSeconds)
             state.positionAt = now
             return .updated(Stage(version: current.version + 1, state: .youtube(state)))
+
+        case .ended:
+            // The version check above already dropped every report but the
+            // first, and once the stage is gone the stragglers find nothing to
+            // act on and are refused.
+            return .cleared
         }
     }
 }

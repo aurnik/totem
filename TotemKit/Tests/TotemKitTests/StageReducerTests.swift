@@ -120,6 +120,36 @@ final class StageReducerTests: XCTestCase {
         XCTAssertEqual(youtube(sought).positionSeconds, 25)
     }
 
+    // MARK: - Ending
+
+    func testEndedClearsTheStage() {
+        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let outcome = StageReducer.reduce(started, .youtube(.ended),
+                                          expectedVersion: started.version, at: t0)
+        XCTAssertEqual(outcome, .cleared)
+    }
+
+    /// Everyone watching reports the end at slightly different moments. The
+    /// first clears the stage; the rest must not clear it again, or the chat
+    /// gets a burst of duplicate frames.
+    func testSecondEndReportFindsNothingLeftAndIsRefused() {
+        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        XCTAssertEqual(StageReducer.reduce(started, .youtube(.ended),
+                                           expectedVersion: started.version, at: t0), .cleared)
+        // The stage is gone by the time the next report lands.
+        XCTAssertEqual(StageReducer.reduce(nil, .youtube(.ended),
+                                           expectedVersion: started.version, at: t0), .rejected)
+    }
+
+    /// A stale end report — the video already changed — must not take down
+    /// whatever is playing now.
+    func testEndedWithStaleVersionIsRejected() {
+        let first = updated(StageReducer.reduce(nil, video("one"), expectedVersion: nil, at: t0))!
+        let second = updated(StageReducer.reduce(first, video("two"), expectedVersion: nil, at: t0))!
+        XCTAssertEqual(StageReducer.reduce(second, .youtube(.ended),
+                                           expectedVersion: first.version, at: t0), .rejected)
+    }
+
     // MARK: - Compare-and-swap
 
     func testStaleVersionIsRejectedSoPauseCantLandOnANewVideo() {
