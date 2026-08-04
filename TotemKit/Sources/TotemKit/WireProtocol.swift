@@ -7,12 +7,16 @@ public enum ClientFrame: Codable, Sendable {
     case setPresence(state: PresenceState, awayMessage: String?)
     case signOff
     /// `dictated` marks a body the sender spoke rather than typed; nil from
-    /// clients that predate it, and relayed untouched.
+    /// clients that predate it, and relayed untouched. `botContext` is the
+    /// conversation so far, attached only when the body tags a bot with one of
+    /// its context aliases — the server keeps no transcript, so the sender's
+    /// client is the only party that can supply one. It is used for the bot
+    /// prompt and nothing else: never relayed, never stored.
     case sendMessage(recipientID: UUID, body: String, clientMessageID: UUID,
-                     dictated: Bool? = nil)
+                     dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
     /// Message into an existing (group) session the sender belongs to.
     case sendSessionMessage(sessionID: UUID, body: String, clientMessageID: UUID,
-                            dictated: Bool? = nil)
+                            dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
     case typing(recipientID: UUID)
     /// Live mic audio: raw little-endian Int16 mono PCM at
     /// `AudioWire.sampleRate`, ~100ms per chunk. Relay-only, best-effort —
@@ -65,10 +69,13 @@ public enum ServerFrame: Codable, Sendable {
     /// false means a reconnect within the presence grace window.
     /// `selfAvatar` is the account's stored avatar (nil if it has never
     /// published one), so a client reconciles its own without a separate
-    /// request. Optional associated values decode as nil when absent, so this
-    /// stays readable in both directions across versions.
+    /// request. `bots` is the registry of taggable bots this server runs —
+    /// clients bold their tags and render their replies from it, and a server
+    /// with none configured simply sends none. Optional associated values
+    /// decode as nil when absent, so this stays readable in both directions
+    /// across versions.
     case welcome(self_: Presence, buddies: [String: Presence], sessions: [SessionInfo],
-                 freshSignOn: Bool, selfAvatar: Avatar?)
+                 freshSignOn: Bool, selfAvatar: Avatar?, bots: [Bot]? = nil)
     /// A (group) session was created that includes this user.
     case sessionStarted(SessionInfo)
     case presence(userID: UUID, presence: Presence)
@@ -98,6 +105,12 @@ public enum ServerFrame: Codable, Sendable {
     /// transcript notice when someone actually did something. A nil `stage`
     /// means the stage is empty.
     case stage(conversationID: UUID, senderID: UUID?, stage: Stage?)
+    /// A bot answered in a conversation. `message.senderID` is the bot's ID,
+    /// which clients resolve against the registry from `welcome`. Carries its
+    /// own `conversationID` — same keying as `audio` — because a bot isn't a
+    /// participant, so unlike `message` the client can't infer the key from
+    /// the sender. Sent to everyone in the conversation, the tagger included.
+    case botMessage(conversationID: UUID, message: ChatMessage)
     case error(String)
 }
 

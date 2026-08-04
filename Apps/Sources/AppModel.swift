@@ -39,6 +39,10 @@ final class AppModel {
     var transcripts: [UUID: [TranscriptItem]] = [:]
     /// Open group sessions by session ID.
     var groupSessions: [UUID: SessionInfo] = [:]
+    /// Bots this server runs, by bot ID — from the `welcome` frame, so a new
+    /// bot needs no client build. Used to render a bot's bubbles and to bold
+    /// its tag; the server alone decides whether a bot actually answers.
+    var bots: [UUID: Bot] = [:]
     /// Peers with messages not yet seen. Local-only — never sent over the
     /// wire; the spec's no-read-receipts rule is about the other party.
     var unreadPeers: Set<UUID> = []
@@ -392,6 +396,44 @@ final class AppModel {
         acceptedBuddies.first { $0.user.id == id }
     }
 
+    // MARK: - Bots
+
+    func bot(withID id: UUID) -> Bot? { bots[id] }
+
+    var botAliases: [String] { bots.values.flatMap(\.aliases) }
+
+    /// The bot a draft or body tags, if any, and whether that tag asks for the
+    /// conversation. The same match the server runs, from the same shared
+    /// matcher — so what the composer promises is what actually happens.
+    func taggedBot(in body: String) -> (bot: Bot, wantsContext: Bool)? {
+        guard let hit = BotTag.match(body, bots: Array(bots.values)) else { return nil }
+        return (hit.bot, hit.bot.wantsContext(hit.match.tag))
+    }
+
+    /// The conversation so far, flattened for a bot prompt — but only when the
+    /// tag used asks for it. The server keeps no transcript, so this client is
+    /// the only party that can answer "what has been said", and it sends that
+    /// nowhere else.
+    ///
+    /// Notices ("X signed on") are left out: they are chrome this app draws,
+    /// not things anyone said.
+    private func botContext(for body: String, in conversationID: UUID) -> [BotContextMessage]? {
+        guard let tagged = taggedBot(in: body), tagged.wantsContext else { return nil }
+        let items = (transcripts[conversationID] ?? []).suffix(Limits.botContextMaxMessages)
+        return items.compactMap { item in
+            guard case .message(let message) = item else { return nil }
+            let speaker: String
+            if let bot = bots[message.senderID] {
+                speaker = bot.displayName
+            } else if message.senderID == currentUser?.id {
+                speaker = currentUser?.handle ?? "me"
+            } else {
+                speaker = handle(of: message.senderID) ?? "someone"
+            }
+            return BotContextMessage(speaker: speaker, body: message.body)
+        }
+    }
+
     func sendMessage(to conversationID: UUID, body: String, dictated: Bool = false) {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -399,11 +441,14 @@ final class AppModel {
         pendingSends[clientID] = conversationID
         lastSentConversation = conversationID
         let spoken = dictated ? true : nil
+        let context = botContext(for: trimmed, in: conversationID)
         let frame: ClientFrame = groupSessions[conversationID] != nil
             ? .sendSessionMessage(sessionID: conversationID, body: trimmed,
-                                  clientMessageID: clientID, dictated: spoken)
+                                  clientMessageID: clientID, dictated: spoken,
+                                  botContext: context)
             : .sendMessage(recipientID: conversationID, body: trimmed,
-                           clientMessageID: clientID, dictated: spoken)
+                           clientMessageID: clientID, dictated: spoken,
+                           botContext: context)
         let socket = self.socket
         Task { [weak self] in
             do {
@@ -1053,8 +1098,11 @@ final class AppModel {
 
     private func handle(_ frame: ServerFrame) {
         switch frame {
-        case .welcome(_, let buddies, let sessions, let freshSignOn, let selfAvatar):
+        case .welcome(_, let buddies, let sessions, let freshSignOn, let selfAvatar, let bots):
             reconcileAvatar(remote: selfAvatar)
+            // The registry outlives a session — it describes the server, not
+            // this sign-on — so it's set before the session-scoped wipe below.
+            self.bots = Dictionary(uniqueKeysWithValues: (bots ?? []).map { ($0.id, $0) })
             // A fresh sign-on means the server ended our previous online
             // session (suspension sweep, >90s drop, sign-off) — everything
             // conversation-scoped from before it is gone. A reconnect within
@@ -1130,6 +1178,14 @@ final class AppModel {
             clearTyping(message.senderID)
             if !activeConversations.contains(key) {
                 unreadPeers.insert(key)
+            }
+            SoundPlayer.play(.messageReceived)
+        case .botMessage(let conversationID, let message):
+            // Unlike `message`, the key is on the frame: a bot isn't a
+            // participant, so it can't be inferred from the sender.
+            append(.message(message), to: conversationID)
+            if !activeConversations.contains(conversationID) {
+                unreadPeers.insert(conversationID)
             }
             SoundPlayer.play(.messageReceived)
         case .messageSent(let clientMessageID, let message):

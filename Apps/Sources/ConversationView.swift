@@ -139,8 +139,7 @@ struct ConversationView: View {
             #endif
             ToolbarItem(placement: .primaryAction) {
                 Button(action: toggleActions) {
-                    Image(systemName: "chevron.down")
-                        .rotationEffect(.degrees(showingActions ? 180 : 0))
+                    Image(systemName: "ellipsis")
                 }
             }
         }
@@ -159,7 +158,7 @@ struct ConversationView: View {
         }
     }
 
-    /// The chat's actions, collapsed behind the header chevron so the bar
+    /// The chat's actions, collapsed behind the header's overflow button so the bar
     /// carries one control instead of three. Icons only — each is its own
     /// affordance, and labels would make this a menu rather than a palette.
     private var actionMenu: some View {
@@ -341,13 +340,17 @@ struct ConversationView: View {
                             switch item {
                             case .message(let message):
                                 let isMine = message.senderID == model.currentUser?.id
+                                let bot = model.bot(withID: message.senderID)
                                 MessageRow(
                                     message: message,
                                     isMine: isMine,
-                                    senderName: (group != nil && !isMine)
+                                    senderName: (group != nil && !isMine && bot == nil)
                                         ? model.handle(of: message.senderID) : nil,
                                     senderAvatar: (group != nil && !isMine)
                                         ? model.avatar(of: message.senderID) : nil,
+                                    bot: bot,
+                                    botIsLabelled: group != nil,
+                                    botAliases: model.botAliases,
                                     recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
                                 )
                             case .notice(_, let text, _):
@@ -416,22 +419,43 @@ struct ConversationView: View {
     /// Only the one-time model download — live words go in the draft bubble,
     /// where the message itself will land. A silent multi-second wait
     /// otherwise reads as a hang.
-    private var dictationBar: some View {
+    /// The strip above the composer that says what the field is about to do.
+    /// Dictation uses it while it warms up; a bot tag uses it to name where the
+    /// message is headed, since a bolded tag says something is different but
+    /// not what.
+    private func composerHint(_ title: String, detail: String? = nil,
+                              systemImage: String, pulsing: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 1) {
-                Text("Preparing…")
+                Text(title)
                     .italic()
-                Text("Downloading the language model")
-                    .font(.caption2)
+                if let detail {
+                    Text(detail)
+                        .font(.caption2)
+                }
             }
-            Image(systemName: "waveform")
-                .symbolEffect(.variableColor.iterative, isActive: true)
+            Image(systemName: systemImage)
+                .symbolEffect(.variableColor.iterative, isActive: pulsing)
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 16)
         .transition(.opacity)
+    }
+
+    private var dictationBar: some View {
+        composerHint("Preparing…", detail: "Downloading the language model",
+                     systemImage: "waveform", pulsing: true)
+    }
+
+    /// Names the bot the draft is tagging, and whether the conversation rides
+    /// along. Derived from the draft as it's typed — nothing is sent yet.
+    private var botHint: String? {
+        guard let tagged = model.taggedBot(in: draft) else { return nil }
+        return tagged.wantsContext
+            ? "Send to \(tagged.bot.displayName) (include chat)"
+            : "Send to \(tagged.bot.displayName)"
     }
 
     /// Off, it's an empty outgoing bubble offering the mode; on, it fills in
@@ -490,6 +514,8 @@ struct ConversationView: View {
         VStack(alignment: .leading, spacing: 4) {
             if model.dictationPreparing {
                 dictationBar
+            } else if let botHint {
+                composerHint(botHint, systemImage: "sparkles")
             }
             // Dictation rides on the open mic, so it's only offered once the
             // mic is on — and turning the mic off takes it down with it.
@@ -502,9 +528,10 @@ struct ConversationView: View {
             }
             #if os(iOS)
             HStack(alignment: .bottom, spacing: 0) {
-                TextField("Message", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
+                // Return still inserts a newline here, as the vertical-axis
+                // TextField this replaced did; the button is how you send.
+                ComposerField(text: $draft, placeholder: "Message",
+                              aliases: model.botAliases, onSubmit: {})
                     .padding(.leading, 14)
                     .padding(.trailing, 6)
                     .padding(.vertical, 8)
@@ -513,7 +540,6 @@ struct ConversationView: View {
                             model.sendTyping(to: conversationID)
                         }
                     }
-                    .onSubmit(send)
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 29))
@@ -533,14 +559,20 @@ struct ConversationView: View {
             .padding(.bottom, 8)
             #else
             HStack {
-                TextField("Message", text: $draft)
-                    .textFieldStyle(.roundedBorder)
+                ComposerField(text: $draft, placeholder: "Message",
+                              aliases: model.botAliases, onSubmit: send)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color(nsColor: .textBackgroundColor))
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                    )
                     .onChange(of: draft) { _, newValue in
                         if !newValue.isEmpty, group == nil {
                             model.sendTyping(to: conversationID)
                         }
                     }
-                    .onSubmit(send)
                 Button("Send", action: send)
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSend)
@@ -548,6 +580,9 @@ struct ConversationView: View {
             .padding(12)
             #endif
         }
+        // The hint appears and disappears mid-keystroke as a tag is typed or
+        // backspaced, so it fades rather than snapping the composer up a line.
+        .animation(.easeInOut(duration: 0.18), value: botHint)
     }
 
     private func send() {
@@ -614,9 +649,29 @@ struct MessageRow: View {
     var senderName: String?
     /// Group chats only: the sender's avatar beside their bubble.
     var senderAvatar: Avatar?
+    /// Set when a bot sent this — styles the bubble as the bot's.
+    var bot: Bot?
+    /// Groups label every speaker, so a bot names itself there too. A 1:1
+    /// labels nobody, so neither does the bot.
+    var botIsLabelled = false
+    /// Every registered bot tag, for bolding one at the head of a human
+    /// message. Empty when the server runs no bots.
+    var botAliases: [String] = []
     var recencyFraction: Double = 1
 
     private var incomingBackground: Color { .incomingBubble }
+
+    /// A tagged bot's name is read off the bubble body, so it's bolded in
+    /// everyone's copy of the message — not just the sender's.
+    private var body_: AttributedString {
+        var text = AttributedString(message.body)
+        guard bot == nil,
+              let match = BotTag.match(message.body, aliases: botAliases),
+              let range = Range(match.tagRange, in: text)
+        else { return text }
+        text[range].font = .body.bold()
+        return text
+    }
 
     /// iMessage blue (#007AFF) for the newest messages, washing out toward a
     /// pale sky blue deeper into history. Each bubble spans a small slice of
@@ -642,10 +697,24 @@ struct MessageRow: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if isMine { Spacer(minLength: 48) }
-            UserAvatar(avatar: senderAvatar, size: 24)
+            // A bot has no avatar to show — and a placeholder head would read
+            // as a person's. Its own glyph instead, and only where the rest of
+            // the messages carry one: in a 1:1 nothing else is labelled, so a
+            // labelled bot bubble sits oddly proud of the conversation. The
+            // bubble's colour already says who is speaking.
+            if bot != nil {
+                if botIsLabelled {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24)
+                }
+            } else {
+                UserAvatar(avatar: senderAvatar, size: 24)
+            }
             VStack(alignment: .leading, spacing: 2) {
-                if let senderName {
-                    Text(senderName)
+                if let name = botIsLabelled ? (bot?.displayName ?? senderName) : senderName {
+                    Text(name)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .padding(.leading, 6)
@@ -654,12 +723,14 @@ struct MessageRow: View {
                 // centered on the bubble whatever else the row carries.
                 HStack(alignment: .center, spacing: 6) {
                     if isMine, message.dictated == true { dictationGlyph }
-                    Text(message.body)
+                    Text(body_)
                         .font(.body)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background {
-                            if isMine {
+                            if bot != nil {
+                                Color.botBubble
+                            } else if isMine {
                                 LinearGradient(
                                     colors: [Self.historyBlue(recencyFraction - 0.06),
                                              Self.historyBlue(recencyFraction)],
@@ -669,7 +740,7 @@ struct MessageRow: View {
                                 incomingBackground
                             }
                         }
-                        .foregroundStyle(isMine ? .white : .primary)
+                        .foregroundStyle(botOrOwnForeground)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                     if !isMine, message.dictated == true { dictationGlyph }
                 }
@@ -677,5 +748,9 @@ struct MessageRow: View {
             if !isMine { Spacer(minLength: 48) }
         }
         .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
+    }
+
+    private var botOrOwnForeground: Color {
+        if bot != nil { .botBubbleText } else if isMine { .white } else { .primary }
     }
 }

@@ -10,9 +10,20 @@ struct GatewayController {
     let connections: ConnectionManager
     let stages: StageStore
     let pusher: Pusher
+    let bots: BotRegistry
 
     var presence: PresenceStore { PresenceStore(redis: app.redis) }
     var db: Database { app.db }
+
+    /// Built per use rather than stored: the dispatcher needs a way back in to
+    /// fan out the reply, and the gateway is a value type, so capturing a copy
+    /// is both cheap and cycle-free.
+    private var botDispatcher: BotDispatcher {
+        let gateway = self
+        return BotDispatcher(registry: bots, app: app) { botID, sessionID, text in
+            await gateway.sendBotMessage(botID: botID, sessionID: sessionID, text: text)
+        }
+    }
 
     func handleUpgrade(req: Request, ws: WebSocket) async {
         guard let user = req.auth.get(UserModel.self), let userID = user.id else {
@@ -104,7 +115,8 @@ struct GatewayController {
             let avatar = user.dto.avatar
             await connections.send(
                 .welcome(self_: current, buddies: snapshot, sessions: sessionInfos,
-                         freshSignOn: wasOffline, selfAvatar: avatar), to: userID)
+                         freshSignOn: wasOffline, selfAvatar: avatar,
+                         bots: await bots.all()), to: userID)
             await fanOut(.presence(userID: userID, presence: current), toBuddiesOf: userID)
             // Buddies' cached lists were fetched at their own launch and can
             // predate this user ever publishing an avatar.
@@ -174,15 +186,19 @@ struct GatewayController {
             case .signOff:
                 await goOffline(userID: userID)
 
-            case .sendMessage(let recipientID, let body, let clientMessageID, let dictated):
+            case .sendMessage(let recipientID, let body, let clientMessageID, let dictated,
+                              let botContext):
                 try await relayMessage(
                     from: userID, to: recipientID, body: body,
-                    clientMessageID: clientMessageID, dictated: dictated)
+                    clientMessageID: clientMessageID, dictated: dictated,
+                    botContext: botContext)
 
-            case .sendSessionMessage(let sessionID, let body, let clientMessageID, let dictated):
+            case .sendSessionMessage(let sessionID, let body, let clientMessageID, let dictated,
+                                     let botContext):
                 try await relaySessionMessage(
                     from: userID, sessionID: sessionID, body: body,
-                    clientMessageID: clientMessageID, dictated: dictated)
+                    clientMessageID: clientMessageID, dictated: dictated,
+                    botContext: botContext)
 
             case .typing(let recipientID):
                 if try await areAcceptedBuddies(userID, recipientID) {
@@ -249,7 +265,7 @@ struct GatewayController {
     /// not spooled.
     private func relayMessage(
         from senderID: UUID, to recipientID: UUID, body: String, clientMessageID: UUID,
-        dictated: Bool?
+        dictated: Bool?, botContext: [BotContextMessage]?
     ) async throws {
         guard try await areAcceptedBuddies(senderID, recipientID) else {
             await connections.send(.error("Not buddies."), to: senderID)
@@ -267,19 +283,24 @@ struct GatewayController {
             return
         }
         let session = try await openSession(between: senderID, and: recipientID)
+        let sessionID = try session.requireID()
         let message = ChatMessage(
-            id: UUID(), sessionID: try session.requireID(),
+            id: UUID(), sessionID: sessionID,
             senderID: senderID, body: body, sentAt: Date(), dictated: dictated)
         await connections.send(.message(message), to: recipientID)
         await connections.send(
             .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
+        // A refused message never reaches a bot — the guards above mean this
+        // only runs for a message that was actually delivered.
+        botDispatcher.dispatch(body: body, from: senderID, sessionID: sessionID,
+                               context: botContext)
     }
 
     /// Group message: relay to every connected member, store nothing.
     /// Offline members miss it — session-scoped ephemerality.
     private func relaySessionMessage(
         from senderID: UUID, sessionID: UUID, body: String, clientMessageID: UUID,
-        dictated: Bool?
+        dictated: Bool?, botContext: [BotContextMessage]?
     ) async throws {
         guard let session = try await openSession(sessionID, memberedBy: senderID) else {
             await connections.send(.error("No such session."), to: senderID)
@@ -291,6 +312,34 @@ struct GatewayController {
         await send(.message(message), toMembersOf: session, except: senderID)
         await connections.send(
             .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
+        botDispatcher.dispatch(body: body, from: senderID, sessionID: sessionID,
+                               context: botContext)
+    }
+
+    /// A bot's answer, fanned out to everyone in the conversation — the person
+    /// who tagged it included, unlike a relayed human message, since the bot's
+    /// reply is new to them too.
+    ///
+    /// Each recipient gets it keyed the way they render the conversation: the
+    /// session ID in a group, the other party's user ID in a 1:1. A bot isn't a
+    /// participant, so clients can't infer that from the sender the way they do
+    /// for `message`.
+    private func sendBotMessage(botID: UUID, sessionID: UUID, text: String) async {
+        // Everyone may have signed off during the round trip, which ends the
+        // session. Nobody is listening, so there is nothing to say.
+        guard let session = try? await SessionModel.find(sessionID, on: db),
+              session.endedAt == nil
+        else { return }
+        let message = ChatMessage(
+            id: UUID(), sessionID: sessionID, senderID: botID, body: text, sentAt: Date())
+        let participants = session.participants
+        for participant in participants {
+            let conversationID = session.isGroup
+                ? sessionID
+                : (participants.first { $0 != participant } ?? participant)
+            await connections.send(
+                .botMessage(conversationID: conversationID, message: message), to: participant)
+        }
     }
 
     // MARK: - Stage

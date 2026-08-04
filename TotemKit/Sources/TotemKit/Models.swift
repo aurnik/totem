@@ -144,4 +144,15 @@ public enum Limits {
     /// At most one "signed on" alert per buddy per window, local and pushed
     /// alike — unthrottled sign-on alerts are uninstall-inducing (spec §7).
     public static let signOnPushThrottle: TimeInterval = 30 * 60
+    public static let botPromptMaxLength = 2000
+    public static let botReplyMaxLength = 1500
+    /// Ceilings on the transcript a context tag sends. The newest messages are
+    /// kept: a conversation long enough to hit these is one where the recent
+    /// turns are what the prompt is about.
+    public static let botContextMaxMessages = 60
+    public static let botContextMaxCharacters = 8000
+    /// A bot answers within this or it says so instead.
+    public static let botResponseTimeout: TimeInterval = 20
+    /// Bot invocations one user may start per rolling minute.
+    public static let botInvocationsPerMinute = 6
 }

@@ -40,12 +40,17 @@ func configure(_ app: Application) async throws {
     app.migrations.add(DropMessageStorage())
     app.migrations.add(AddPushSupport())
     app.migrations.add(AddAvatar())
+    app.migrations.add(AddBots())
+    app.migrations.add(AddBotContextAliases())
     try await app.autoMigrate()
     print("configure: routes")
 
     let connections = ConnectionManager()
+    let bots = BotRegistry()
+    await bots.load(db: app.db, client: app.client, logger: app.logger)
     let gateway = GatewayController(
-        app: app, connections: connections, stages: StageStore(), pusher: Pusher(app: app))
+        app: app, connections: connections, stages: StageStore(), pusher: Pusher(app: app),
+        bots: bots)
 
     let authed = app.grouped(TokenAuthenticator(), UserModel.guardMiddleware())
     try authed.register(collection: BuddyController(gateway: gateway))

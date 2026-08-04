@@ -35,6 +35,11 @@ struct AuthController: RouteCollection {
         else {
             throw Abort(.badRequest, reason: "Handle must be 3–16 letters, numbers, or underscores.")
         }
+        // Bots and users share one handle namespace, so nobody can sign in as
+        // the bot they're about to be talking to.
+        guard try await BotModel.query(on: req.db).filter(\.$handle == handle).first() == nil else {
+            throw Abort(.badRequest, reason: "That handle is taken.")
+        }
 
         let user: UserModel
         if let existing = try await UserModel.query(on: req.db).filter(\.$handle == handle).first() {
