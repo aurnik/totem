@@ -20,10 +20,18 @@ cd Apps && xcodegen generate
 xcodebuild -project Apps/Totem.xcodeproj -scheme Totem-macOS -configuration Debug build
 xcodebuild -project Apps/Totem.xcodeproj -scheme Totem-iOS -destination "generic/platform=iOS" -configuration Debug -allowProvisioningUpdates build
 
-# Install on the iPhone (device must be unlocked; retry on tunnel errors)
-xcrun devicectl device install app --device 4FABDBEF-E20F-5818-9026-83C0F0502A78 \
-  "$HOME/Library/Developer/Xcode/DerivedData/Totem-"*/Build/Products/Debug-iphoneos/Totem-iOS.app
+# Build and install on the iPhone (device must be unlocked; retries tunnel errors)
+Apps/install.sh
 ```
+
+**Never glob `DerivedData/Totem-*` to find the built app.** This machine has
+more than one DerivedData directory for this project, so the glob can resolve
+to a build from hours ago and install it silently — which presents as the app
+failing against a current server for reasons that make no sense (a stale client
+hitting changed DTOs). `Apps/install.sh` asks `xcodebuild -showBuildSettings`
+for `BUILT_PRODUCTS_DIR` instead. Relatedly, a Debug build keeps its real code
+in `Totem-iOS.debug.dylib`, not the `Totem-iOS` launcher stub — check the dylib
+when confirming an edit actually made it into a build.
 
 Distribution is **TestFlight** (`Server/onboard/testflight.sh` → external group
 public link, bundle `com.deadsimple.totem`); invoke that script with an absolute
