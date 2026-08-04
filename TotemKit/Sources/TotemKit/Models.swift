@@ -92,12 +92,10 @@ public enum PresenceState: String, Codable, Sendable {
 public struct Presence: Codable, Hashable, Sendable {
     public var state: PresenceState
     public var awayMessage: String?
-    public var lastSeenAt: Date?
 
-    public init(state: PresenceState, awayMessage: String? = nil, lastSeenAt: Date? = nil) {
+    public init(state: PresenceState, awayMessage: String? = nil) {
         self.state = state
         self.awayMessage = awayMessage
-        self.lastSeenAt = lastSeenAt
     }
 
     public static let offline = Presence(state: .offline)
