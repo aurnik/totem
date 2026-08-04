@@ -53,6 +53,12 @@ public enum YouTubeAction: Codable, Sendable {
     /// Absolute, never a toggle: two people pausing at the same moment must
     /// converge on paused rather than undoing each other.
     case setPlaying(Bool, positionSeconds: Double)
+    /// Moves everyone's playhead, leaving the play state alone. Distinct from
+    /// `setPlaying` because that one is a no-op when the play state already
+    /// matches, which is exactly the case a skip needs to survive.
+    case seek(positionSeconds: Double)
+
+    public static let skipInterval: Double = 15
 }
 
 // MARK: - Stage
@@ -84,7 +90,7 @@ public enum StageAction: Codable, Sendable {
     public var isConditional: Bool {
         switch self {
         case .youtube(.setVideo): false
-        case .youtube(.setPlaying): true
+        case .youtube(.setPlaying), .youtube(.seek): true
         }
     }
 }
@@ -141,6 +147,12 @@ public enum StageReducer {
             guard let current, case .youtube(var state) = current.state else { return .rejected }
             guard state.isPlaying != isPlaying else { return .unchanged }
             state.isPlaying = isPlaying
+            state.positionSeconds = max(0, positionSeconds)
+            state.positionAt = now
+            return .updated(Stage(version: current.version + 1, state: .youtube(state)))
+
+        case let .seek(positionSeconds):
+            guard let current, case .youtube(var state) = current.state else { return .rejected }
             state.positionSeconds = max(0, positionSeconds)
             state.positionAt = now
             return .updated(Stage(version: current.version + 1, state: .youtube(state)))

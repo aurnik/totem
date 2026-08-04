@@ -50,7 +50,8 @@ struct YouTubePlayerView {
         webView.isUserInteractionEnabled = false
         #endif
         context.coordinator.webView = webView
-        context.coordinator.applied = .init(videoID: youtube.videoID, isPlaying: youtube.isPlaying)
+        context.coordinator.applied = .init(videoID: youtube.videoID, isPlaying: youtube.isPlaying,
+                                           positionAt: youtube.positionAt)
         webView.load(URLRequest(url: initialURL))
         return webView
     }
@@ -71,11 +72,15 @@ struct YouTubePlayerView {
         struct Applied {
             var videoID: String
             var isPlaying: Bool
+            /// The stamp of the position last applied. A new stamp means the
+            /// playhead moved deliberately — a skip — as opposed to simply
+            /// advancing on its own.
+            var positionAt: Date
         }
 
         var parent: YouTubePlayerView
         var webView: WKWebView?
-        var applied = Applied(videoID: "", isPlaying: false)
+        var applied = Applied(videoID: "", isPlaying: false, positionAt: .distantPast)
         private var ready = false
         /// Set while a video change is in flight: the player reports the old
         /// previous state briefly, and acting on it would fight the new video.
@@ -88,12 +93,19 @@ struct YouTubePlayerView {
         func reconcile(to youtube: YouTubeState) {
             guard ready, let webView else { return }
             if applied.videoID != youtube.videoID {
-                applied = .init(videoID: youtube.videoID, isPlaying: youtube.isPlaying)
+                applied = .init(videoID: youtube.videoID, isPlaying: youtube.isPlaying,
+                                positionAt: youtube.positionAt)
                 loading = true
                 let start = youtube.position(at: Date())
                 webView.evaluateJavaScript(
                     "cmdLoad('\(youtube.videoID)', \(start), \(youtube.isPlaying))")
                 return
+            }
+            // Seek before transport, so a resume picks up from where the skip
+            // put the playhead rather than where it left off.
+            if applied.positionAt != youtube.positionAt {
+                applied.positionAt = youtube.positionAt
+                webView.evaluateJavaScript("cmdSeek(\(youtube.position(at: Date())))")
             }
             guard applied.isPlaying != youtube.isPlaying else { return }
             applied.isPlaying = youtube.isPlaying
