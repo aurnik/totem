@@ -195,7 +195,7 @@ def notes_for(app, version):
     return previous, "\n".join(titles)
 
 
-def submit(version, dry_run=False):
+def submit(version, notes=None, dry_run=False):
     app = app_id()
     build = latest_build(app, version)
     build_id = build["id"]
@@ -203,9 +203,12 @@ def submit(version, dry_run=False):
     if state != "VALID":
         sys.exit(f"build {version} is {state}, not VALID — wait for processing")
 
-    previous, notes = notes_for(app, version)
-    print(f"build {version} ({build_id}) is VALID; {notes.count(chr(10)) + 1} "
-          f"commits since build {previous}\n")
+    if notes:
+        origin = "supplied notes"
+    else:
+        previous, notes = notes_for(app, version)
+        origin = f"commit titles since build {previous}"
+    print(f"build {version} ({build_id}) is VALID; {origin}\n")
     print(notes)
     if dry_run:
         print("\n(dry run — nothing submitted)")
@@ -223,7 +226,19 @@ if __name__ == "__main__":
         status()
     elif "--submit" in sys.argv:
         version = sys.argv[sys.argv.index("--submit") + 1]
-        submit(version, dry_run="--dry-run" in sys.argv)
+        supplied = None
+        if "--notes-file" in sys.argv:
+            path = sys.argv[sys.argv.index("--notes-file") + 1]
+            supplied = open(path).read().strip()
+            if not supplied:
+                sys.exit(f"{path} is empty — review rejects a build with no notes")
+        submit(version, notes=supplied, dry_run="--dry-run" in sys.argv)
+    elif "--commits" in sys.argv:
+        app = app_id()
+        version = sys.argv[sys.argv.index("--commits") + 1]
+        previous, notes = notes_for(app, version)
+        print(f"# commits in build {version}, since build {previous}\n{notes}")
     else:
         sys.exit("usage: testflight_submit.py --status "
-                 "| --submit <build-number> [--dry-run]")
+                 "| --commits <build-number> "
+                 "| --submit <build-number> [--notes-file <path>] [--dry-run]")

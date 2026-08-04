@@ -8,5 +8,10 @@ Server/db.sqlite
 dump.rdb
 Server/onboard/build/
 Server/onboard/.venv/
-.claude/
+# Ignore .claude contents, not the directory itself — git can't re-include a
+# path out of an excluded directory. Skills and commands drive this repo's own
+# release path, so they are versioned with it.
+.claude/*
+!.claude/skills/
+!.claude/commands/
 __pycache__/
