@@ -8,9 +8,10 @@ import TotemKit
 /// iOS: capture and playback share ONE engine with the voice-processing IO
 /// unit enabled — echo cancellation only works against audio the same unit
 /// renders, so a split graph lets the peer's speaker output loop back through
-/// their mic uncancelled. The session category is `.playAndRecord` from the
-/// start so touching `inputNode` (which wires it in permanently) never
-/// conflicts with a play-only category.
+/// their mic uncancelled. Until the mic is first opened the engine stays on a
+/// play-only category and `inputNode` is never touched: reaching for the input
+/// at all is what raises the system microphone prompt, and listening is not a
+/// reason to ask.
 ///
 /// macOS: separate engines, no `setVoiceProcessingEnabled` — the VP unit
 /// there has a habit of delivering silent input buffers; headphones are the
@@ -33,6 +34,9 @@ final class AudioStreamer {
     var onOutputVolumeChange: (@MainActor () -> Void)?
     #if os(iOS)
     private var volumeObservation: NSKeyValueObservation?
+    /// Whether the voice-processing IO unit has been wired in — set once, the
+    /// first time the user opens the mic.
+    private var captureReady = false
     #endif
 
     init() {
@@ -40,18 +44,6 @@ final class AudioStreamer {
         let shared = AVAudioEngine()
         playbackEngine = shared
         captureEngine = shared
-        // The session category must be record-capable BEFORE the
-        // voice-processing unit is instantiated — under the launch-default
-        // category enabling can fail, and it must happen before the engine
-        // ever starts. Setting the category alone doesn't activate the
-        // session, so other apps' audio isn't interrupted at launch.
-        do {
-            try AVAudioSession.sharedInstance().setVoiceChatCategory()
-            try shared.inputNode.setVoiceProcessingEnabled(true)
-        } catch {
-            lastError = "voice processing: \(error.localizedDescription)"
-            print("voice processing setup failed: \(error)")
-        }
         volumeObservation = AVAudioSession.sharedInstance().observe(\.outputVolume) { [weak self] _, _ in
             Task { @MainActor in self?.onOutputVolumeChange?() }
         }
@@ -90,6 +82,7 @@ final class AudioStreamer {
                   onBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)? = nil) async -> Bool {
         guard await Self.requestMicPermission() else { return false }
 
+        prepareForCapture()
         configureSession()
         let input = captureEngine.inputNode
         let tapFormat = input.outputFormat(forBus: 0)
@@ -233,10 +226,34 @@ final class AudioStreamer {
 
     // MARK: - Session
 
+    /// Wires the voice-processing IO unit in, the one thing that has to happen
+    /// before the engine ever starts capturing: the category has to be
+    /// record-capable first (enabling fails under a play-only one), and the
+    /// engine has to be stopped, since listening may already have started it.
+    private func prepareForCapture() {
+        #if os(iOS)
+        guard !captureReady else { return }
+        captureEngine.stop()
+        do {
+            try AVAudioSession.sharedInstance().setVoiceChatCategory()
+            try captureEngine.inputNode.setVoiceProcessingEnabled(true)
+            captureReady = true
+        } catch {
+            lastError = "voice processing: \(error.localizedDescription)"
+            print("voice processing setup failed: \(error)")
+        }
+        #endif
+    }
+
     private func configureSession() {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
+            guard captureReady else {
+                try session.setCategory(.playback, mode: .default)
+                try session.setActive(true)
+                return
+            }
             try session.setVoiceChatCategory()
             try session.setActive(true)
             // .voiceChat prefers the quiet receiver up top; voice chat
