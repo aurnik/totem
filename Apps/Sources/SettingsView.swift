@@ -84,7 +84,7 @@ struct SettingsSheet: View {
                 }
             )) {
                 Text("Spiky").tag(Avatar.Hairstyle.spiky)
-                Text("Bowl").tag(Avatar.Hairstyle.bowl)
+                Text("Long").tag(Avatar.Hairstyle.long)
             }
             Toggle("Glasses", isOn: Binding(
                 get: { model.avatar.glasses },

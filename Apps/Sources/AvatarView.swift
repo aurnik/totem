@@ -13,12 +13,14 @@ enum AvatarPalette {
         (0.42, 0.27, 0.16),
         (0.28, 0.18, 0.11),
     ]
-    /// Blonde → ginger → brunette → almost black.
+    /// Blonde → ginger → brunette → almost black → greys.
     static let hair: [(Double, Double, Double)] = [
         (0.92, 0.78, 0.44),
         (0.78, 0.42, 0.18),
         (0.42, 0.28, 0.15),
         (0.10, 0.08, 0.06),
+        (0.45, 0.45, 0.47),
+        (0.82, 0.82, 0.84),
     ]
 
     static func colors(_ stops: [(Double, Double, Double)]) -> [Color] {
@@ -108,31 +110,17 @@ struct AvatarHeadView: View {
                 (60, 2), (95, 18), (90 + 20.0 / 7, 40), (75, 35),
                 (60, 38), (45, 35), (30 - 20.0 / 7, 40), (25, 18),
             ]), with: .color(hairColor))
-        case .bowl:
-            var cap = Path()
-            cap.move(to: g.p(40, 5))
-            cap.addLine(to: g.p(80, 5))
-            cap.addQuadCurve(to: g.p(92, 18), control: g.p(92, 5))
-            cap.addLine(to: g.p(92, 28))
-            cap.addLine(to: g.p(28, 28))
-            cap.addLine(to: g.p(28, 18))
-            cap.addQuadCurve(to: g.p(40, 5), control: g.p(28, 5))
-            cap.closeSubpath()
-            context.fill(cap, with: .color(hairColor))
-
-            var burns = context
-            burns.opacity = 0.8
-            burns.fill(g.polygon([(28, 28), (27, 45), (35, 40), (35, 28)]),
-                       with: .color(hairColor))
-            burns.fill(g.polygon([(92, 28), (93, 45), (85, 40), (85, 28)]),
-                       with: .color(hairColor))
-
-            var part = context
-            part.opacity = 0.4
-            var line = Path()
-            line.move(to: g.p(60, 5))
-            line.addLine(to: g.p(60, 24))
-            part.stroke(line, with: .color(hairColor), lineWidth: 2 * g.s)
+        case .long:
+            // One horseshoe polygon: the same angular fringe as the spiky
+            // style, then down the outside of each strand, across the bottom
+            // of the viewBox (y = 84 of 85) and back up its inner edge.
+            context.fill(g.polygon([
+                (60, 2), (95, 18), (97, 42), (97, 58), (88, 84),
+                (81, 84), (90, 58), (89, 42), (90, 26),
+                (75, 35), (60, 38), (45, 35),
+                (30, 26), (31, 42), (30, 58), (39, 84),
+                (32, 84), (23, 58), (23, 42), (25, 18),
+            ]), with: .color(hairColor))
         }
 
         if glasses {
@@ -283,9 +271,10 @@ struct UserAvatar: View {
 }
 
 /// Buddy-list presence badge: the avatar itself is the status indicator.
-/// Full color means online; greyscale means offline; away and idle get a
-/// yellow duotone. Without a published avatar it degrades to the colored
-/// state dot. Never animates — these appear by the dozen in lists.
+/// Full color means online; greyscale means offline; away and idle are
+/// greyscale too, marked by a pair of rising Z's. Without a published avatar
+/// it degrades to the colored state dot. Never animates — these appear by the
+/// dozen in lists.
 struct PresenceAvatar: View {
     let avatar: Avatar?
     let state: PresenceState
@@ -301,11 +290,40 @@ struct PresenceAvatar: View {
                 head.grayscale(1).opacity(0.55)
             case .away, .idle:
                 head.grayscale(1)
-                    .colorMultiply(Color(red: 1, green: 0.84, blue: 0.35))
+                    .overlay(SleepingZs())
             }
         } else {
             StateDot(state: state)
                 .frame(width: size, height: size)
+        }
+    }
+}
+
+/// Two hand-drawn Z's rising to the right over an away buddy's greyscale
+/// avatar; the nearer one is smaller. Haloed in the opposite ink so they stay
+/// legible where they cross the head.
+private struct SleepingZs: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Canvas { context, size in
+            let unit = min(size.width, size.height)
+            let ink: Color = colorScheme == .dark ? .white : .black
+            let halo: Color = colorScheme == .dark ? .black : .white
+            for (x, y, side) in [(0.50, 0.30, 0.13), (0.68, 0.12, 0.19)] {
+                let (left, right) = (x * unit, (x + side) * unit)
+                let (top, bottom) = (y * unit, (y + side) * unit)
+                var path = Path()
+                path.move(to: CGPoint(x: left, y: top))
+                path.addLine(to: CGPoint(x: right, y: top))
+                path.addLine(to: CGPoint(x: left, y: bottom))
+                path.addLine(to: CGPoint(x: right, y: bottom))
+                let width = max(side * unit * 0.16, 1)
+                context.stroke(path, with: .color(halo),
+                               style: StrokeStyle(lineWidth: width * 2.2, lineCap: .round))
+                context.stroke(path, with: .color(ink),
+                               style: StrokeStyle(lineWidth: width, lineCap: .round))
+            }
         }
     }
 }

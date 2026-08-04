@@ -26,7 +26,7 @@ public struct User: Codable, Identifiable, Hashable, Sendable {
 public struct Avatar: Codable, Hashable, Sendable {
     public enum Hairstyle: String, Codable, CaseIterable, Sendable {
         case spiky = "default"
-        case bowl
+        case long
     }
 
     public var skinTone: Double
@@ -35,7 +35,7 @@ public struct Avatar: Codable, Hashable, Sendable {
     public var glasses: Bool
     public var cigarette: Bool
 
-    public init(skinTone: Double = 0.25, hair: Double = 0.6, hairstyle: Hairstyle = .spiky,
+    public init(skinTone: Double = 0.25, hair: Double = 0.36, hairstyle: Hairstyle = .spiky,
                 glasses: Bool = false, cigarette: Bool = false) {
         self.skinTone = skinTone
         self.hair = hair
@@ -49,7 +49,7 @@ public struct Avatar: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         skinTone = try c.decodeIfPresent(Double.self, forKey: .skinTone) ?? 0.25
-        hair = try c.decodeIfPresent(Double.self, forKey: .hair) ?? 0.6
+        hair = try c.decodeIfPresent(Double.self, forKey: .hair) ?? 0.36
         hairstyle = ((try? c.decodeIfPresent(String.self, forKey: .hairstyle))
             .flatMap { $0 }.flatMap(Hairstyle.init(rawValue:))) ?? .spiky
         glasses = try c.decodeIfPresent(Bool.self, forKey: .glasses) ?? false
