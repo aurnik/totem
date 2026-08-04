@@ -55,13 +55,6 @@ public actor SocketClient {
         continuation?.finish()
     }
 
-    /// Call when NWPathMonitor reports the network returned: resets backoff
-    /// and retries immediately (spec §4).
-    public func networkPathRestored() {
-        policy.reset()
-        if task == nil { Task { await connect() } }
-    }
-
     private func connect() async {
         guard !deliberatelyClosed else { return }
         var request = URLRequest(url: url)

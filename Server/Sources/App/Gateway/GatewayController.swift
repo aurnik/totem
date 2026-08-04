@@ -23,9 +23,6 @@ struct GatewayController {
         ws.onBinary { _, buffer in
             await handleFrame(buffer: Data(buffer.readableBytesView), from: userID)
         }
-        ws.onText { _, text in
-            await handleFrame(buffer: Data(text.utf8), from: userID)
-        }
         ws.onPong { _, _ in
             await connections.notePong(userID)
         }
@@ -310,7 +307,7 @@ struct GatewayController {
         if let existing = try await query.first() {
             return existing
         }
-        let session = SessionModel(participantA: a, participantB: b)
+        let session = SessionModel(participants: [a, b])
         try await session.save(on: db)
         return session
     }

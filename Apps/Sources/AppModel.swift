@@ -27,13 +27,6 @@ final class AppModel {
             case .notice(let id, _, _): id
             }
         }
-
-        var date: Date {
-            switch self {
-            case .message(let message): message.sentAt
-            case .notice(_, _, let at): at
-            }
-        }
     }
 
     /// Transcripts keyed by conversation ID — the peer's user ID for 1:1

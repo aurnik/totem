@@ -25,7 +25,6 @@ struct AuthController: RouteCollection {
 
     struct DevLoginRequest: Content {
         let handle: String
-        let displayName: String?
     }
 
     struct LoginResponse: Content {
@@ -46,7 +45,7 @@ struct AuthController: RouteCollection {
         if let existing = try await UserModel.query(on: req.db).filter(\.$handle == handle).first() {
             user = existing
         } else {
-            user = UserModel(handle: handle, displayName: body.displayName ?? handle)
+            user = UserModel(handle: handle, displayName: handle)
             try await user.save(on: req.db)
         }
 

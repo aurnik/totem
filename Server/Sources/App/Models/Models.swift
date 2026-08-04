@@ -62,7 +62,6 @@ final class BuddyModel: Model, @unchecked Sendable {
     @Parent(key: "user_id") var user: UserModel
     @Parent(key: "buddy_id") var buddy: UserModel
     @Enum(key: "status") var status: BuddyStatus
-    @Timestamp(key: "created_at", on: .create) var createdAt: Date?
 
     init() {}
 
@@ -93,10 +92,6 @@ final class SessionModel: Model, @unchecked Sendable {
         self.participantA = participants[0]
         self.participantB = participants[1]
         self.participants = participants
-    }
-
-    convenience init(participantA: UUID, participantB: UUID) {
-        self.init(participants: [participantA, participantB])
     }
 
     var participants: [UUID] {
