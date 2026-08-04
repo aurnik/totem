@@ -9,7 +9,6 @@ final class UserModel: Model, Content, @unchecked Sendable {
     @ID(key: .id) var id: UUID?
     @Field(key: "handle") var handle: String
     @Field(key: "display_name") var displayName: String
-    @OptionalField(key: "avatar_url") var avatarURL: String?
     /// Cartoon-avatar settings as JSON (TotemKit.Avatar), set by the client.
     @OptionalField(key: "avatar") var avatarJSON: String?
     /// User setting: push "X signed on" to this user's devices while the
@@ -30,7 +29,6 @@ final class UserModel: Model, Content, @unchecked Sendable {
             id: id!,
             handle: handle,
             displayName: displayName,
-            avatarURL: avatarURL.flatMap(URL.init(string:)),
             avatar: avatarJSON.flatMap {
                 try? JSONDecoder().decode(Avatar.self, from: Data($0.utf8))
             },
@@ -116,7 +114,7 @@ final class SessionModel: Model, @unchecked Sendable {
     }
 
     var dto: ChatSession {
-        ChatSession(id: id!, participantIDs: participants, startedAt: startedAt ?? Date(), endedAt: endedAt)
+        ChatSession(id: id!, participantIDs: participants, startedAt: startedAt ?? Date())
     }
 }
 

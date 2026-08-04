@@ -4,16 +4,14 @@ public struct User: Codable, Identifiable, Hashable, Sendable {
     public let id: UUID
     public var handle: String
     public var displayName: String
-    public var avatarURL: URL?
     public var avatar: Avatar?
     public var createdAt: Date
 
-    public init(id: UUID, handle: String, displayName: String, avatarURL: URL? = nil,
+    public init(id: UUID, handle: String, displayName: String,
                 avatar: Avatar? = nil, createdAt: Date) {
         self.id = id
         self.handle = handle
         self.displayName = displayName
-        self.avatarURL = avatarURL
         self.avatar = avatar
         self.createdAt = createdAt
     }
@@ -105,13 +103,11 @@ public struct ChatSession: Codable, Identifiable, Hashable, Sendable {
     public let id: UUID
     public var participantIDs: [UUID]
     public var startedAt: Date
-    public var endedAt: Date?
 
-    public init(id: UUID, participantIDs: [UUID], startedAt: Date, endedAt: Date? = nil) {
+    public init(id: UUID, participantIDs: [UUID], startedAt: Date) {
         self.id = id
         self.participantIDs = participantIDs
         self.startedAt = startedAt
-        self.endedAt = endedAt
     }
 }
 

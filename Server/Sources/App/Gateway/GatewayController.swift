@@ -58,7 +58,7 @@ struct GatewayController {
     /// awake to render that, though, so verify liveness and fall back to APNs
     /// — off the request path, since the ping costs 3s.
     func buddyRequestReceived(by targetID: UUID, from user: User) async {
-        await connections.send(.buddyRequest(from: user), to: targetID)
+        await connections.send(.buddyRequest, to: targetID)
         let (connections, pusher) = (self.connections, self.pusher)
         Task {
             guard await !connections.verifyAlive(targetID) else { return }
