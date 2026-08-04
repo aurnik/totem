@@ -172,13 +172,15 @@ struct GatewayController {
             case .signOff:
                 await goOffline(userID: userID)
 
-            case .sendMessage(let recipientID, let body, let clientMessageID):
+            case .sendMessage(let recipientID, let body, let clientMessageID, let dictated):
                 try await relayMessage(
-                    from: userID, to: recipientID, body: body, clientMessageID: clientMessageID)
+                    from: userID, to: recipientID, body: body,
+                    clientMessageID: clientMessageID, dictated: dictated)
 
-            case .sendSessionMessage(let sessionID, let body, let clientMessageID):
+            case .sendSessionMessage(let sessionID, let body, let clientMessageID, let dictated):
                 try await relaySessionMessage(
-                    from: userID, sessionID: sessionID, body: body, clientMessageID: clientMessageID)
+                    from: userID, sessionID: sessionID, body: body,
+                    clientMessageID: clientMessageID, dictated: dictated)
 
             case .typing(let recipientID):
                 if try await areAcceptedBuddies(userID, recipientID) {
@@ -233,7 +235,8 @@ struct GatewayController {
     /// out the others. An unreachable recipient means the message is refused,
     /// not spooled.
     private func relayMessage(
-        from senderID: UUID, to recipientID: UUID, body: String, clientMessageID: UUID
+        from senderID: UUID, to recipientID: UUID, body: String, clientMessageID: UUID,
+        dictated: Bool?
     ) async throws {
         guard try await areAcceptedBuddies(senderID, recipientID) else {
             await connections.send(.error("Not buddies."), to: senderID)
@@ -253,7 +256,7 @@ struct GatewayController {
         let session = try await openSession(between: senderID, and: recipientID)
         let message = ChatMessage(
             id: UUID(), sessionID: try session.requireID(),
-            senderID: senderID, body: body, sentAt: Date())
+            senderID: senderID, body: body, sentAt: Date(), dictated: dictated)
         await connections.send(.message(message), to: recipientID)
         await connections.send(
             .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
@@ -262,7 +265,8 @@ struct GatewayController {
     /// Group message: relay to every connected member, store nothing.
     /// Offline members miss it — session-scoped ephemerality.
     private func relaySessionMessage(
-        from senderID: UUID, sessionID: UUID, body: String, clientMessageID: UUID
+        from senderID: UUID, sessionID: UUID, body: String, clientMessageID: UUID,
+        dictated: Bool?
     ) async throws {
         guard let session = try await SessionModel.find(sessionID, on: db),
               session.includes(senderID), session.endedAt == nil
@@ -271,7 +275,8 @@ struct GatewayController {
             return
         }
         let message = ChatMessage(
-            id: UUID(), sessionID: sessionID, senderID: senderID, body: body, sentAt: Date())
+            id: UUID(), sessionID: sessionID, senderID: senderID, body: body, sentAt: Date(),
+            dictated: dictated)
         for participant in session.participants where participant != senderID {
             await connections.send(.message(message), to: participant)
         }

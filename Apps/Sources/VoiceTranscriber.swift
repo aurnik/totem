@@ -13,12 +13,15 @@ import Speech
 @MainActor
 final class VoiceTranscriber {
     /// Quiet time after the last finalized text before it's sent as a message.
-    private static let utteranceGap = Duration.seconds(1)
+    /// Short enough to feel like a reply, long enough to gather the finals
+    /// that arrive back-to-back at the end of a phrase.
+    private static let utteranceGap = Duration.milliseconds(300)
 
     /// Words the speaker has finished saying — one call per utterance.
     private let onUtterance: @MainActor (String) -> Void
-    /// Text still being revised: a local preview, never sent.
-    private let onPreview: @MainActor (String) -> Void
+    /// Brackets an actual model download, which only happens when the locale's
+    /// assets aren't already on the device.
+    private let onDownloading: @MainActor (Bool) -> Void
 
     private var analyzer: SpeechAnalyzer?
     private var input: AsyncStream<AnalyzerInput>.Continuation?
@@ -31,9 +34,9 @@ final class VoiceTranscriber {
     static var isSupported: Bool { SpeechTranscriber.isAvailable }
 
     init(onUtterance: @escaping @MainActor (String) -> Void,
-         onPreview: @escaping @MainActor (String) -> Void) {
+         onDownloading: @escaping @MainActor (Bool) -> Void) {
         self.onUtterance = onUtterance
-        self.onPreview = onPreview
+        self.onDownloading = onDownloading
     }
 
     /// Brings up the analyzer and returns the mic sink to hand the capture tap.
@@ -41,15 +44,15 @@ final class VoiceTranscriber {
     /// and hands buffers off without touching this actor.
     func start() async throws -> @Sendable (AVAudioPCMBuffer) -> Void {
         let locale = await Self.preferredLocale()
-        // Not `.progressiveTranscription`: that preset also sets `.fastResults`,
-        // which trades accuracy for latency. A message is worth getting right —
-        // only the live preview needs to be quick.
+        // Finalized phrases only. The presets add `.fastResults` (accuracy
+        // traded for latency) or `.volatileResults` (revisable partials);
+        // nothing here shows text before it's sent, so neither earns its keep.
         let transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
+            reportingOptions: [],
             attributeOptions: [])
-        try await Self.installModel(for: transcriber)
+        try await installModel(for: transcriber)
 
         // Only meaningful once the assets are installed — before that it's nil.
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
@@ -104,23 +107,18 @@ final class VoiceTranscriber {
             group.cancelAll()
         }
         results?.cancel()
-
-        onPreview("")
         flush()
     }
 
+    /// Only finalized phrases become messages. Where the model ends a phrase
+    /// is where a sentence actually ends — forcing a cut on a timer instead
+    /// lands mid-clause and sends fragments that open with a comma.
     private func receive(_ result: SpeechTranscriber.Result) {
+        guard result.isFinal else { return }
         let text = String(result.text.characters).trimmingCharacters(in: .whitespaces)
-        if result.isFinal {
-            guard !text.isEmpty else { return }
-            pending += pending.isEmpty ? text : " " + text
-            onPreview("")
-            scheduleFlush()
-        } else {
-            // Volatile results replace the unfinalized tail rather than
-            // extending it, so the preview is the finalized text plus this.
-            onPreview(pending.isEmpty ? text : pending + " " + text)
-        }
+        guard !text.isEmpty else { return }
+        pending += pending.isEmpty ? text : " " + text
+        scheduleFlush()
     }
 
     private func scheduleFlush() {
@@ -149,11 +147,23 @@ final class VoiceTranscriber {
     /// Downloads the language model on first use. The request is nil when
     /// there's nothing to fetch, so this is cheap on every later start; the
     /// locale reservation it needs is made for us.
-    private static func installModel(for transcriber: SpeechTranscriber) async throws {
-        if let request = try await AssetInventory.assetInstallationRequest(
-            supporting: [transcriber]) {
-            try await request.downloadAndInstall()
+    private func installModel(for transcriber: SpeechTranscriber) async throws {
+        guard let request = try await AssetInventory.assetInstallationRequest(
+            supporting: [transcriber])
+        else { return }
+        // A non-nil request doesn't mean bytes: it also covers re-reserving a
+        // locale whose assets are already on disk, which returns immediately.
+        // Only call it a download once it's plainly not instant.
+        let notice = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            self?.onDownloading(true)
         }
+        defer {
+            notice.cancel()
+            onDownloading(false)
+        }
+        try await request.downloadAndInstall()
     }
 
     enum TranscriptionError: Error {

@@ -123,13 +123,17 @@ public struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     public var senderID: UUID
     public var body: String
     public var sentAt: Date
+    /// Spoken rather than typed. Absent from clients that predate dictation.
+    public var dictated: Bool?
 
-    public init(id: UUID, sessionID: UUID, senderID: UUID, body: String, sentAt: Date) {
+    public init(id: UUID, sessionID: UUID, senderID: UUID, body: String, sentAt: Date,
+                dictated: Bool? = nil) {
         self.id = id
         self.sessionID = sessionID
         self.senderID = senderID
         self.body = body
         self.sentAt = sentAt
+        self.dictated = dictated
     }
 }
 

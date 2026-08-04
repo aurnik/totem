@@ -85,13 +85,10 @@ final class AppModel {
     private var micSendTask: Task<Void, Never>?
     private var micChunks: AsyncStream<Data>.Continuation?
     private var captureTask: Task<Void, Never>?
-    /// Dictation: the conversation the mic is being transcribed into (one at a
-    /// time, and the same mic the broadcast uses) plus the words not yet
-    /// finished — shown only to the speaker, never sent as-is.
+    /// Dictation: the conversation the mic is being transcribed into — one at
+    /// a time, and the same mic the broadcast uses.
     var dictationConversation: UUID?
-    var dictationPreview = ""
-    /// True while the language model downloads — first use only, but it can
-    /// take a while, and nothing is heard until it lands.
+    /// True only while the language model actually downloads.
     var dictationPreparing = false
     /// `VoiceTranscriber` where the OS has it; stored untyped because stored
     /// properties can't carry an availability annotation.
@@ -396,15 +393,18 @@ final class AppModel {
         acceptedBuddies.first { $0.user.id == id }
     }
 
-    func sendMessage(to conversationID: UUID, body: String) {
+    func sendMessage(to conversationID: UUID, body: String, dictated: Bool = false) {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let clientID = UUID()
         pendingSends[clientID] = conversationID
         lastSentConversation = conversationID
+        let spoken = dictated ? true : nil
         let frame: ClientFrame = groupSessions[conversationID] != nil
-            ? .sendSessionMessage(sessionID: conversationID, body: trimmed, clientMessageID: clientID)
-            : .sendMessage(recipientID: conversationID, body: trimmed, clientMessageID: clientID)
+            ? .sendSessionMessage(sessionID: conversationID, body: trimmed,
+                                  clientMessageID: clientID, dictated: spoken)
+            : .sendMessage(recipientID: conversationID, body: trimmed,
+                           clientMessageID: clientID, dictated: spoken)
         let socket = self.socket
         Task { [weak self] in
             do {
@@ -607,10 +607,13 @@ final class AppModel {
 
     // MARK: - Live voice
 
-    /// Stream the mic to the conversation.
+    /// Stream the mic to the conversation. Closing it closes dictation too —
+    /// that rides on the same mic and has no control of its own once the mic
+    /// is off.
     func toggleMic(in conversationID: UUID) {
         if liveMicConversation == conversationID {
             liveMicConversation = nil
+            dictationConversation = nil
         } else {
             claimMic(for: conversationID)
             liveMicConversation = conversationID
@@ -618,16 +621,13 @@ final class AppModel {
         applyCapture(in: conversationID)
     }
 
-    /// Transcribe the mic on-device and send each utterance as an ordinary
-    /// message — indistinguishable from typing at the other end.
+    /// Also transcribe the open mic on-device, sending each utterance as an
+    /// ordinary message — indistinguishable from typing at the other end.
+    /// Rides on the mic rather than claiming it: never changes mic state.
     func toggleDictation(in conversationID: UUID) {
-        if dictationConversation == conversationID {
-            dictationConversation = nil
-        } else {
-            guard dictationSupported else { return }
-            claimMic(for: conversationID)
-            dictationConversation = conversationID
-        }
+        guard dictationSupported, liveMicConversation == conversationID else { return }
+        dictationConversation = dictationConversation == conversationID
+            ? nil : conversationID
         applyCapture(in: conversationID)
     }
 
@@ -651,7 +651,7 @@ final class AppModel {
         micChunks = nil
         micSendTask?.cancel()
         micSendTask = nil
-        dictationPreview = ""
+        dictationPreparing = false
         let transcriber = dictationTranscriber
         dictationTranscriber = nil
         dictationSink = nil
@@ -746,18 +746,11 @@ final class AppModel {
         }
         let transcriber = VoiceTranscriber(
             onUtterance: { [weak self] text in
-                self?.sendMessage(to: conversationID, body: text)
+                self?.sendMessage(to: conversationID, body: text, dictated: true)
             },
-            onPreview: { [weak self] text in
-                guard self?.dictationConversation == conversationID else { return }
-                self?.dictationPreview = text
-                // Peers see the same "typing…" they'd see for a keyboard.
-                if !text.isEmpty, self?.groupSessions[conversationID] == nil {
-                    self?.sendTyping(to: conversationID)
-                }
+            onDownloading: { [weak self] downloading in
+                self?.dictationPreparing = downloading
             })
-        dictationPreparing = true
-        defer { dictationPreparing = false }
         do {
             dictationSink = try await transcriber.start()
             dictationTranscriber = transcriber
@@ -773,7 +766,7 @@ final class AppModel {
         guard let transcriber = dictationTranscriber else { return }
         dictationTranscriber = nil
         dictationSink = nil
-        dictationPreview = ""
+        dictationPreparing = false
         if #available(iOS 26.0, macOS 26.0, *), let transcriber = transcriber as? VoiceTranscriber {
             await transcriber.stop()
         }

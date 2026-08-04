@@ -9,6 +9,7 @@ struct ConversationView: View {
     @Environment(\.dismiss) private var dismiss
     let conversationID: UUID
     @State private var draft = ""
+    @State private var pulsing = false
     @State private var showingSoundboard = false
     @State private var showingMembers = false
 
@@ -338,29 +339,20 @@ struct ConversationView: View {
         !draft.trimmingCharacters(in: .whitespaces).isEmpty && !peerOffline
     }
 
-    /// What the recognizer has heard but hasn't finished — it goes out as a
-    /// message on the next pause, so this is the speaker's only look at it
-    /// first.
-    private var previewText: String {
-        if model.dictationPreparing { return "Preparing…" }
-        return model.dictationPreview.isEmpty ? "Listening…" : model.dictationPreview
-    }
-
+    /// Only the one-time model download — live words go in the draft bubble,
+    /// where the message itself will land. A silent multi-second wait
+    /// otherwise reads as a hang.
     private var dictationBar: some View {
         HStack(alignment: .top, spacing: 6) {
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("Preparing…")
+                    .italic()
+                Text("Downloading the language model")
+                    .font(.caption2)
+            }
             Image(systemName: "waveform")
                 .symbolEffect(.variableColor.iterative, isActive: true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(previewText)
-                    .italic()
-                    .lineLimit(2)
-                if model.dictationPreparing {
-                    // A silent multi-second wait otherwise reads as a hang.
-                    Text("Downloading the language model")
-                        .font(.caption2)
-                }
-            }
-            Spacer(minLength: 0)
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
@@ -370,30 +362,45 @@ struct ConversationView: View {
 
     /// Off, it's an empty outgoing bubble offering the mode; on, it fills in
     /// like a sent one — inverted against the transcript so it still reads as
-    /// a control rather than something already said.
+    /// a control rather than something already said. Fill and border are both
+    /// always present and cross-fade through their colors: swapping one shape
+    /// for the other gives SwiftUI nothing to interpolate, and it cuts.
     private var dictationToggle: some View {
         Button {
             model.toggleDictation(in: conversationID)
         } label: {
             Text("Voice → text")
-                .font(.footnote.weight(.medium))
+                .font(.body)
                 .foregroundStyle(dictating ? dictationLabelColor : Color.secondary)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.vertical, 8)
                 .background {
-                    let shape = RoundedRectangle(cornerRadius: 15)
-                    if dictating {
-                        shape.fill(Color.primary.opacity(0.85))
-                    } else {
-                        shape.strokeBorder(
-                            Color.secondary,
-                            style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                    }
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(dictating ? Color.primary.opacity(0.85) : Color.clear)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18)
+                                .strokeBorder(
+                                    dictating ? Color.clear : Color.secondary,
+                                    style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        }
                 }
+                .animation(.easeInOut(duration: 0.25), value: dictating)
+                // Outside the color cross-fade so the two don't drive each
+                // other: a slow breath while the mic is being transcribed.
+                .scaleEffect(pulsing ? 1.035 : 1)
+                .opacity(pulsing ? 0.88 : 1)
         }
         .buttonStyle(.plain)
         .disabled(peerOffline)
-        .animation(.easeInOut(duration: 0.15), value: dictating)
+        .onChange(of: dictating) { _, on in
+            if on {
+                withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                    pulsing = true
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.2)) { pulsing = false }
+            }
+        }
     }
 
     /// Reads against `Color.primary`, so it flips with the color scheme.
@@ -407,10 +414,12 @@ struct ConversationView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if dictating {
+            if model.dictationPreparing {
                 dictationBar
             }
-            if model.dictationSupported {
+            // Dictation rides on the open mic, so it's only offered once the
+            // mic is on — and turning the mic off takes it down with it.
+            if model.dictationSupported, micIsLive {
                 HStack {
                     Spacer(minLength: 0)
                     dictationToggle
@@ -560,6 +569,14 @@ struct MessageRow: View {
         )
     }
 
+    /// Marks a spoken message, on the bubble's inward side so it reads as an
+    /// annotation of that bubble rather than of the row.
+    private var dictationGlyph: some View {
+        Image(systemName: "mic.fill")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if isMine { Spacer(minLength: 48) }
@@ -573,23 +590,29 @@ struct MessageRow: View {
                         .foregroundStyle(.secondary)
                         .padding(.leading, 6)
                 }
-                Text(message.body)
-                    .font(.body)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background {
-                        if isMine {
-                            LinearGradient(
-                                colors: [Self.historyBlue(recencyFraction - 0.06),
-                                         Self.historyBlue(recencyFraction)],
-                                startPoint: .top, endPoint: .bottom
-                            )
-                        } else {
-                            incomingBackground
+                // The glyph rides beside the bubble, not the row, so it stays
+                // centered on the bubble whatever else the row carries.
+                HStack(alignment: .center, spacing: 6) {
+                    if isMine, message.dictated == true { dictationGlyph }
+                    Text(message.body)
+                        .font(.body)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background {
+                            if isMine {
+                                LinearGradient(
+                                    colors: [Self.historyBlue(recencyFraction - 0.06),
+                                             Self.historyBlue(recencyFraction)],
+                                    startPoint: .top, endPoint: .bottom
+                                )
+                            } else {
+                                incomingBackground
+                            }
                         }
-                    }
-                    .foregroundStyle(isMine ? .white : .primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .foregroundStyle(isMine ? .white : .primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                    if !isMine, message.dictated == true { dictationGlyph }
+                }
             }
             if !isMine { Spacer(minLength: 48) }
         }

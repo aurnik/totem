@@ -6,9 +6,13 @@ public enum ClientFrame: Codable, Sendable {
     /// Client proposes a presence change; server is authoritative and echoes via `presence`.
     case setPresence(state: PresenceState, awayMessage: String?)
     case signOff
-    case sendMessage(recipientID: UUID, body: String, clientMessageID: UUID)
+    /// `dictated` marks a body the sender spoke rather than typed; nil from
+    /// clients that predate it, and relayed untouched.
+    case sendMessage(recipientID: UUID, body: String, clientMessageID: UUID,
+                     dictated: Bool? = nil)
     /// Message into an existing (group) session the sender belongs to.
-    case sendSessionMessage(sessionID: UUID, body: String, clientMessageID: UUID)
+    case sendSessionMessage(sessionID: UUID, body: String, clientMessageID: UUID,
+                            dictated: Bool? = nil)
     case typing(recipientID: UUID)
     /// Live mic audio: raw little-endian Int16 mono PCM at
     /// `AudioWire.sampleRate`, ~100ms per chunk. Relay-only, best-effort —
