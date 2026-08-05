@@ -83,6 +83,18 @@ public struct Presence: Codable, Hashable, Sendable {
     }
 
     public static let offline = Presence(state: .offline)
+
+    /// What the server writes for a user it has just found unreachable: away,
+    /// but with nothing to say. Reusing `away` rather than adding a state keeps
+    /// this legible to builds that predate it — an unknown `PresenceState` case
+    /// would fail to decode and take the whole frame with it.
+    public static let unreachable = Presence(state: .away)
+
+    /// True for the shape above. A user can only go away by writing a message
+    /// (`PresenceStateMachine` derives `away` from the message's existence, and
+    /// rejects an empty one), so a message-less away is always the server's
+    /// mark and never the user's own.
+    public var isUnreachableMark: Bool { state == .away && awayMessage == nil }
 }
 
 public struct ChatSession: Codable, Identifiable, Hashable, Sendable {

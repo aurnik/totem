@@ -126,6 +126,11 @@ IFrame API.
 
 Non-deliberate socket drops get a 90s grace period (generation counter in `ConnectionManager` guards against reconnect races) and clients show themselves as reconnecting, never offline.
 
+Reachability and presence are deliberately separate questions. A failed ping is certain evidence we can't reach someone *now* and weak evidence they left — a wifi handoff is indistinguishable from a walk-out — so it never crosses anyone offline. Offline is the expensive transition (transcripts cleared via `freshSignOn`, 1:1 sessions archived, a sign-on alert to every buddy on the way back), and the grace period exists precisely so a tunnel doesn't pay it. Instead `markUnreachable` writes **away with no away message** and fans it out, so the buddy list stops contradicting the "not delivered" the sender just got. Two rules make that shape safe:
+
+- It's written with `SET XX KEEPTTL` (`PresenceStore.annotate`), never `set`. The TTL *is* the offline timeout; a server-side observation about a user is not evidence they're alive, so refreshing it would let repeated send attempts keep a vanished user online forever. `XX` means an already-expired key stays expired rather than being resurrected.
+- A message-less away is unambiguously the server's mark, because clients derive `away` from having a message and reject an empty one (`PresenceStateMachine.displayState`, pinned by `UnreachableMarkTests`). So `signOn` clears it on reconnect while preserving an away the user wrote. Don't add a client path that goes away without a message, and don't add a `PresenceState` case for this — an unknown enum case fails to decode and takes the whole frame with it.
+
 ### Messages are never stored (product decision, overrides spec §5/§6)
 
 The server is a pure relay: no messages table, nothing message-shaped persisted. Offline recipients are refused (no "leave a message"), offline group members miss messages, and client transcripts are scoped to the local user's own online session: the `freshSignOn` flag on `welcome` clears them on any offline→online transition, including an unintended >90s drop with the app open. Do not reintroduce server-side message storage or restoration of prior-session history.

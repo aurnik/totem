@@ -111,7 +111,13 @@ struct GatewayController {
             // Only a genuine offline→online transition is a sign-on; socket
             // reconnects within the presence TTL are not.
             let wasOffline = existing.state == .offline
-            let current = wasOffline ? Presence(state: .online) : existing
+            // A message-less away is the one the server set on their behalf
+            // when it found them unreachable — clients can only go away by
+            // writing a message, so nothing else produces this shape. Being
+            // back is the answer to it, so it clears; a real away message is
+            // the user's own and survives the reconnect.
+            let current = wasOffline || existing.isUnreachableMark
+                ? Presence(state: .online) : existing
             try await presence.set(current, for: userID)
 
             let buddyIDs = try await acceptedBuddyIDs(of: userID)
@@ -152,11 +158,48 @@ struct GatewayController {
     /// reconnected when the grace elapses, they go offline.
     private func handleClose(userID: UUID, ws: WebSocket, generation: Int) async {
         await connections.unregister(userID, ifStill: ws)
+        await goOffline(userID: userID, afterGraceFrom: generation)
+    }
+
+    /// Offline once the grace elapses, unless they came back. The generation
+    /// they were at when we started waiting is the test: any reconnect — or any
+    /// `expire` that supersedes this wait with its own — bumps it, and this
+    /// no-ops.
+    private func goOffline(userID: UUID, afterGraceFrom generation: Int) async {
         try? await Task.sleep(for: .seconds(PresenceStore.ttlSeconds))
         guard await connections.generation(of: userID) == generation,
               await !connections.isConnected(userID)
         else { return }
         await goOffline(userID: userID)
+    }
+
+    /// A failed liveness check is certain evidence we can't reach them *now*,
+    /// and only weak evidence that they left — a wifi handoff looks identical
+    /// to a walk-out. So it marks them away rather than crossing them offline:
+    /// going offline is the expensive transition (their transcripts cleared,
+    /// 1:1 sessions archived, a sign-on alert to every buddy on the way back),
+    /// and the grace period exists precisely so a tunnel doesn't pay it. This
+    /// tells whoever just tried to send them something what their buddy list
+    /// was contradicting, and costs nothing if they walk straight back in.
+    private func markUnreachable(_ userID: UUID) async {
+        // A half-open socket never fires onClose, so a dead-but-registered one
+        // is reaped here or not at all. Reaping supersedes the countdown its
+        // own close would have started, so this takes over that duty.
+        if await connections.isConnected(userID) {
+            await connections.expire(userID)
+            let generation = await connections.generation(of: userID)
+            Task { await goOffline(userID: userID, afterGraceFrom: generation) }
+        }
+        do {
+            let current = try await presence.get(for: userID)
+            // Offline needs no correction, and an away they wrote themselves
+            // outranks anything the server inferred.
+            guard current.state != .offline, current.state != .away else { return }
+            guard try await presence.annotate(.unreachable, for: userID) else { return }
+            await fanOut(.presence(userID: userID, presence: .unreachable), toBuddiesOf: userID)
+        } catch {
+            app.logger.report(error: error)
+        }
     }
 
     private func goOffline(userID: UUID) async {
@@ -297,11 +340,8 @@ struct GatewayController {
         // connected recipient so a suspended app is discovered now rather
         // than when the sweep catches it.
         guard await connections.verifyAlive(recipientID) else {
-            if await connections.isConnected(recipientID) {
-                await connections.expire(recipientID)
-                await goOffline(userID: recipientID)
-            }
-            await connections.send(.error("Message not delivered — they're offline."), to: senderID)
+            await markUnreachable(recipientID)
+            await connections.send(.error("Message not delivered — they're away."), to: senderID)
             return
         }
         let session = try await openSession(between: senderID, and: recipientID)

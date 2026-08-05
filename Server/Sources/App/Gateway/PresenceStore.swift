@@ -26,6 +26,28 @@ struct PresenceStore {
         _ = try await redis.expire(presenceKey(userID), after: .seconds(Int64(Self.ttlSeconds))).get()
     }
 
+    /// Annotate an existing presence without extending its lifetime. The TTL is
+    /// the offline timeout, and a server-side observation *about* a user is not
+    /// evidence they're alive — refreshing it here would let repeated send
+    /// attempts keep a vanished user's key alive indefinitely. KEEPTTL also
+    /// keeps this atomic, so a key that expires mid-call stays expired rather
+    /// than being resurrected by a read-then-write.
+    ///
+    /// Returns false if the key had already expired, in which case nothing was
+    /// written: the user is offline, not away, and the caller must not announce
+    /// otherwise.
+    @discardableResult
+    func annotate(_ presence: Presence, for userID: UUID) async throws -> Bool {
+        let json = String(decoding: try WireCoder.encoder().encode(presence), as: UTF8.self)
+        let response = try await redis.send(command: "SET", with: [
+            presenceKey(userID).rawValue.convertedToRESPValue(),
+            json.convertedToRESPValue(),
+            "XX".convertedToRESPValue(),
+            "KEEPTTL".convertedToRESPValue(),
+        ]).get()
+        return !response.isNull
+    }
+
     func get(for userID: UUID) async throws -> Presence {
         guard let json = try await redis.get(presenceKey(userID), as: String.self).get() else {
             return .offline
