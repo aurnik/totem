@@ -25,7 +25,10 @@ S=Server/onboard/.venv/bin/python
 
 - `$S Server/onboard/testflight_submit.py --status` — build states, groups, what review gates on
 - `$S Server/onboard/testflight_submit.py --commits <build>` — commits this build carries
-- `$S Server/onboard/testflight_submit.py --submit <build> --notes-file notes.txt` — ship it
+- `$S Server/onboard/testflight_submit.py --submit <build> --notes-file notes.txt` — ship it,
+  then expire every older build
+- `$S Server/onboard/testflight_submit.py --expire-previous <build>` — retire older builds on
+  their own, for when a submission half-finished
 
 Never read the `.p8` key. Pass its path; the script signs with it.
 </quick_start>
@@ -77,15 +80,25 @@ said to go ahead without checking.
 
 Write the approved text to a file, then
 `--submit <build> --notes-file <path>`. Add `--dry-run` first to see exactly
-what would be sent. The script sets the notes, attaches the build to every
-external group, and files the review submission.
+what would be sent, including which older builds would be expired. The script
+sets the notes, attaches the build to every external group, files the review
+submission, and then expires every older build.
+
+That last step matters because the client and server ship together here.
+TestFlight keeps offering a build until it expires, so a tester reinstalling
+can land on an old client talking to a server that has moved past it — which
+surfaces as sign-in failing for no visible reason. Expiring leaves exactly one
+installable build. It runs last on purpose: a failure earlier leaves the old
+builds installable rather than retiring them in favour of one that never
+shipped.
 
 **7. Verify.**
 
-Re-run `--status`. Expect the notes to be in place and `reviewSubmission` to be
-`WAITING_FOR_REVIEW` or `APPROVED`. Builds under an already-approved
-`MARKETING_VERSION` usually clear in about a minute. Report the state plainly;
-if review rejects, the reason appears here.
+Re-run `--status`. Expect the notes to be in place, `reviewSubmission` to be
+`WAITING_FOR_REVIEW` or `APPROVED`, and every build but the new one to show
+`expired: True`. Builds under an already-approved `MARKETING_VERSION` usually
+clear in about a minute. Report the state plainly; if review rejects, the
+reason appears here.
 </process>
 
 <voice>
@@ -154,4 +167,5 @@ they were near voice or group chat, no invitation to go and test anything.
 - Nothing is written in first person, and nothing asks the tester to try or report anything
 - The user saw the draft before it was sent
 - `--status` afterwards shows the notes in place and review `WAITING_FOR_REVIEW` or `APPROVED`
+- Every build older than the one just shipped shows `expired: True`
 </success_criteria>

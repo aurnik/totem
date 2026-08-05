@@ -185,6 +185,36 @@ def submit_for_review(build_id):
     return result["data"]["attributes"].get("betaReviewState", "submitted")
 
 
+def expire_build(build_id):
+    api("PATCH", f"builds/{build_id}",
+        {"data": {"type": "builds", "id": build_id,
+                  "attributes": {"expired": True}}})
+
+
+def expire_previous(app, keep_version, dry_run=False):
+    """Retire every older build once the new one is live.
+
+    TestFlight keeps offering builds until they expire, so a tester who
+    reinstalls can land on an old one — and this app's client and server ship
+    together, so an old client is one that talks to a server that has moved
+    past it. Expiring leaves exactly one installable build.
+    """
+    builds = api("GET", f"builds?filter[app]={app}&limit=50&sort=-version")["data"]
+    retired = 0
+    for build in builds:
+        a = build["attributes"]
+        if a["version"] == keep_version or a.get("expired"):
+            continue
+        if dry_run:
+            print(f"expire {a['version']}: would expire")
+        else:
+            expire_build(build["id"])
+            print(f"expire {a['version']}: expired")
+        retired += 1
+    if not retired:
+        print("expire: nothing older still active")
+
+
 def notes_for(app, version):
     previous = previous_version(app, version)
     if not previous:
@@ -211,6 +241,8 @@ def submit(version, notes=None, dry_run=False):
     print(f"build {version} ({build_id}) is VALID; {origin}\n")
     print(notes)
     if dry_run:
+        print()
+        expire_previous(app, version, dry_run=True)
         print("\n(dry run — nothing submitted)")
         return
 
@@ -219,6 +251,9 @@ def submit(version, notes=None, dry_run=False):
         name = group["attributes"]["name"]
         print(f"group {name}: {add_to_group(group['id'], build_id)}")
     print(f"review submission: {submit_for_review(build_id)}")
+    # Last, so a failure earlier leaves the old builds installable rather than
+    # retiring them in favour of one that never shipped.
+    expire_previous(app, version)
 
 
 if __name__ == "__main__":
@@ -233,6 +268,9 @@ if __name__ == "__main__":
             if not supplied:
                 sys.exit(f"{path} is empty — review rejects a build with no notes")
         submit(version, notes=supplied, dry_run="--dry-run" in sys.argv)
+    elif "--expire-previous" in sys.argv:
+        version = sys.argv[sys.argv.index("--expire-previous") + 1]
+        expire_previous(app_id(), version, dry_run="--dry-run" in sys.argv)
     elif "--commits" in sys.argv:
         app = app_id()
         version = sys.argv[sys.argv.index("--commits") + 1]
@@ -241,4 +279,5 @@ if __name__ == "__main__":
     else:
         sys.exit("usage: testflight_submit.py --status "
                  "| --commits <build-number> "
-                 "| --submit <build-number> [--notes-file <path>] [--dry-run]")
+                 "| --submit <build-number> [--notes-file <path>] [--dry-run] "
+                 "| --expire-previous <build-number> [--dry-run]")
