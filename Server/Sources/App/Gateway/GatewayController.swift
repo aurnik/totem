@@ -167,6 +167,16 @@ struct GatewayController {
             // The peer clears its own copy off the offline presence frame, so
             // this needs no fan-out of its own.
             await stages.clearPairs(involving: userID)
+            // A group game does need one: nothing else tells the people still
+            // in the chat that a player just left. Unattributed, so it posts no
+            // notice — the sign-off notice already says what happened.
+            for (key, participants) in await stages.clearGames(involving: userID) {
+                guard case .group(let sessionID) = key else { continue }
+                for participant in participants {
+                    await connections.send(
+                        .stage(conversationID: sessionID, senderID: nil, stage: nil), to: participant)
+                }
+            }
         } catch {
             app.logger.report(error: error)
         }
@@ -399,7 +409,7 @@ struct GatewayController {
             return
         }
         let applied = await stages.apply(
-            action, expectedVersion: expectedVersion, to: key,
+            action, by: userID, expectedVersion: expectedVersion, to: key,
             participants: stageParticipants(conversation, actedBy: userID), at: Date())
         switch applied {
         case .updated(let stage):

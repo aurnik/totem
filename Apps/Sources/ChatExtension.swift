@@ -12,12 +12,10 @@ import TotemKit
 protocol ChatExtension {
     static var id: ChatExtensionID { get }
     static var name: String { get }
-    /// SF Symbol for the toolbar entry point.
-    static var symbol: String { get }
 }
 
 enum ChatExtensions {
-    static let all: [any ChatExtension.Type] = [YouTubeExtension.self]
+    static let all: [any ChatExtension.Type] = [YouTubeExtension.self, FourExtension.self]
 }
 
 /// Renders whatever is on the stage. Adding an extension adds a case here and
@@ -30,6 +28,8 @@ struct StageArea: View {
         switch stage.state {
         case .youtube(let youtube):
             YouTubeStageView(conversationID: conversationID, youtube: youtube)
+        case .four(let four):
+            FourStageView(conversationID: conversationID, four: four)
         }
     }
 }

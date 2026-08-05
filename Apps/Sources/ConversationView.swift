@@ -47,16 +47,15 @@ struct ConversationView: View {
             .sorted()
     }
 
-    /// Another extension holds the stage and would lose real state if YouTube
+    /// Another extension holds the stage and would lose real state if this one
     /// took it — the server refuses that anyway, so don't offer it.
-    private var stageIsProtected: Bool {
+    private func stageIsProtected(against id: ChatExtensionID) -> Bool {
         guard let stage = model.stages[conversationID] else { return false }
-        let id = stage.state.extensionID
-        return id != YouTubeExtension.id && id.preservesState
+        return stage.state.extensionID != id && stage.state.preservesState
     }
 
-    private var youTubeIsOnStage: Bool {
-        model.stages[conversationID]?.state.extensionID == YouTubeExtension.id
+    private func isOnStage(_ id: ChatExtensionID) -> Bool {
+        model.stages[conversationID]?.state.extensionID == id
     }
 
     /// Who to picture in the header: the peer for 1:1, up to three
@@ -165,15 +164,16 @@ struct ConversationView: View {
             actionButton("waveform", "Sounds") { showingSoundboard = true }
             // Lit red while something is on the stage, the way the mic is while
             // it's open — and the glyph says what tapping it now does: stop.
-            actionButton(youTubeIsOnStage ? "stop.fill" : YouTubeExtension.symbol,
-                         "YouTube", tint: youTubeIsOnStage ? .red : nil) {
-                if youTubeIsOnStage {
+            actionButton(isOnStage(.youtube) ? "stop.fill" : YouTubeExtension.symbol,
+                         "YouTube", tint: isOnStage(.youtube) ? .red : nil) {
+                if isOnStage(.youtube) {
                     model.closeStage(in: conversationID)
                 } else {
                     showingYouTube = true
                 }
             }
-            .disabled(stageIsProtected)
+            .disabled(stageIsProtected(against: .youtube))
+            fourButton
             actionButton(micIsLive ? "mic.fill" : "mic", "Voice",
                          tint: micIsLive ? .red : nil, pulsing: micIsLive) {
                 model.toggleMic(in: conversationID)
@@ -192,18 +192,47 @@ struct ConversationView: View {
         .disabled(peerOffline)
     }
 
+    /// Four's glyph is drawn rather than an SF Symbol, so while the game is up
+    /// the row becomes the way out of it — a red ✗, the same convention as
+    /// YouTube's `stop.fill`.
+    @ViewBuilder
+    private var fourButton: some View {
+        if isOnStage(.four) {
+            actionButton("xmark", FourExtension.name, tint: .red) {
+                model.closeStage(in: conversationID)
+            }
+        } else {
+            actionButton(FourExtension.name, action: {
+                model.sendStageAction(.four(.start), in: conversationID)
+            }, icon: {
+                FourBoardIcon()
+                    .fill(style: FillStyle(eoFill: true))
+                    .frame(width: 19, height: 16)
+            })
+            .disabled(stageIsProtected(against: .four))
+        }
+    }
+
     private func actionButton(_ symbol: String, _ label: String, tint: Color? = nil,
                               pulsing: Bool = false,
                               action: @escaping () -> Void) -> some View {
+        actionButton(label, tint: tint, action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 16))
+                .symbolEffect(.pulse, isActive: pulsing)
+        }
+    }
+
+    private func actionButton<Icon: View>(_ label: String, tint: Color? = nil,
+                                          action: @escaping () -> Void,
+                                          @ViewBuilder icon: () -> Icon) -> some View {
         Button {
             toggleActions()
             action()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .font(.system(size: 16))
+                icon()
                     .foregroundStyle(tint ?? Color.accentColor)
-                    .symbolEffect(.pulse, isActive: pulsing)
                     .frame(width: 22)
                 Text(label)
                     .font(.subheadline)

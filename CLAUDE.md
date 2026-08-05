@@ -88,8 +88,27 @@ last-write-wins. Actions are absolute (`setPlaying(true/false)`), never toggles,
 identical intents converge; conditional actions carry the stage version they targeted and are dropped
 if it moved. The read-reduce-write must stay in one actor-isolated step with no suspension point, or
 two actions both pass the version check and both write. Seek is a separate action because
-`setPlaying` no-ops when the state already matches. Extensions declare whether their state is
-disposable (jukebox) or `preservesState` (chess), so a song pick can't bulldoze a game.
+`setPlaying` no-ops when the state already matches. `preservesState` says whether losing the stage
+would destroy something the participants can't recreate, so a song pick can't bulldoze a game — and
+it hangs off `StageState`, not the extension ID, because a *finished* game is as disposable as a
+video. `StageReducer.reduce` takes the authenticated `actorID` as a parameter rather than reading it
+out of the action, since a client that names its own identity can name someone else's.
+
+**Four** (`TotemKit/Stage.swift`, `Apps/Sources/FourStage.swift`) is Connect 4 on that stage, and the
+first extension to use any of the above. Whoever starts is red, the next person to tap Join is
+yellow, and drops are refused off-turn — the version check serialises actions but can't tell whose
+turn it is. Two consequences worth keeping: a win is an `.updated` stage carrying the outcome, never
+`.cleared`, because the gateway broadcasts `.cleared` unattributed and clients derive transcript
+notices from the before/after pair, so a clearing win could neither be attributed ("`_` won") nor
+seen; and the board is then taken down by a separate `expire` action every client's countdown fires,
+which converges because the version check keeps only the first. Pieces are drawn *under* the plate,
+which is a single even-odd fill of a rounded rect minus 42 circles — that's what lets an empty hole
+show the chat behind it and makes a falling piece read right. The falling piece is found by diffing
+the old and new board (exactly one column can have grown) and animated from `onAppear`, the same
+render-then-animate shape as `PopInEffect`; kicking it off where the diff happens would let SwiftUI
+coalesce both states into one frame and the piece would just appear where it landed. A game needs
+both players, so `goOffline` clears it — `clearPairs` covers 1:1, `clearGames(involving:)` covers
+groups and has to fan out itself, since nothing else tells the rest of the group.
 
 **YouTube embedding** constraints, all measured: `loadHTMLString` cannot work (player errors 152/153
 — YouTube requires a real origin), so Vapor hosts the player page at `GET /player`. A web view that

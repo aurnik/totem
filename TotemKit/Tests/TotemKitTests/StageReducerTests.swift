@@ -4,6 +4,7 @@ import XCTest
 final class StageReducerTests: XCTestCase {
 
     private let t0 = Date(timeIntervalSince1970: 1_000_000)
+    private let me = UUID()
 
     private func video(_ id: String = "abc") -> StageAction {
         .youtube(.setVideo(videoID: id, title: "Video \(id)", thumbnailURL: nil))
@@ -25,7 +26,7 @@ final class StageReducerTests: XCTestCase {
     // MARK: - Claiming the stage
 
     func testSetVideoOnEmptyStageStartsPlayingFromZero() {
-        guard let stage = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0)) else { return }
+        guard let stage = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0)) else { return }
         XCTAssertEqual(stage.version, 1)
         let state = youtube(stage)
         XCTAssertEqual(state.videoID, "abc")
@@ -37,8 +38,8 @@ final class StageReducerTests: XCTestCase {
     /// The product call: picking a video always takes over, so a stale pick
     /// can't be silently dropped.
     func testSetVideoReplacesWhatWasPlayingRegardlessOfVersion() {
-        let first = updated(StageReducer.reduce(nil, video("one"), expectedVersion: nil, at: t0))!
-        let second = updated(StageReducer.reduce(first, video("two"), expectedVersion: nil, at: t0))!
+        let first = updated(StageReducer.reduce(nil, video("one"), by: me, expectedVersion: nil, at: t0))!
+        let second = updated(StageReducer.reduce(first, video("two"), by: me, expectedVersion: nil, at: t0))!
         XCTAssertEqual(youtube(second).videoID, "two")
         XCTAssertEqual(second.version, 2)
     }
@@ -46,10 +47,10 @@ final class StageReducerTests: XCTestCase {
     // MARK: - Absolute play/pause
 
     func testPauseRecordsPositionAndStamp() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let at = t0.addingTimeInterval(47)
         let paused = updated(StageReducer.reduce(started, .youtube(.setPlaying(false, positionSeconds: 47)),
-                                                 expectedVersion: started.version, at: at))!
+                                                 by: me, expectedVersion: started.version, at: at))!
         let state = youtube(paused)
         XCTAssertFalse(state.isPlaying)
         XCTAssertEqual(state.positionSeconds, 47)
@@ -58,11 +59,11 @@ final class StageReducerTests: XCTestCase {
     }
 
     func testResumeKeepsStoredPosition() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let paused = updated(StageReducer.reduce(started, .youtube(.setPlaying(false, positionSeconds: 47)),
-                                                 expectedVersion: started.version, at: t0))!
+                                                 by: me, expectedVersion: started.version, at: t0))!
         let resumed = updated(StageReducer.reduce(paused, .youtube(.setPlaying(true, positionSeconds: 47)),
-                                                  expectedVersion: paused.version, at: t0))!
+                                                  by: me, expectedVersion: paused.version, at: t0))!
         XCTAssertTrue(youtube(resumed).isPlaying)
         XCTAssertEqual(youtube(resumed).positionSeconds, 47)
     }
@@ -71,19 +72,19 @@ final class StageReducerTests: XCTestCase {
     /// wins; re-reporting an already-paused stage must not rebroadcast, or
     /// everyone re-seeks on each duplicate.
     func testSetPlayingToCurrentValueIsUnchangedAndNotBroadcast() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let outcome = StageReducer.reduce(started, .youtube(.setPlaying(true, positionSeconds: 12)),
-                                          expectedVersion: started.version, at: t0)
+                                          by: me, expectedVersion: started.version, at: t0)
         XCTAssertEqual(outcome, .unchanged)
     }
 
     // MARK: - Seeking
 
     func testSeekMovesThePlayheadAndLeavesPlaybackAlone() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let at = t0.addingTimeInterval(20)
         let sought = updated(StageReducer.reduce(started, .youtube(.seek(positionSeconds: 35)),
-                                                 expectedVersion: started.version, at: at))!
+                                                 by: me, expectedVersion: started.version, at: at))!
         let state = youtube(sought)
         XCTAssertEqual(state.positionSeconds, 35)
         XCTAssertEqual(state.positionAt, at)
@@ -94,28 +95,28 @@ final class StageReducerTests: XCTestCase {
     /// Skipping back past the start clamps rather than going negative, which
     /// would make `position(at:)` run backwards for everyone.
     func testSeekBeforeZeroClamps() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let sought = updated(StageReducer.reduce(started, .youtube(.seek(positionSeconds: -15)),
-                                                 expectedVersion: started.version, at: t0))!
+                                                 by: me, expectedVersion: started.version, at: t0))!
         XCTAssertEqual(youtube(sought).positionSeconds, 0)
     }
 
     /// A skip is aimed at what the sender was watching, so it must not land on
     /// a video someone else just put on.
     func testSeekWithStaleVersionIsRejected() {
-        let first = updated(StageReducer.reduce(nil, video("one"), expectedVersion: nil, at: t0))!
-        let second = updated(StageReducer.reduce(first, video("two"), expectedVersion: nil, at: t0))!
+        let first = updated(StageReducer.reduce(nil, video("one"), by: me, expectedVersion: nil, at: t0))!
+        let second = updated(StageReducer.reduce(first, video("two"), by: me, expectedVersion: nil, at: t0))!
         let outcome = StageReducer.reduce(second, .youtube(.seek(positionSeconds: 60)),
-                                          expectedVersion: first.version, at: t0)
+                                          by: me, expectedVersion: first.version, at: t0)
         XCTAssertEqual(outcome, .rejected)
     }
 
     func testSeekWhilePausedKeepsItPaused() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let paused = updated(StageReducer.reduce(started, .youtube(.setPlaying(false, positionSeconds: 10)),
-                                                 expectedVersion: started.version, at: t0))!
+                                                 by: me, expectedVersion: started.version, at: t0))!
         let sought = updated(StageReducer.reduce(paused, .youtube(.seek(positionSeconds: 25)),
-                                                 expectedVersion: paused.version, at: t0))!
+                                                 by: me, expectedVersion: paused.version, at: t0))!
         XCTAssertFalse(youtube(sought).isPlaying)
         XCTAssertEqual(youtube(sought).positionSeconds, 25)
     }
@@ -123,9 +124,9 @@ final class StageReducerTests: XCTestCase {
     // MARK: - Ending
 
     func testEndedClearsTheStage() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let outcome = StageReducer.reduce(started, .youtube(.ended),
-                                          expectedVersion: started.version, at: t0)
+                                          by: me, expectedVersion: started.version, at: t0)
         XCTAssertEqual(outcome, .cleared)
     }
 
@@ -133,44 +134,44 @@ final class StageReducerTests: XCTestCase {
     /// first clears the stage; the rest must not clear it again, or the chat
     /// gets a burst of duplicate frames.
     func testSecondEndReportFindsNothingLeftAndIsRefused() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         XCTAssertEqual(StageReducer.reduce(started, .youtube(.ended),
-                                           expectedVersion: started.version, at: t0), .cleared)
+                                           by: me, expectedVersion: started.version, at: t0), .cleared)
         // The stage is gone by the time the next report lands.
         XCTAssertEqual(StageReducer.reduce(nil, .youtube(.ended),
-                                           expectedVersion: started.version, at: t0), .rejected)
+                                           by: me, expectedVersion: started.version, at: t0), .rejected)
     }
 
     /// A stale end report — the video already changed — must not take down
     /// whatever is playing now.
     func testEndedWithStaleVersionIsRejected() {
-        let first = updated(StageReducer.reduce(nil, video("one"), expectedVersion: nil, at: t0))!
-        let second = updated(StageReducer.reduce(first, video("two"), expectedVersion: nil, at: t0))!
+        let first = updated(StageReducer.reduce(nil, video("one"), by: me, expectedVersion: nil, at: t0))!
+        let second = updated(StageReducer.reduce(first, video("two"), by: me, expectedVersion: nil, at: t0))!
         XCTAssertEqual(StageReducer.reduce(second, .youtube(.ended),
-                                           expectedVersion: first.version, at: t0), .rejected)
+                                           by: me, expectedVersion: first.version, at: t0), .rejected)
     }
 
     // MARK: - Compare-and-swap
 
     func testStaleVersionIsRejectedSoPauseCantLandOnANewVideo() {
-        let first = updated(StageReducer.reduce(nil, video("one"), expectedVersion: nil, at: t0))!
-        let second = updated(StageReducer.reduce(first, video("two"), expectedVersion: nil, at: t0))!
+        let first = updated(StageReducer.reduce(nil, video("one"), by: me, expectedVersion: nil, at: t0))!
+        let second = updated(StageReducer.reduce(first, video("two"), by: me, expectedVersion: nil, at: t0))!
         // Someone hits pause still looking at "one".
         let outcome = StageReducer.reduce(second, .youtube(.setPlaying(false, positionSeconds: 30)),
-                                          expectedVersion: first.version, at: t0)
+                                          by: me, expectedVersion: first.version, at: t0)
         XCTAssertEqual(outcome, .rejected)
     }
 
     func testConditionalActionWithoutAVersionIsRejected() {
-        let started = updated(StageReducer.reduce(nil, video(), expectedVersion: nil, at: t0))!
+        let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let outcome = StageReducer.reduce(started, .youtube(.setPlaying(false, positionSeconds: 1)),
-                                          expectedVersion: nil, at: t0)
+                                          by: me, expectedVersion: nil, at: t0)
         XCTAssertEqual(outcome, .rejected)
     }
 
     func testConditionalActionOnEmptyStageIsRejected() {
         let outcome = StageReducer.reduce(nil, .youtube(.setPlaying(true, positionSeconds: 0)),
-                                          expectedVersion: 1, at: t0)
+                                          by: me, expectedVersion: 1, at: t0)
         XCTAssertEqual(outcome, .rejected)
     }
 

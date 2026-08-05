@@ -38,10 +38,11 @@ actor StageStore {
     /// suspension in between. Splitting these apart would defeat the whole
     /// point of the version check: two actions could both read the same
     /// version, both pass, and both write.
-    func apply(_ action: StageAction, expectedVersion: Int?, to key: Key,
+    func apply(_ action: StageAction, by actorID: UUID, expectedVersion: Int?, to key: Key,
                participants: [UUID], at now: Date) -> Applied {
         let current = entries[key]?.stage
-        switch StageReducer.reduce(current, action, expectedVersion: expectedVersion, at: now) {
+        switch StageReducer.reduce(current, action, by: actorID,
+                                   expectedVersion: expectedVersion, at: now) {
         case .updated(let stage):
             entries[key] = Entry(stage: stage, participants: participants)
             return .updated(stage)
@@ -70,6 +71,23 @@ actor StageStore {
             guard case let .pair(a, b) = key else { return true }
             return a != userID && b != userID
         }
+    }
+
+    /// A game needs both its players, so it dies when either one goes. 1:1
+    /// stages are already covered by `clearPairs`; this is the group case,
+    /// which otherwise survives an individual signing off. Returns what it
+    /// cleared so the caller can tell the rest of the group.
+    func clearGames(involving userID: UUID) -> [(key: Key, participants: [UUID])] {
+        let ended = entries.compactMap { key, entry -> (key: Key, participants: [UUID])? in
+            guard case .group = key, case .four(let game) = entry.stage.state,
+                  game.red == userID || game.yellow == userID
+            else { return nil }
+            return (key, entry.participants)
+        }
+        for (key, _) in ended {
+            entries[key] = nil
+        }
+        return ended
     }
 
     /// Group stages outlive any individual's presence, so the liveness sweep is

@@ -979,6 +979,10 @@ final class AppModel {
             guard let previous else { return nil }
             switch previous.state {
             case .youtube: return "\(handle) closed the video"
+            case .four(let game):
+                // A finished game already announced its result; taking the
+                // board down afterwards isn't news.
+                return game.outcome == nil ? "\(handle) closed the game" : nil
             }
         }
         switch stage.state {
@@ -987,6 +991,24 @@ final class AppModel {
                 return nil
             }
             return "\(handle) put on \"\(youtube.title)\""
+
+        case .four(let game):
+            guard case .four(let old)? = previous?.state else {
+                return "\(handle) started a game of Four"
+            }
+            // Playing again on top of a finished board.
+            if old.outcome != nil {
+                return game.outcome == nil ? "\(handle) started a game of Four" : nil
+            }
+            // Joining and every drop are silent — they're plain on the board,
+            // and a notice per move would bury the conversation. Only the
+            // result is worth interrupting for, and the sender is the player
+            // who just made it.
+            switch game.outcome {
+            case .won: return "\(handle) won"
+            case .draw: return "Four ended in a draw"
+            case nil: return nil
+            }
         }
     }
 
