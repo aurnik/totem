@@ -51,8 +51,9 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
         let content = UNMutableNotificationContent()
         content.title = handle
-        content.body = "\(handle) signed on"
+        content.body = "signed on"
         content.sound = .default
+        content.threadIdentifier = userID.uuidString
         let request = UNNotificationRequest(
             identifier: "signon-\(userID.uuidString)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)

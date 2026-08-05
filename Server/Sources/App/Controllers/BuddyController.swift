@@ -77,7 +77,8 @@ struct BuddyController: RouteCollection {
             try await reverse.save(on: req.db)
             try await BuddyModel(userID: userID, buddyID: targetID, status: .accepted)
                 .save(on: req.db)
-            await gateway.buddyshipFormed(userID, targetID)
+            await gateway.buddyshipFormed(
+                accepter: userID, accepterHandle: user.handle, requester: targetID)
             return .created
         }
 
@@ -89,7 +90,8 @@ struct BuddyController: RouteCollection {
     /// Accepting marks the original row accepted and creates the reciprocal
     /// accepted row. Only then does either side see the other's presence.
     func accept(req: Request) async throws -> HTTPStatus {
-        let userID = try req.auth.require(UserModel.self).requireID()
+        let user = try req.auth.require(UserModel.self)
+        let userID = try user.requireID()
         guard let id = req.parameters.get("id", as: UUID.self),
               let row = try await BuddyModel.find(id, on: req.db),
               row.$buddy.id == userID,
@@ -110,7 +112,8 @@ struct BuddyController: RouteCollection {
             try await BuddyModel(userID: userID, buddyID: row.$user.id, status: .accepted)
                 .save(on: req.db)
         }
-        await gateway.buddyshipFormed(userID, row.$user.id)
+        await gateway.buddyshipFormed(
+            accepter: userID, accepterHandle: user.handle, requester: row.$user.id)
         return .ok
     }
 }

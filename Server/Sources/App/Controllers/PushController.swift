@@ -90,7 +90,8 @@ actor Pusher {
                 lastSent[throttleKey] = Date()
                 for row in tokens {
                     // A sign-on notice is stale once the buddy signs off again.
-                    await send("\(handle) signed on", expiresIn: 30 * 60, to: row)
+                    await send("signed on", about: userID, handle: handle,
+                               kind: "signon", expiresIn: 30 * 60, to: row)
                 }
             }
         } catch {
@@ -101,29 +102,56 @@ actor Pusher {
     /// A buddy request leaves no trace the recipient will see until they next
     /// open the app, so it isn't gated on a setting or a throttle — the server
     /// refuses duplicate requests, making this at most one alert per requester.
-    func buddyRequested(from handle: String, to targetID: UUID) async {
+    func buddyRequested(from user: User, to targetID: UUID) async {
         guard isConfigured else { return }
         do {
             for row in try await PushTokenModel.query(on: app.db)
                 .filter(\.$user.$id == targetID).all() {
-                await send("\(handle) sent you a friend request", expiresIn: 24 * 60 * 60, to: row)
+                await send("sent you a friend request", about: user.id, handle: user.handle,
+                           kind: "request", expiresIn: 24 * 60 * 60, to: row)
             }
         } catch {
             app.logger.report(error: error)
         }
     }
 
-    private func send(_ title: String, expiresIn: TimeInterval, to row: PushTokenModel) async {
+    /// The requester's side of `buddyRequested`: nothing told them their
+    /// request went through, and a buddyship forms once per pair, so this is
+    /// ungated too.
+    func buddyRequestAccepted(by accepterID: UUID, handle: String, to requesterID: UUID) async {
+        guard isConfigured else { return }
         do {
-            try await app.apns.client.sendAlertNotification(
-                APNSAlertNotification(
-                    alert: .init(title: .raw(title)),
-                    expiration: .timeIntervalSince1970InSeconds(
-                        Int(Date().timeIntervalSince1970 + expiresIn)),
-                    priority: .immediately,
-                    topic: Self.bundleID,
-                    payload: EmptyPayload()),
-                deviceToken: row.token)
+            for row in try await PushTokenModel.query(on: app.db)
+                .filter(\.$user.$id == requesterID).all() {
+                await send("accepted your friend request", about: accepterID, handle: handle,
+                           kind: "accept", expiresIn: 24 * 60 * 60, to: row)
+            }
+        } catch {
+            app.logger.report(error: error)
+        }
+    }
+
+    /// Every alert Totem sends is one person doing one thing, so the handle is
+    /// the title and the body is only the verb — the same shape the client's
+    /// local sign-on notification uses, since a buddy signing on has to read
+    /// identically whether it arrived over the socket or over APNs. Threading
+    /// by the subject's user ID groups everything about one person, and
+    /// collapsing by kind lets a newer alert replace an undelivered older one
+    /// the way the local notification replaces itself by identifier.
+    private func send(_ body: String, about userID: UUID, handle: String, kind: String,
+                      expiresIn: TimeInterval, to row: PushTokenModel) async {
+        do {
+            var notification = APNSAlertNotification(
+                alert: .init(title: .raw(handle), body: .raw(body)),
+                expiration: .timeIntervalSince1970InSeconds(
+                    Int(Date().timeIntervalSince1970 + expiresIn)),
+                priority: .immediately,
+                topic: Self.bundleID,
+                payload: EmptyPayload(),
+                sound: .default,
+                threadID: userID.uuidString)
+            notification.collapseID = "\(kind)-\(userID)"
+            try await app.apns.client.sendAlertNotification(notification, deviceToken: row.token)
         } catch let error as APNSError where error.reason == .badDeviceToken
             || error.reason == .unregistered {
             try? await row.delete(on: app.db)

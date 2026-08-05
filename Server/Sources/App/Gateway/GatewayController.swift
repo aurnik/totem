@@ -75,18 +75,30 @@ struct GatewayController {
         let (connections, pusher) = (self.connections, self.pusher)
         Task {
             guard await !connections.verifyAlive(targetID) else { return }
-            await pusher.buddyRequested(from: user.handle, to: targetID)
+            await pusher.buddyRequested(from: user, to: targetID)
         }
     }
 
     /// After a mutual accept, each party's welcome snapshot predates the
-    /// buddyship — push each one's current presence to the other.
-    func buddyshipFormed(_ a: UUID, _ b: UUID) async {
+    /// buddyship — push each one's current presence to the other. Only the
+    /// requester is learning something they didn't do themselves, so they get
+    /// the same live-socket-then-APNs treatment the request itself got.
+    func buddyshipFormed(accepter: UUID, accepterHandle: String, requester: UUID) async {
         do {
-            await connections.send(.presence(userID: b, presence: try await presence.get(for: b)), to: a)
-            await connections.send(.presence(userID: a, presence: try await presence.get(for: a)), to: b)
+            await connections.send(
+                .presence(userID: requester, presence: try await presence.get(for: requester)),
+                to: accepter)
+            await connections.send(
+                .presence(userID: accepter, presence: try await presence.get(for: accepter)),
+                to: requester)
         } catch {
             app.logger.report(error: error)
+        }
+        let (connections, pusher) = (self.connections, self.pusher)
+        Task {
+            guard await !connections.verifyAlive(requester) else { return }
+            await pusher.buddyRequestAccepted(
+                by: accepter, handle: accepterHandle, to: requester)
         }
     }
 
