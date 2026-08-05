@@ -204,11 +204,18 @@ struct AddBots: AsyncMigration {
     static let geminiID = UUID(uuidString: "B07B07B0-0000-4000-A000-000000000001")!
 
     func prepare(on db: Database) async throws {
+        // A previous run of this migration created the table and then failed
+        // seeding, which leaves the table behind but the migration unrecorded —
+        // so creating it again would fail on "already exists". Dropping first
+        // is safe here and only here: at this point the table holds seed rows
+        // and nothing else.
+        try? await db.schema(BotModel.schema).delete()
         try await db.schema(BotModel.schema)
             .id()
             .field("handle", .string, .required)
             .field("display_name", .string, .required)
             .field("aliases", .string, .required, .sql(.default("[]")))
+            .field("context_aliases", .string)
             .field("kind", .string, .required, .sql(.default("builtin")))
             .field("endpoint", .string)
             .field("secret", .string)
@@ -216,12 +223,15 @@ struct AddBots: AsyncMigration {
             .unique(on: "handle")
             .create()
 
-        if try await BotModel.query(on: db).filter(\.$handle == "gemini").first() == nil {
-            try await BotModel(
-                id: Self.geminiID, handle: "gemini", displayName: "Gemini",
-                aliases: ["@gemini", "@g"]
-            ).create(on: db)
-        }
+        // Seeding goes through BotModel, so every column the model declares has
+        // to exist by now. Splitting a column into a later migration broke this
+        // on any database that had not already run it: the model had the field,
+        // the fresh table did not, and boot died in the migrator.
+        try await BotModel(
+            id: Self.geminiID, handle: "gemini", displayName: "Gemini",
+            aliases: ["@gemini", "@g", "@gemini_", "@g_"],
+            contextAliases: ["@gemini_", "@g_"]
+        ).create(on: db)
     }
 
     func revert(on db: Database) async throws {
@@ -230,9 +240,13 @@ struct AddBots: AsyncMigration {
 }
 
 /// Trailing-underscore tags send the conversation along with the prompt.
+///
+/// Only does anything for a database that ran `AddBots` before it grew the
+/// column — a fresh one already has it, and adding it twice is an error, hence
+/// the tolerated failure rather than an unconditional update.
 struct AddBotContextAliases: AsyncMigration {
     func prepare(on db: Database) async throws {
-        try await db.schema(BotModel.schema).field("context_aliases", .string).update()
+        try? await db.schema(BotModel.schema).field("context_aliases", .string).update()
         if let gemini = try await BotModel.query(on: db).filter(\.$handle == "gemini").first() {
             gemini.aliases = ["@gemini", "@g", "@gemini_", "@g_"]
             gemini.contextAliases = ["@gemini_", "@g_"]
