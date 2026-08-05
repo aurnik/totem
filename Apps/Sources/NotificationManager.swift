@@ -1,19 +1,14 @@
 import Foundation
-import TotemKit
 import UserNotifications
 #if os(iOS)
 import UIKit
 #endif
 
-/// Local sign-on notifications. Throttled to one per buddy per 30 minutes
-/// (spec §7) — unthrottled sign-on alerts are uninstall-inducing. Permission
-/// is requested contextually once buddies exist, never at launch.
+/// Local sign-on notifications, raised on every sign-on. Permission is
+/// requested contextually once buddies exist, never at launch.
 @MainActor
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
-
-    static let throttle = Limits.signOnPushThrottle
-    private var lastNotified: [UUID: Date] = [:]
 
     func activate() {
         UNUserNotificationCenter.current().delegate = self
@@ -43,19 +38,16 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func buddySignedOn(_ userID: UUID, handle: String) {
-        let now = Date()
-        if let last = lastNotified[userID], now.timeIntervalSince(last) < Self.throttle {
-            return
-        }
-        lastNotified[userID] = now
-
         let content = UNMutableNotificationContent()
         content.title = handle
         content.body = "signed on"
         content.sound = .default
         content.threadIdentifier = userID.uuidString
+        // A fresh identifier per alert: reusing one replaces the buddy's
+        // previous notice instead of stacking a new one beside it.
         let request = UNNotificationRequest(
-            identifier: "signon-\(userID.uuidString)", content: content, trigger: nil)
+            identifier: "signon-\(userID.uuidString)-\(UUID().uuidString)",
+            content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 

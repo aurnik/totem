@@ -1,5 +1,6 @@
 import APNSCore
 import Fluent
+import Redis
 import TotemKit
 import Vapor
 import VaporAPNS
@@ -55,7 +56,6 @@ actor Pusher {
     static let bundleID = "com.deadsimple.totem"
 
     private let app: Application
-    private var lastSent: [String: Date] = [:]
 
     init(app: Application) {
         self.app = app
@@ -67,9 +67,8 @@ actor Pusher {
 
     /// Push to every accepted buddy of `userID` who wants sign-on pushes and
     /// isn't currently connected (connected clients get the presence frame
-    /// and raise a local notification themselves). Shares one throttle window
-    /// with the client's local alerts, so a buddy hears about a sign-on at the
-    /// same rate whichever path delivers it.
+    /// and raise a local notification themselves, unthrottled — the window
+    /// below covers only the pushes).
     func buddySignedOn(_ userID: UUID, buddyIDs: [UUID], connections: ConnectionManager) async {
         guard isConfigured else { return }
         do {
@@ -79,15 +78,11 @@ actor Pusher {
                       let buddy = try await UserModel.find(buddyID, on: app.db),
                       buddy.signOnPushes
                 else { continue }
-                let throttleKey = "\(buddyID)-\(userID)"
-                if let last = lastSent[throttleKey],
-                   Date().timeIntervalSince(last) < Limits.signOnPushThrottle {
-                    continue
-                }
                 let tokens = try await PushTokenModel.query(on: app.db)
                     .filter(\.$user.$id == buddyID).all()
-                guard !tokens.isEmpty else { continue }
-                lastSent[throttleKey] = Date()
+                guard !tokens.isEmpty,
+                      await claimPushWindow(recipient: buddyID, subject: userID)
+                else { continue }
                 for row in tokens {
                     // A sign-on notice is stale once the buddy signs off again.
                     await send("signed on", about: userID, handle: handle,
@@ -96,6 +91,27 @@ actor Pusher {
             }
         } catch {
             app.logger.report(error: error)
+        }
+    }
+
+    /// The window's one sign-on push about `subject`, claimed for `recipient`.
+    /// It lives in Redis rather than in memory so a deploy mid-window doesn't
+    /// hand everyone a second push, and `SET NX` means a repeat sign-on can't
+    /// extend the window it's being refused by.
+    private func claimPushWindow(recipient: UUID, subject: UUID) async -> Bool {
+        let key: RedisKey = "signon-push:\(recipient.uuidString):\(subject.uuidString)"
+        do {
+            let result = try await app.redis.set(
+                key, to: "1", onCondition: .keyDoesNotExist,
+                expiration: .seconds(Int(Limits.signOnPushThrottle))
+            ).get()
+            if case .ok = result { return true }
+            return false
+        } catch {
+            // With no window to claim there's no way to promise a rate, and an
+            // unthrottled push is the failure worth avoiding.
+            app.logger.warning("sign-on push throttle unavailable: \(error)")
+            return false
         }
     }
 

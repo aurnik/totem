@@ -141,9 +141,11 @@ public enum Limits {
     public static let maxBuddies = 100
     public static let awayMessageMaxLength = 140
     public static let handleLength = 3...16
-    /// At most one "signed on" alert per buddy per window, local and pushed
-    /// alike — unthrottled sign-on alerts are uninstall-inducing (spec §7).
-    public static let signOnPushThrottle: TimeInterval = 30 * 60
+    /// At most one sign-on *push* per buddy per rolling 15 minutes (spec §7
+    /// asked for 30). Pushes alone, because they interrupt someone who isn't
+    /// using the app; a local alert only reaches a user already watching the
+    /// buddy list, and is raised on every sign-on.
+    public static let signOnPushThrottle: TimeInterval = 15 * 60
     public static let botPromptMaxLength = 2000
     public static let botReplyMaxLength = 1500
     /// Ceilings on the transcript a context tag sends. The newest messages are
