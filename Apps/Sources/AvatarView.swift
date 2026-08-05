@@ -296,7 +296,7 @@ private struct SleepingZs: View {
             let unit = min(size.width, size.height)
             let ink: Color = colorScheme == .dark ? .white : .black
             let halo: Color = colorScheme == .dark ? .black : .white
-            for (x, y, side) in [(0.50, 0.30, 0.13), (0.68, 0.12, 0.19)] {
+            for (x, y, side) in [(0.55, 0.33, 0.13), (0.74, 0.06, 0.21)] {
                 let (left, right) = (x * unit, (x + side) * unit)
                 let (top, bottom) = (y * unit, (y + side) * unit)
                 var path = Path()
