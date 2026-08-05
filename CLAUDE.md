@@ -45,6 +45,11 @@ meaningful release only — each new marketing version re-triggers external Beta
 App Review. The iOS target is iPhone-only and portrait-locked for App Store
 validation; don't reintroduce iPad or landscape support.
 
+To *see* a visual change rather than just compile it: accessibility can't see Totem's windows and
+screenshots grab the wrong space. Build a throwaway SwiftUI harness that compiles the real source
+files and renders them — `ImageRenderer` for plain views, a real window when the view is an
+`NSViewRepresentable` (which `ImageRenderer` can't rasterize).
+
 Commit as the user "aurnik" (git config already set); no Claude attribution.
 
 ## Dev-machine networking constraints (will bite you)
@@ -58,14 +63,41 @@ Commit as the user "aurnik" (git config already set); no Claude attribution.
 Three pieces, one wire protocol:
 
 - **TotemKit/** — shared SPM package used by both server and apps: DTOs (`User`, `Buddy`, `ChatSession`, `Presence`), the WebSocket frame enums (`ClientFrame`/`ServerFrame` in `WireProtocol.swift`, JSON with ISO-8601 dates via `WireCoder`), the client-side `PresenceStateMachine` (pure value type that never reads a clock — keep it that way; it's the unit-tested core), `ReconnectPolicy` (1s→30s backoff), and `SocketClient` (URLSessionWebSocketTask wrapper owning heartbeat + auto-reconnect).
-- **Server/** — Vapor + Fluent/SQLite + Redis. Stateless HTTP for auth/buddies/sessions (`Controllers/`), stateful WebSocket gateway (`Gateway/`). Presence lives only in Redis: one key per user, 90s TTL refreshed by 30s client heartbeats; key expiry *is* the offline timeout. `ConnectionManager` (actor) holds one socket per user and fans out directly (no pub/sub — 100-buddy cap). Auth is a dev-only handle login issuing bearer tokens; Sign in with Apple is a TODO.
+- **Server/** — Vapor + Fluent/SQLite + Redis. Stateless HTTP for auth/buddies/sessions (`Controllers/`), stateful WebSocket gateway (`Gateway/`). Presence lives only in Redis: one key per user, 90s TTL refreshed by 30s client heartbeats; key expiry *is* the offline timeout. `ConnectionManager` (actor) holds one socket per user and fans out directly (no pub/sub — 100-buddy cap). Auth is a dev-only handle login issuing bearer tokens; Sign in with Apple is a TODO. A migration that seeds rows through a model type is coupled to that model's *current* columns, not the schema the migration creates — it passes locally forever because the migration was already recorded before the column was added, then dies in the migrator on any fresh database. Production is the only fresh database in the system, so this class of bug always surfaces there first: verify migrations against a fresh DB, and make later column-adding migrations tolerate an existing column.
 - **Apps/** — xcodegen project (`project.yml`), shared SwiftUI sources with `#if os()` splits. `AppModel` (@Observable, MainActor) is the single client-side state holder: it feeds UI, applies `PresenceStateMachine` effects, and routes socket frames. macOS uses one window per conversation (`WindowGroup(for: UUID.self)`) plus a menu bar extra; iOS pushes conversations in a NavigationStack.
 
 ### Evolving the wire protocol
 
 Adding an **optional** associated value to an existing `ClientFrame`/`ServerFrame` case is compatible in both directions: the encoder omits nil keys entirely, absent keys decode as nil, and unknown keys are ignored. Only **required** new fields and entirely new cases force deploying the server before shipping client builds.
 
+**Removing** a non-optional field from a shared DTO breaks every installed build, and the two paths fail differently: `GET /buddies` hard-fails sign-in with `keyNotFound`, while the `welcome` frame decodes with `try?` and is silently dropped — the app comes up empty with no error anywhere. Ship server and client together, and expire older TestFlight builds so a stale client can't be reinstalled.
+
 State that other users render (avatars) lives on the durable user record and rides the `User` DTO — never in `Presence`, which is a 90s Redis TTL, because offline buddies still have to render. Deliver it over the socket that is already open and authenticated: the `welcome` frame carries the account's own copy, and a fan-out frame (`avatarChanged`, to accepted buddies plus group co-participants) patches everyone else's cached copies. Prefer that to new HTTP round trips or refetching lists on presence transitions.
+
+### Bots and chat extensions
+
+**Bots** (`Server/Sources/App/Bots/`, `TotemKit/Bot.swift`) are tagged in a message and always
+produce a reply: `BotBackend.respond` returns non-optional or throws, and `BotDispatcher` turns every
+throw, timeout, and rate-limit into a bot bubble — no path returns silently. Bots are services, not
+personas: never first person. Bubbles carry icon+name only in groups, never in 1:1, and bots never
+show typing status. Markdown is stripped server-side in the dispatcher (`plainText()`) so every
+future backend inherits the guarantee; clients render plain text.
+
+**The shared stage** (`Gateway/StageStore.swift`, `TotemKit/Stage.swift`) is deliberately not
+last-write-wins. Actions are absolute (`setPlaying(true/false)`), never toggles, so concurrent
+identical intents converge; conditional actions carry the stage version they targeted and are dropped
+if it moved. The read-reduce-write must stay in one actor-isolated step with no suspension point, or
+two actions both pass the version check and both write. Seek is a separate action because
+`setPlaying` no-ops when the state already matches. Extensions declare whether their state is
+disposable (jukebox) or `preservesState` (chess), so a song pick can't bulldoze a game.
+
+**YouTube embedding** constraints, all measured: `loadHTMLString` cannot work (player errors 152/153
+— YouTube requires a real origin), so Vapor hosts the player page at `GET /player`. A web view that
+isn't in a visible window stalls at buffering forever. Player chrome appears for ~4-8s at every
+playback start and no parameter removes it (`showinfo` gone, `modestbranding` deprecated) — it's
+hidden by rendering the iframe taller than the visible box and cropping, which crops non-16:9 video.
+`AVPlayer` is not an option; YouTube's own `youtube-ios-player-helper` is a WKWebView around the same
+IFrame API.
 
 ### Presence liveness (three mechanisms, all server-side in `GatewayController`)
 
@@ -89,6 +121,6 @@ Client transcripts are keyed by **conversation ID**: the peer's user ID for 1:1 
 - Group chats exist in v1 (spec deferred them to v1.1).
 - No server-side message storage (see above).
 - Read state is never sent on the wire, but local unread indicators are fine (bold handle + dark chevron).
-- Sign-on notifications are local while the app is connected (`NotificationManager`, one per buddy per 30 minutes; permission requested only once buddies exist, never at launch — spec §7). Buddies who aren't connected get an APNs push instead (`SignOnPusher` in `PushController.swift`, same 30-minute throttle server-side, per-user `signOnPushes` toggle in Settings), disabled unless `APNS_KEY_PEM`/`APNS_KEY_ID` are in the server env. macOS signs off on sleep so dark wakes can't spam pushes.
+- Sign-on notifications are local while the app is connected (`NotificationManager`, one per buddy per 30 minutes; permission requested only once buddies exist, never at launch — spec §7). Buddies who aren't connected get an APNs push instead (`Pusher` in `PushController.swift`, which also sends friend-request pushes, same 30-minute throttle server-side, per-user `signOnPushes` toggle in Settings), disabled unless `APNS_KEY_PEM`/`APNS_KEY_ID` are in the server env. macOS signs off on sleep so dark wakes can't spam pushes.
 - Never show a default or placeholder rendering of another user's data — a default is only ever shown to its owner in Settings. Where the element also carried information (presence dot, speaker identity), fall back to the pre-feature affordance rather than to nothing.
 - Sounds are stubbed in `SoundPlayer` pending the sound-design pass.
