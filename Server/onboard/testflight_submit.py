@@ -174,6 +174,24 @@ def add_to_group(group_id, build_id):
     return "already attached" if result and "error" in result else "attached"
 
 
+def set_auto_notify(build_id, enabled):
+    """Whether TestFlight emails every tester the moment the build goes live.
+
+    Off unless asked for: builds go out several times a day here, and an inbox
+    that fills with them is one nobody reads on the release that matters.
+    Testers still get the build — silently if their TestFlight auto-updates,
+    otherwise next time they open it — and expiring the older builds means
+    anyone who fell behind is told to update by the app itself rather than by
+    a mail they've learned to ignore. Must run before the build reaches an
+    external group, since that is what sends the mail.
+    """
+    detail = api("GET", f"builds/{build_id}/buildBetaDetail")["data"]["id"]
+    api("PATCH", f"buildBetaDetails/{detail}",
+        {"data": {"id": detail, "type": "buildBetaDetails",
+                  "attributes": {"autoNotifyEnabled": enabled}}})
+    return "testers emailed" if enabled else "silent"
+
+
 def submit_for_review(build_id):
     result = api("POST", "betaAppReviewSubmissions",
                  {"data": {"type": "betaAppReviewSubmissions",
@@ -225,7 +243,7 @@ def notes_for(app, version):
     return previous, "\n".join(titles)
 
 
-def submit(version, notes=None, dry_run=False):
+def submit(version, notes=None, dry_run=False, notify=False):
     app = app_id()
     build = latest_build(app, version)
     build_id = build["id"]
@@ -241,12 +259,13 @@ def submit(version, notes=None, dry_run=False):
     print(f"build {version} ({build_id}) is VALID; {origin}\n")
     print(notes)
     if dry_run:
-        print()
+        print(f"\nnotification: {'testers emailed' if notify else 'silent'}")
         expire_previous(app, version, dry_run=True)
         print("\n(dry run — nothing submitted)")
         return
 
     print(f"\nwhats-new: {set_whats_new(build_id, notes)}")
+    print(f"notification: {set_auto_notify(build_id, notify)}")
     for group in external_groups(app):
         name = group["attributes"]["name"]
         print(f"group {name}: {add_to_group(group['id'], build_id)}")
@@ -267,7 +286,8 @@ if __name__ == "__main__":
             supplied = open(path).read().strip()
             if not supplied:
                 sys.exit(f"{path} is empty — review rejects a build with no notes")
-        submit(version, notes=supplied, dry_run="--dry-run" in sys.argv)
+        submit(version, notes=supplied, dry_run="--dry-run" in sys.argv,
+               notify="--notify" in sys.argv)
     elif "--expire-previous" in sys.argv:
         version = sys.argv[sys.argv.index("--expire-previous") + 1]
         expire_previous(app_id(), version, dry_run="--dry-run" in sys.argv)

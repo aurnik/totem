@@ -27,6 +27,8 @@ S=Server/onboard/.venv/bin/python
 - `$S Server/onboard/testflight_submit.py --commits <build>` — commits this build carries
 - `$S Server/onboard/testflight_submit.py --submit <build> --notes-file notes.txt` — ship it,
   then expire every older build
+- `$S Server/onboard/testflight_submit.py --submit <build> --notes-file notes.txt --notify` —
+  same, but also emails every tester that it's available
 - `$S Server/onboard/testflight_submit.py --expire-previous <build>` — retire older builds on
   their own, for when a submission half-finished
 
@@ -81,8 +83,18 @@ said to go ahead without checking.
 Write the approved text to a file, then
 `--submit <build> --notes-file <path>`. Add `--dry-run` first to see exactly
 what would be sent, including which older builds would be expired. The script
-sets the notes, attaches the build to every external group, files the review
-submission, and then expires every older build.
+sets the notes, silences the release email, attaches the build to every
+external group, files the review submission, and then expires every older
+build.
+
+Releases are **silent by default** (`autoNotifyEnabled: false`). Builds go out
+several times a day here, and an inbox full of them is one nobody reads on the
+release that matters. Testers still get the build — silently if their
+TestFlight auto-updates, otherwise next time they open it — and since older
+builds are expired, anyone who falls behind is told to update by the app
+rather than by a mail they've learned to ignore. Pass `--notify` for a release
+worth interrupting people about; it has to be set before the build reaches an
+external group, which is what sends the mail, so it can't be added afterwards.
 
 That last step matters because the client and server ship together here.
 TestFlight keeps offering a build until it expires, so a tester reinstalling
