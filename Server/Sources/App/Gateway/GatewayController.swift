@@ -134,7 +134,9 @@ struct GatewayController {
             await connections.send(
                 .welcome(self_: current, buddies: snapshot, sessions: sessionInfos,
                          freshSignOn: wasOffline, selfAvatar: avatar,
-                         bots: await bots.all()), to: userID)
+                         bots: await bots.all(),
+                         latestBuild: Environment.get("LATEST_CLIENT_BUILD")),
+                to: userID)
             await fanOut(.presence(userID: userID, presence: current), toBuddiesOf: userID)
             // Buddies' cached lists were fetched at their own launch and can
             // predate this user ever publishing an avatar.

@@ -203,6 +203,29 @@ def submit_for_review(build_id):
     return result["data"]["attributes"].get("betaReviewState", "submitted")
 
 
+def announce_build_to_server(version):
+    """Tell the server which build testers can now install.
+
+    The in-app banner reads this off the welcome frame, so the number has to
+    reach the server's environment — which Railway only re-injects by
+    deploying. That deploy is also what delivers it: every client reconnects,
+    gets a fresh welcome, and the ones left behind start showing the banner.
+    The bounce lands inside the presence grace, so nobody flaps offline.
+
+    Never fatal. It runs after the build is already submitted, and a release
+    that shipped but didn't announce itself is a missing banner, not a broken
+    release — recoverable by setting the variable by hand.
+    """
+    try:
+        subprocess.run(["railway", "variable", "set", f"LATEST_CLIENT_BUILD={version}"],
+                       check=True, capture_output=True, timeout=120)
+        return f"LATEST_CLIENT_BUILD={version}"
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        detail = getattr(e, "stderr", b"") or b""
+        return (f"FAILED ({e}) {detail.decode()[:200]} — set LATEST_CLIENT_BUILD={version} "
+                "on Railway by hand, or the banner won't appear")
+
+
 def expire_build(build_id):
     api("PATCH", f"builds/{build_id}",
         {"data": {"type": "builds", "id": build_id,
@@ -261,6 +284,7 @@ def submit(version, notes=None, dry_run=False, notify=False):
     if dry_run:
         print(f"\nnotification: {'testers emailed' if notify else 'silent'}")
         expire_previous(app, version, dry_run=True)
+        print(f"announce: would set LATEST_CLIENT_BUILD={version} on Railway")
         print("\n(dry run — nothing submitted)")
         return
 
@@ -273,6 +297,7 @@ def submit(version, notes=None, dry_run=False, notify=False):
     # Last, so a failure earlier leaves the old builds installable rather than
     # retiring them in favour of one that never shipped.
     expire_previous(app, version)
+    print(f"announce: {announce_build_to_server(version)}")
 
 
 if __name__ == "__main__":

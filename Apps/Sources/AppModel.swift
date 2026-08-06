@@ -43,6 +43,10 @@ final class AppModel {
     /// bot needs no client build. Used to render a bot's bubbles and to bold
     /// its tag; the server alone decides whether a bot actually answers.
     var bots: [UUID: Bot] = [:]
+    /// Newest build testers can install, as of the last `welcome`. Nil when the
+    /// server hasn't been told one — every comparison against it then fails
+    /// closed, so a server without the variable set simply shows no banner.
+    private(set) var latestBuild: String?
     /// Peers with messages not yet seen. Local-only — never sent over the
     /// wire; the spec's no-read-receipts rule is about the other party.
     var unreadPeers: Set<UUID> = []
@@ -238,6 +242,19 @@ final class AppModel {
             }
         }
     }
+
+    /// Dismissed for this launch only: the update is still waiting next time,
+    /// and a build nobody updates to is one the server has already moved past.
+    var updateBannerDismissed = false
+
+    /// Whether TestFlight is offering something newer than what's running.
+    /// Locally-built copies never qualify — see `BuildStamp`.
+    var updateAvailable: Bool {
+        !updateBannerDismissed
+            && BuildStamp.isOutdated(Self.currentBuild, latestAvailable: latestBuild)
+    }
+
+    private static let currentBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
 
     var isSignedOn: Bool { machine.isSignedOn }
     var isReconnecting: Bool { machine.isReconnecting }
@@ -1120,7 +1137,11 @@ final class AppModel {
 
     private func handle(_ frame: ServerFrame) {
         switch frame {
-        case .welcome(_, let buddies, let sessions, let freshSignOn, let selfAvatar, let bots):
+        case .welcome(_, let buddies, let sessions, let freshSignOn, let selfAvatar, let bots,
+                      let latestBuild):
+            // Describes the server, not this sign-on, so it survives the
+            // session-scoped wipe below alongside the bot registry.
+            self.latestBuild = latestBuild
             reconcileAvatar(remote: selfAvatar)
             // The registry outlives a session — it describes the server, not
             // this sign-on — so it's set before the session-scoped wipe below.

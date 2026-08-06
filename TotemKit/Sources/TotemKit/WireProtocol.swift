@@ -71,11 +71,14 @@ public enum ServerFrame: Codable, Sendable {
     /// published one), so a client reconciles its own without a separate
     /// request. `bots` is the registry of taggable bots this server runs —
     /// clients bold their tags and render their replies from it, and a server
-    /// with none configured simply sends none. Optional associated values
-    /// decode as nil when absent, so this stays readable in both directions
-    /// across versions.
+    /// with none configured simply sends none. `latestBuild` is the newest
+    /// build available to testers, so a client behind it can say so — the
+    /// server is told at release time and sends nothing when it hasn't been.
+    /// Optional associated values decode as nil when absent, so this stays
+    /// readable in both directions across versions.
     case welcome(self_: Presence, buddies: [String: Presence], sessions: [SessionInfo],
-                 freshSignOn: Bool, selfAvatar: Avatar?, bots: [Bot]? = nil)
+                 freshSignOn: Bool, selfAvatar: Avatar?, bots: [Bot]? = nil,
+                 latestBuild: String? = nil)
     /// A (group) session was created that includes this user.
     case sessionStarted(SessionInfo)
     case presence(userID: UUID, presence: Presence)

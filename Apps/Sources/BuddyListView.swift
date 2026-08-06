@@ -5,6 +5,7 @@ import TotemKit
 /// Alphabetical within group, no algorithmic ordering (spec §6).
 struct BuddyListView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     #endif
@@ -28,6 +29,7 @@ struct BuddyListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                updateBanner
                 if !model.isSignedOn {
                     signedOffHeader
                 } else {
@@ -80,6 +82,33 @@ struct BuddyListView: View {
                 ConversationView(conversationID: conversationID)
             }
             #endif
+        }
+    }
+
+    /// Testers aren't emailed about new builds, so this is how they find out.
+    /// One tap to the update, per the fewest-taps rule; the public link opens
+    /// TestFlight straight to Totem whether or not they're already a tester.
+    @ViewBuilder
+    private var updateBanner: some View {
+        if model.updateAvailable {
+            Section {
+                HStack {
+                    Button {
+                        openURL(URL(string: "https://testflight.apple.com/join/7QCwQhqT")!)
+                    } label: {
+                        Label("A newer build is ready in TestFlight",
+                              systemImage: "arrow.down.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    Spacer(minLength: 8)
+                    Button("Dismiss", systemImage: "xmark") {
+                        model.updateBannerDismissed = true
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
