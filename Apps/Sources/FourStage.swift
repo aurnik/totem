@@ -104,8 +104,27 @@ struct FourBoardPlate: Shape {
 /// position.
 struct FourStageView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.stageBox) private var stageBox
     let conversationID: UUID
     let four: FourState
+
+    private static let boardRatio = CGFloat(FourState.columns) / CGFloat(FourState.rows)
+    private static let railWidth: CGFloat = 40
+    private static let railSpacing: CGFloat = 10
+    private static let seatSize: CGFloat = 34
+    /// Both rails plus the view's own horizontal padding — what the board
+    /// doesn't get.
+    private static let boardInset = 24 + 2 * (railWidth + railSpacing)
+
+    /// Nil unless the conversation is too short to give the board its full
+    /// width — a cap bigger than the board would be claimed as an empty band.
+    /// The board is what gives, never the rails beside it, which say whose turn
+    /// it is.
+    private var boardCap: CGFloat? {
+        guard stageBox.width > 0 else { return nil }
+        let natural = (stageBox.width - Self.boardInset) / Self.boardRatio
+        return stageBox.height < natural ? stageBox.height : nil
+    }
 
     /// The piece currently falling. It's drawn separately from the settled ones
     /// so it can be animated into place, and the board skips its slot until it
@@ -127,18 +146,22 @@ struct FourStageView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            GeometryReader { proxy in
-                let geometry = FourGeometry(proxy.size)
-                ZStack {
-                    pieces(geometry)
-                    fallingPiece(geometry)
-                    FourBoardPlate().fill(FourPalette.board, style: FillStyle(eoFill: true))
-                    winLine(geometry)
-                    columns(geometry)
+            HStack(spacing: Self.railSpacing) {
+                rail(.red)
+                GeometryReader { proxy in
+                    let geometry = FourGeometry(proxy.size)
+                    ZStack {
+                        pieces(geometry)
+                        fallingPiece(geometry)
+                        FourBoardPlate().fill(FourPalette.board, style: FillStyle(eoFill: true))
+                        winLine(geometry)
+                        columns(geometry)
+                    }
                 }
+                .aspectRatio(Self.boardRatio, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: boardCap)
+                rail(.yellow)
             }
-            .aspectRatio(CGFloat(FourState.columns) / CGFloat(FourState.rows), contentMode: .fit)
-            .frame(maxWidth: .infinity)
             footer
         }
         .padding(.horizontal, 12)
@@ -213,20 +236,65 @@ struct FourStageView: View {
         .disabled(!isMyTurn)
     }
 
+    // MARK: - Beside the board
+
+    /// Who holds a colour, and whether it's their go. The seat carries the
+    /// identity, so a player without a published avatar falls back to their
+    /// monogram rather than to nothing — losing it would lose who is playing.
+    /// The empty seat still takes its width, so the board doesn't resize under
+    /// the players the moment someone joins.
+    private func rail(_ disc: FourDisc) -> some View {
+        VStack(spacing: 6) {
+            if let player = four.player(disc) {
+                UserAvatar(avatar: model.avatar(of: player),
+                           size: Self.seatSize,
+                           monogram: model.handle(of: player))
+            } else {
+                openSeat
+            }
+            Circle()
+                .fill(FourPalette.disc(disc))
+                .frame(width: 16, height: 16)
+        }
+        .frame(width: Self.railWidth)
+        // Whose move it is, said by the board rather than a caption. Dimming
+        // only ever means "not your go", so a game that hasn't started or has
+        // finished dims neither seat.
+        .opacity(isActive(disc) ? 1 : 0.5)
+        .animation(.easeInOut(duration: 0.2), value: four.turn)
+    }
+
+    /// The seat nobody has taken. A question mark rather than a stand-in face:
+    /// there's no user here yet to render, and the piece below still says which
+    /// colour is going spare.
+    private var openSeat: some View {
+        Circle()
+            .fill(.quaternary)
+            .overlay(
+                Image(systemName: "questionmark")
+                    .font(.system(size: Self.seatSize * 0.45, weight: .semibold))
+                    .foregroundStyle(.secondary))
+            .frame(width: Self.seatSize, height: Self.seatSize)
+    }
+
+    /// Dimming says "not your go", so it only applies to a game in progress —
+    /// before a second player joins and after the result is in, both seats read
+    /// at full strength.
+    private func isActive(_ disc: FourDisc) -> Bool {
+        guard four.outcome == nil, four.yellow != nil else { return true }
+        return four.turn == disc
+    }
+
     // MARK: - Below the board
 
     @ViewBuilder
     private var footer: some View {
         if four.outcome != nil {
             action("Close") { model.closeStage(in: conversationID) }
-        } else if four.yellow == nil {
-            if four.red == me {
-                status("Waiting for another player")
-            } else {
-                action("Join") { model.sendStageAction(.four(.join), in: conversationID) }
-            }
-        } else {
-            status(turnLabel)
+        } else if four.yellow == nil, four.red != me {
+            // The player waiting for an opponent needs no caption — the open
+            // seat beside the board already says what's missing.
+            action("Join") { model.sendStageAction(.four(.join), in: conversationID) }
         }
     }
 
@@ -243,14 +311,6 @@ struct FourStageView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(height: 22)
-    }
-
-    private var turnLabel: String {
-        if isMyTurn { return "Your turn" }
-        guard let mover = four.player(four.turn), let handle = model.handle(of: mover) else {
-            return "Waiting for a move"
-        }
-        return "\(handle)'s turn"
     }
 
     // MARK: - The falling piece

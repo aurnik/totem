@@ -14,6 +14,7 @@ enum YouTubeExtension: ChatExtension {
 /// streams through Totem.
 struct YouTubeStageView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.stageBox) private var stageBox
     let conversationID: UUID
     let youtube: YouTubeState
 
@@ -65,7 +66,7 @@ struct YouTubeStageView: View {
             }
         }
         .aspectRatio(16 / 9, contentMode: .fit)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: heightCap)
         .background {
             GeometryReader { proxy in
                 Color.clear
@@ -102,6 +103,14 @@ struct YouTubeStageView: View {
             .transition(.opacity)
             .allowsHitTesting(false)
         }
+    }
+
+    /// Nil unless the conversation is too short to give the video its full
+    /// width — a cap bigger than the picture would be claimed as empty bands.
+    private var heightCap: CGFloat? {
+        guard stageBox.width > 0 else { return nil }
+        let natural = stageBox.width * 9 / 16
+        return stageBox.height < natural ? stageBox.height : nil
     }
 
     private var currentPosition: Double {

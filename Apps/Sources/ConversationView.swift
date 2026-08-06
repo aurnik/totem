@@ -14,6 +14,16 @@ struct ConversationView: View {
     @State private var showingYouTube = false
     @State private var showingMembers = false
     @State private var showingActions = false
+    /// Measured, not assumed: this is what shrinks when the keyboard opens,
+    /// and the stage shrinking with it is the point.
+    @State private var conversationSize: CGSize = .zero
+
+    /// Rather less than half the conversation, so a stage never leaves the
+    /// chat a sliver. Only bites when space is tight — with the keyboard down
+    /// it's larger than any stage asks for, and is then not applied at all.
+    private var stageBox: CGSize {
+        CGSize(width: conversationSize.width, height: conversationSize.height * 0.45)
+    }
 
     private var group: SessionInfo? {
         model.groupSessions[conversationID]
@@ -83,18 +93,19 @@ struct ConversationView: View {
                 memberList(group)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            // Above the voice strip, which comes and goes: reflowing the stage
-            // would restart the video every time someone started talking.
-            if let stage = model.stages[conversationID] {
-                StageArea(conversationID: conversationID, stage: stage)
-            }
             // Also shown while broadcasting with no one talking back — the
             // speaker is exactly who needs to know a listener can't hear.
             if !speakers.isEmpty || (micIsLive && !mutedListenerNames.isEmpty) {
                 speakersSection
             }
             transcript
-            composer
+        }
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { conversationSize = proxy.size }
+                    .onChange(of: proxy.size) { _, new in conversationSize = new }
+            }
         }
         .overlay {
             if showingActions {
@@ -373,63 +384,81 @@ struct ConversationView: View {
 
     private var transcript: some View {
         let transcript = model.transcripts[conversationID] ?? []
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(transcript.enumerated()), id: \.element.id) { index, item in
-                        Group {
-                            switch item {
-                            case .message(let message):
-                                let isMine = message.senderID == model.currentUser?.id
-                                let bot = model.bot(withID: message.senderID)
-                                MessageRow(
-                                    message: message,
-                                    isMine: isMine,
-                                    senderName: (group != nil && !isMine && bot == nil)
-                                        ? model.handle(of: message.senderID) : nil,
-                                    senderAvatar: (group != nil && !isMine)
-                                        ? model.avatar(of: message.senderID) : nil,
-                                    bot: bot,
-                                    botIsLabelled: group != nil,
-                                    botAliases: model.botAliases,
-                                    recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
-                                )
-                            case .notice(_, let text, _):
-                                Text(text)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .center)
-                                    .padding(.vertical, 8)
-                            }
-                        }
-                        .id(item.id)
-                        .modifier(PopInEffect(
-                            // Only genuinely-new messages pop; notices appear
-                            // immediately and older items render statically.
-                            enabled: popInEnabled(item),
-                            anchor: anchor(for: item)
-                        ))
-                    }
-                    if group == nil && model.isTyping(conversationID) {
-                        HStack {
-                            TypingIndicatorBubble()
-                            Spacer()
-                        }
-                        .id("typingIndicator")
-                        .modifier(PopInEffect(enabled: true, anchor: .bottomLeading))
-                        .onAppear {
-                            withAnimation { proxy.scrollTo("typingIndicator", anchor: .bottom) }
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(transcript.enumerated()), id: \.element.id) { index, item in
+                    Group {
+                        switch item {
+                        case .message(let message):
+                            let isMine = message.senderID == model.currentUser?.id
+                            let bot = model.bot(withID: message.senderID)
+                            MessageRow(
+                                message: message,
+                                isMine: isMine,
+                                senderName: (group != nil && !isMine && bot == nil)
+                                    ? model.handle(of: message.senderID) : nil,
+                                senderAvatar: (group != nil && !isMine)
+                                    ? model.avatar(of: message.senderID) : nil,
+                                bot: bot,
+                                botIsLabelled: group != nil,
+                                botAliases: model.botAliases,
+                                recencyFraction: Self.recencyFraction(index: index, count: transcript.count)
+                            )
+                        case .notice(_, let text, _):
+                            Text(text)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 8)
                         }
                     }
+                    .id(item.id)
+                    .modifier(PopInEffect(
+                        // Only genuinely-new messages pop; notices appear
+                        // immediately and older items render statically.
+                        enabled: popInEnabled(item),
+                        anchor: anchor(for: item)
+                    ))
                 }
-                .padding(12)
-            }
-            .onChange(of: transcript.count) {
-                if let last = transcript.last {
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                if group == nil && model.isTyping(conversationID) {
+                    HStack {
+                        TypingIndicatorBubble()
+                        Spacer()
+                    }
+                    .id("typingIndicator")
+                    .modifier(PopInEffect(enabled: true, anchor: .bottomLeading))
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            // Breathing room under the newest bubble at rest.
+            .padding(.bottom, 10)
         }
+        // Keeps the newest message in view, on open and as messages
+        // arrive, without a scrollTo. `scrollTo(_:anchor: .bottom)` aligns
+        // the target with the scroll view's *bounds*, which is below the
+        // composer — it scrolls a bar's height too far and drags the tail
+        // of the transcript into the blur. Resting here instead leaves the
+        // newest message crisp, since the edge effect only blurs content
+        // actually underneath a bar.
+        .defaultScrollAnchor(.bottom)
+        // Both the stage and the composer hang off the transcript rather
+        // than stacking around it, so messages scroll under them and blur
+        // out at each edge. The stage also keeps its place in the view tree
+        // whatever else comes and goes, so the player is never rebuilt
+        // mid-video.
+        .modifier(ScrollEdgeBar(edge: .top) {
+            if let stage = model.stages[conversationID] {
+                StageArea(conversationID: conversationID, stage: stage)
+                    .environment(\.stageBox, stageBox)
+            }
+        })
+        .modifier(ScrollEdgeBar(edge: .bottom) { composer })
+        // A swipe down the transcript puts the keyboard away, which is the
+        // only thing that reclaims the screen when a stage and the keyboard
+        // are up at once. Interactively rather than immediately so the
+        // keyboard tracks the finger and a short scroll doesn't lose it.
+        .scrollDismissesKeyboard(.interactively)
     }
 
     /// 1 for the newest message, easing toward 0 over the last 25 — drives the
