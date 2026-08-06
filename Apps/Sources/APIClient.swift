@@ -49,8 +49,7 @@ struct APIClient {
     /// Throws `URLError.resourceUnavailable` (404) when the server has no
     /// YouTube key configured — the picker falls back to pasted links.
     func searchYouTube(_ query: String) async throws -> [YouTubeVideo] {
-        let escaped = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        return try await get("youtube/search?q=\(escaped)")
+        try await get("youtube/search", query: [.init(name: "q", value: query)])
     }
 
     /// The stage's player page, which must be served from a real HTTP origin —
@@ -91,8 +90,13 @@ struct APIClient {
 
     private struct EmptyResponse: Codable {}
 
-    private func request(_ path: String, method: String, body: (some Encodable)?) throws -> URLRequest {
-        var request = URLRequest(url: baseURL.appending(path: path))
+    /// Query items go through `appending(queryItems:)`, never into `path` —
+    /// `appending(path:)` escapes the "?" and the whole thing lands in the path.
+    private func request(_ path: String, query: [URLQueryItem] = [],
+                         method: String, body: (some Encodable)?) throws -> URLRequest {
+        var url = baseURL.appending(path: path)
+        if !query.isEmpty { url.append(queryItems: query) }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -117,8 +121,8 @@ struct APIClient {
         return try WireCoder.decoder().decode(T.self, from: data)
     }
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
-        try await run(request(path, method: "GET", body: String?.none))
+    private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
+        try await run(request(path, query: query, method: "GET", body: String?.none))
     }
 
     private func post<T: Decodable>(_ path: String, body: (some Encodable)?) async throws -> T {
