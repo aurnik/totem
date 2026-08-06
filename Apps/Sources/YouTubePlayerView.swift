@@ -26,6 +26,10 @@ struct YouTubePlayerView {
     /// drift.
     private static let driftTolerance: Double = 3
 
+    /// Player states a play command can still move: unstarted, paused, cued.
+    /// Buffering is already on its way, and ended is the stage's business.
+    private static let stalledStates: Set<Int> = [-1, 2, 5]
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
@@ -50,7 +54,10 @@ struct YouTubePlayerView {
         webView.isUserInteractionEnabled = false
         #endif
         context.coordinator.webView = webView
-        context.coordinator.applied = .init(videoID: youtube.videoID, isPlaying: youtube.isPlaying,
+        // isPlaying starts false whatever the stage says: the page's own
+        // autoplay is one shot, and seeding the intent here would make the
+        // first reconcile a no-op and leave nothing to re-issue it.
+        context.coordinator.applied = .init(videoID: youtube.videoID, isPlaying: false,
                                            positionAt: youtube.positionAt)
         webView.load(URLRequest(url: initialURL))
         return webView
@@ -82,6 +89,9 @@ struct YouTubePlayerView {
         var webView: WKWebView?
         var applied = Applied(videoID: "", isPlaying: false, positionAt: .distantPast)
         private var ready = false
+        /// The player's own last report, as opposed to `applied`, which is what
+        /// we asked for. -1 is the API's "unstarted".
+        private var playerState = -1
         /// Set while a video change is in flight: the player reports the old
         /// previous state briefly, and acting on it would fight the new video.
         private var loading = false
@@ -135,12 +145,16 @@ struct YouTubePlayerView {
         }
 
         private func handleState(_ state: Int) {
+            playerState = state
             switch state {
             case 0:
                 // Ended. Every client with the chat open reports this; the
                 // server keeps the first and rejects the rest.
                 parent.onEnded()
-            case 1, 2:
+            case 1, 2, 5:
+                // Cued (5) counts as settled too: a load that comes to rest
+                // without playing is still done loading, and leaving `loading`
+                // set would gate the retry below off forever.
                 loading = false
                 applied.isPlaying = state == 1
             default:
@@ -151,6 +165,15 @@ struct YouTubePlayerView {
         private func handleTime(_ time: Double) {
             parent.onTime(time)
             guard !loading, parent.youtube.isPlaying, let webView else { return }
+            // A play that never took — the window wasn't visible yet, or the
+            // page's one-shot autoplay was refused — leaves the stage playing
+            // and this player sitting still. The tick is the only thing that
+            // runs regardless of whether SwiftUI re-renders, so it's what gets
+            // to notice.
+            if YouTubePlayerView.stalledStates.contains(playerState) {
+                webView.evaluateJavaScript("cmdPlay()")
+                return
+            }
             let target = parent.youtube.position(at: Date())
             if abs(target - time) > YouTubePlayerView.driftTolerance {
                 webView.evaluateJavaScript("cmdSeek(\(target))")
