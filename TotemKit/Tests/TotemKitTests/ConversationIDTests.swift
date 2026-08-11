@@ -1,0 +1,46 @@
+import XCTest
+@testable import TotemKit
+
+final class ConversationIDTests: XCTestCase {
+    let a = UUID(uuidString: "0919FA5F-5C1B-49D7-888D-F4AB37000ED6")!
+    let b = UUID(uuidString: "ABC5AD32-21AA-4B62-A42C-ED5EA545BDE4")!
+    let c = UUID(uuidString: "3FF771BA-8C83-4060-8CA6-711EFD5B2BB3")!
+
+    /// Pinned against an independent Python implementation of the same
+    /// derivation (RFC 4122 v5 over namespace + sorted participant bytes).
+    /// If these move, every existing conversation re-keys — the fix is in
+    /// whatever changed the algorithm, never in this file.
+    func testGoldenValues() {
+        XCTAssertEqual(ConversationID.derive([a, b]),
+                       UUID(uuidString: "A97C1A62-6535-5BD0-9AE3-48C692F5647B"))
+        XCTAssertEqual(ConversationID.derive([a, b, c]),
+                       UUID(uuidString: "5993B242-7538-5319-BA66-DEBF4A0A13F4"))
+    }
+
+    func testOrderInsensitive() {
+        XCTAssertEqual(ConversationID.derive([a, b]), ConversationID.derive([b, a]))
+        XCTAssertEqual(ConversationID.derive([a, b, c]), ConversationID.derive([c, b, a]))
+    }
+
+    func testDuplicateInsensitive() {
+        XCTAssertEqual(ConversationID.derive([a, b, b]), ConversationID.derive([a, b]))
+    }
+
+    func testPairIsNotItsSuperset() {
+        XCTAssertNotEqual(ConversationID.derive([a, b]), ConversationID.derive([a, b, c]))
+    }
+
+    func testDistinctSetsDiffer() {
+        XCTAssertNotEqual(ConversationID.derive([a, b]), ConversationID.derive([a, c]))
+        XCTAssertNotEqual(ConversationID.derive([a, b]), ConversationID.derive([b, c]))
+    }
+
+    /// The result must itself be a well-formed RFC 4122 v5 UUID — the version
+    /// nibble is how anyone can tell a derived conversation ID from the v4s
+    /// that user IDs and message IDs are.
+    func testVersionAndVariantBits() {
+        let derived = ConversationID.derive([a, b]).uuid
+        XCTAssertEqual(derived.6 >> 4, 5)
+        XCTAssertEqual(derived.8 >> 6, 0b10)
+    }
+}
