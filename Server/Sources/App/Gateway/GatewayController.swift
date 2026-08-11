@@ -13,6 +13,7 @@ struct GatewayController {
     let bots: BotRegistry
 
     var presence: PresenceStore { PresenceStore(redis: app.redis) }
+    var sittings: SittingStore { SittingStore(redis: app.redis) }
     var db: Database { app.db }
 
     /// Built per use rather than stored: the dispatcher needs a way back in to
@@ -61,7 +62,6 @@ struct GatewayController {
                         await self.goOffline(userID: userID)
                     }
                 }
-                await self.reapAbandonedStages()
             }
         }
     }
@@ -84,6 +84,14 @@ struct GatewayController {
     /// requester is learning something they didn't do themselves, so they get
     /// the same live-socket-then-APNs treatment the request itself got.
     func buddyshipFormed(accepter: UUID, accepterHandle: String, requester: UUID) async {
+        // The pair's conversation exists from the moment it *could* be used:
+        // a derived ID arriving on the wire can't be reversed into its
+        // participants, so the row must predate anyone naming it.
+        do {
+            _ = try await conversation(for: [accepter, requester])
+        } catch {
+            app.logger.report(error: error)
+        }
         do {
             await connections.send(
                 .presence(userID: requester, presence: try await presence.get(for: requester)),
@@ -125,10 +133,12 @@ struct GatewayController {
             for id in buddyIDs {
                 snapshot[id.uuidString] = try await presence.get(for: id)
             }
-            let groupSessions = try await openGroupSessions(of: userID)
             var sessionInfos: [SessionInfo] = []
-            for session in groupSessions {
-                sessionInfos.append(try await sessionInfo(session, on: db))
+            for (id, sitting) in try await sittings.all()
+            where sitting.participants.count > 2 && sitting.participants.contains(userID) {
+                sessionInfos.append(try await sessionInfo(
+                    id: id, participants: sitting.participants,
+                    startedAt: sitting.startedAt, on: db))
             }
             let avatar = user.dto.avatar
             await connections.send(
@@ -208,22 +218,45 @@ struct GatewayController {
         do {
             try await presence.markOffline(for: userID)
             await fanOut(.presence(userID: userID, presence: .offline), toBuddiesOf: userID)
-            try await closeOpenSessions(of: userID)
+            await endSittings(involving: userID)
             // The peer clears its own copy off the offline presence frame, so
             // this needs no fan-out of its own.
             await stages.clearPairs(involving: userID)
             // A group game does need one: nothing else tells the people still
             // in the chat that a player just left. Unattributed, so it posts no
             // notice — the sign-off notice already says what happened.
-            for (key, participants) in await stages.clearGames(involving: userID) {
-                guard case .group(let sessionID) = key else { continue }
+            for (conversationID, participants) in await stages.clearGames(involving: userID) {
                 for participant in participants {
                     await connections.send(
-                        .stage(conversationID: sessionID, senderID: nil, stage: nil), to: participant)
+                        .stage(conversationID: conversationID, senderID: nil, stage: nil),
+                        to: participant)
                 }
             }
         } catch {
             app.logger.report(error: error)
+        }
+    }
+
+    /// A sitting ends when fewer than two participants remain online: for a
+    /// pair that's either party leaving — the old 1:1 auto-archive — and for a
+    /// group it's the single-sitting rule, since a conversation one person is
+    /// sitting in alone isn't one. Presence is the judge, so a member inside
+    /// the reconnect grace window still counts as present and keeps the
+    /// sitting alive, exactly as they keep their own transcripts.
+    private func endSittings(involving userID: UUID) async {
+        let all = (try? await sittings.all()) ?? [:]
+        for (conversationID, sitting) in all where sitting.participants.contains(userID) {
+            var online = 0
+            for participant in sitting.participants {
+                let state = (try? await presence.get(for: participant))?.state ?? .offline
+                if state != .offline { online += 1 }
+            }
+            guard online < 2 else { continue }
+            try? await sittings.close(conversationID)
+            await stages.clear(conversationID)
+            for participant in sitting.participants where participant != userID {
+                await connections.send(.sessionClosed(sessionID: conversationID), to: participant)
+            }
         }
     }
 
@@ -285,10 +318,10 @@ struct GatewayController {
 
             case .sendSessionAudio(let sessionID, let chunk):
                 guard chunk.count <= AudioWire.chunkMaxBytes,
-                      let session = try await openSession(sessionID, memberedBy: userID)
+                      let conversation = try await openConversation(sessionID, memberedBy: userID)
                 else { return }
                 await send(.audio(conversationID: sessionID, senderID: userID, chunk: chunk),
-                           toMembersOf: session, except: userID)
+                           toParticipantsOf: conversation, except: userID)
 
             case .setAudioMuted(let recipientID, let muted):
                 guard try await areAcceptedBuddies(userID, recipientID) else { return }
@@ -297,10 +330,10 @@ struct GatewayController {
                     to: recipientID)
 
             case .setSessionAudioMuted(let sessionID, let muted):
-                guard let session = try await openSession(sessionID, memberedBy: userID)
+                guard let conversation = try await openConversation(sessionID, memberedBy: userID)
                 else { return }
                 await send(.audioMuted(conversationID: sessionID, userID: userID, muted: muted),
-                           toMembersOf: session, except: userID)
+                           toParticipantsOf: conversation, except: userID)
 
             case .stageAction(let conversationID, let action, let expectedVersion):
                 try await applyStageAction(action, expectedVersion: expectedVersion,
@@ -346,34 +379,38 @@ struct GatewayController {
             await connections.send(.error("Message not delivered — they're away."), to: senderID)
             return
         }
-        let session = try await openSession(between: senderID, and: recipientID)
-        let sessionID = try session.requireID()
+        let conversation = try await conversation(for: [senderID, recipientID])
+        let conversationID = try conversation.requireID()
+        // Traffic opens the sitting; its death on either party's sign-off is
+        // what tells the peer to drop the conversation's live ephemera.
+        try await sittings.open(
+            conversationID, participants: conversation.participants, at: Date())
         let message = ChatMessage(
-            id: UUID(), sessionID: sessionID,
+            id: UUID(), sessionID: conversationID,
             senderID: senderID, body: body, sentAt: Date(), dictated: dictated)
         await connections.send(.message(message), to: recipientID)
         await connections.send(
             .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
         // A refused message never reaches a bot — the guards above mean this
         // only runs for a message that was actually delivered.
-        botDispatcher.dispatch(body: body, from: senderID, sessionID: sessionID,
+        botDispatcher.dispatch(body: body, from: senderID, sessionID: conversationID,
                                context: botContext)
     }
 
     /// Group message: relay to every connected member, store nothing.
-    /// Offline members miss it — session-scoped ephemerality.
+    /// Offline members miss it — sitting-scoped ephemerality.
     private func relaySessionMessage(
         from senderID: UUID, sessionID: UUID, body: String, clientMessageID: UUID,
         dictated: Bool?, botContext: [BotContextMessage]?
     ) async throws {
-        guard let session = try await openSession(sessionID, memberedBy: senderID) else {
+        guard let conversation = try await openConversation(sessionID, memberedBy: senderID) else {
             await connections.send(.error("No such session."), to: senderID)
             return
         }
         let message = ChatMessage(
             id: UUID(), sessionID: sessionID, senderID: senderID, body: body, sentAt: Date(),
             dictated: dictated)
-        await send(.message(message), toMembersOf: session, except: senderID)
+        await send(.message(message), toParticipantsOf: conversation, except: senderID)
         await connections.send(
             .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
         botDispatcher.dispatch(body: body, from: senderID, sessionID: sessionID,
@@ -390,15 +427,15 @@ struct GatewayController {
     /// for `message`.
     private func sendBotMessage(botID: UUID, sessionID: UUID, text: String) async {
         // Everyone may have signed off during the round trip, which ends the
-        // session. Nobody is listening, so there is nothing to say.
-        guard let session = try? await SessionModel.find(sessionID, on: db),
-              session.endedAt == nil
+        // sitting. Nobody is listening, so there is nothing to say.
+        guard let conversation = try? await ConversationModel.find(sessionID, on: db),
+              (try? await sittings.get(sessionID)) != nil
         else { return }
         let message = ChatMessage(
             id: UUID(), sessionID: sessionID, senderID: botID, body: text, sentAt: Date())
-        let participants = session.participants
+        let participants = conversation.participants
         for participant in participants {
-            let conversationID = session.isGroup
+            let conversationID = conversation.isGroup
                 ? sessionID
                 : (participants.first { $0 != participant } ?? participant)
             await connections.send(
@@ -409,32 +446,35 @@ struct GatewayController {
     // MARK: - Stage
 
     /// A stage lives in one of two shapes, and the wire doesn't say which:
-    /// clients send the same conversation key they render by, so a group
-    /// session wins if the ID names one the sender belongs to, and otherwise
-    /// it's read as a buddy's user ID.
+    /// clients send the same conversation key they render by, so a live group
+    /// wins if the ID names one the sender belongs to, and otherwise it's
+    /// read as a buddy's user ID.
     private enum StageConversation {
-        case group(SessionModel)
+        case group(ConversationModel)
         case pair(peerID: UUID)
     }
 
     private func stageConversation(_ conversationID: UUID, for userID: UUID) async throws -> StageConversation? {
-        if let session = try await openSession(conversationID, memberedBy: userID) {
-            return .group(session)
+        if let conversation = try await openConversation(conversationID, memberedBy: userID),
+           conversation.isGroup {
+            return .group(conversation)
         }
         guard try await areAcceptedBuddies(userID, conversationID) else { return nil }
         return .pair(peerID: conversationID)
     }
 
-    private func stageKey(_ conversation: StageConversation, actedBy userID: UUID) -> StageStore.Key? {
+    /// The store's key is the derived conversation ID for both shapes — for a
+    /// pair it's computed here, since the wire still names the peer instead.
+    private func stageKey(_ conversation: StageConversation, actedBy userID: UUID) -> UUID? {
         switch conversation {
-        case .group(let session): (try? session.requireID()).map { .group($0) }
-        case .pair(let peerID): .forPair(userID, peerID)
+        case .group(let conversation): conversation.id
+        case .pair(let peerID): ConversationID.derive([userID, peerID])
         }
     }
 
     private func stageParticipants(_ conversation: StageConversation, actedBy userID: UUID) -> [UUID] {
         switch conversation {
-        case .group(let session): session.participants
+        case .group(let conversation): conversation.participants
         case .pair(let peerID): [userID, peerID]
         }
     }
@@ -475,11 +515,12 @@ struct GatewayController {
     private func sendStage(_ stage: Stage?, in conversation: StageConversation,
                            from senderID: UUID?, actedBy userID: UUID) async {
         switch conversation {
-        case .group(let session):
-            guard let sessionID = try? session.requireID() else { return }
-            for participant in session.participants {
+        case .group(let group):
+            guard let conversationID = try? group.requireID() else { return }
+            for participant in group.participants {
                 await connections.send(
-                    .stage(conversationID: sessionID, senderID: senderID, stage: stage), to: participant)
+                    .stage(conversationID: conversationID, senderID: senderID, stage: stage),
+                    to: participant)
             }
         case .pair(let peerID):
             await connections.send(
@@ -489,89 +530,52 @@ struct GatewayController {
         }
     }
 
-    /// Group stages survive their participants signing off, so without this
-    /// they'd accumulate for the life of the process.
-    private func reapAbandonedStages() async {
-        for (key, participants) in await stages.groupEntries() {
-            var anyConnected = false
-            for id in participants {
-                if await connections.isConnected(id) {
-                    anyConnected = true
-                    break
-                }
-            }
-            if !anyConnected {
-                await stages.clear(key)
-            }
-        }
-    }
-
-    func sessionInfo(_ session: SessionModel, on db: Database) async throws -> SessionInfo {
+    func sessionInfo(id: UUID, participants: [UUID], startedAt: Date,
+                     on db: Database) async throws -> SessionInfo {
         let users = try await UserModel.query(on: db)
-            .filter(\.$id ~~ session.participants)
+            .filter(\.$id ~~ participants)
             .all()
-        return SessionInfo(session: session.dto, participants: users.map(\.dto))
+        return SessionInfo(
+            session: ChatSession(id: id, participantIDs: participants, startedAt: startedAt),
+            participants: users.map(\.dto))
     }
 
-    /// An open session the user belongs to. Callers disagree on whether a miss
-    /// deserves an error frame — messages answer, audio stays silent — so this
-    /// only reports the miss.
-    private func openSession(_ sessionID: UUID, memberedBy userID: UUID) async throws -> SessionModel? {
-        guard let session = try await SessionModel.find(sessionID, on: db),
-              session.includes(userID), session.endedAt == nil
+    /// A conversation the user belongs to whose sitting is live. Callers
+    /// disagree on whether a miss deserves an error frame — messages answer,
+    /// audio stays silent — so this only reports the miss.
+    private func openConversation(_ id: UUID, memberedBy userID: UUID) async throws -> ConversationModel? {
+        guard let conversation = try await ConversationModel.find(id, on: db),
+              conversation.includes(userID),
+              try await sittings.get(id) != nil
         else { return nil }
-        return session
+        return conversation
     }
 
-    private func send(_ frame: ServerFrame, toMembersOf session: SessionModel,
+    private func send(_ frame: ServerFrame, toParticipantsOf conversation: ConversationModel,
                       except senderID: UUID) async {
-        for participant in session.participants where participant != senderID {
+        for participant in conversation.participants where participant != senderID {
             await connections.send(frame, to: participant)
         }
     }
 
-    private func openGroupSessions(of userID: UUID) async throws -> [SessionModel] {
-        try await SessionModel.query(on: db)
-            .filter(\.$endedAt == nil)
-            .all()
-            .filter { $0.isGroup && $0.includes(userID) }
-    }
+    // MARK: - Conversations
 
-    // MARK: - Sessions
-
-    /// A group's `participant_a`/`participant_b` hold its first two members, so
-    /// the pair columns alone can't tell a 1:1 apart from a group that happens
-    /// to start with the same two people — and matching one stamps private
-    /// messages with the group's session ID, which is how clients key them.
-    /// `participants` is the source of truth, so the shape is filtered there.
-    func openSession(between a: UUID, and b: UUID) async throws -> SessionModel {
-        let matches = try await SessionModel.query(on: db)
-            .filter(\.$endedAt == nil)
-            .group(.or) { or in
-                or.group(.and) { $0.filter(\.$participantA == a).filter(\.$participantB == b) }
-                or.group(.and) { $0.filter(\.$participantA == b).filter(\.$participantB == a) }
-            }
-            .all()
-        if let existing = matches.first(where: { !$0.isGroup }) {
+    /// Find-or-create for the combination's one permanent row. A lost create
+    /// race is indistinguishable from the row having existed all along.
+    func conversation(for participants: [UUID]) async throws -> ConversationModel {
+        let id = ConversationID.derive(participants)
+        if let existing = try await ConversationModel.find(id, on: db) {
             return existing
         }
-        let session = SessionModel(participants: [a, b])
-        try await session.save(on: db)
-        return session
-    }
-
-    /// Either party going offline ends a 1:1 session for both (spec §2, §6).
-    /// Group sessions outlive individual members' presence in v1.
-    private func closeOpenSessions(of userID: UUID) async throws {
-        let open = try await SessionModel.query(on: db)
-            .filter(\.$endedAt == nil)
-            .all()
-            .filter { !$0.isGroup && $0.includes(userID) }
-        for session in open {
-            session.endedAt = Date()
-            try await session.save(on: db)
-            await connections.send(.sessionClosed(sessionID: try session.requireID()),
-                                   to: session.peer(of: userID))
+        let conversation = ConversationModel(participants: participants)
+        do {
+            try await conversation.create(on: db)
+            return conversation
+        } catch {
+            if let existing = try await ConversationModel.find(id, on: db) {
+                return existing
+            }
+            throw error
         }
     }
 
@@ -601,11 +605,12 @@ struct GatewayController {
     }
 
     /// Everyone who renders this user right now: accepted buddies plus
-    /// co-participants of open group sessions, who may not be buddies at all.
+    /// co-participants of live group sittings, who may not be buddies at all.
     func fanOutAvatar(_ avatar: Avatar, of userID: UUID) async {
         var recipients = Set((try? await acceptedBuddyIDs(of: userID)) ?? [])
-        for session in (try? await openGroupSessions(of: userID)) ?? [] {
-            recipients.formUnion(session.participants)
+        for (_, sitting) in (try? await sittings.all()) ?? [:]
+        where sitting.participants.count > 2 && sitting.participants.contains(userID) {
+            recipients.formUnion(sitting.participants)
         }
         recipients.remove(userID)
         for id in recipients {

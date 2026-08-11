@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import TotemKit
 import Vapor
 
@@ -129,6 +130,85 @@ struct AddSessionParticipants: AsyncMigration {
 
     func revert(on db: Database) async throws {
         try await db.schema(SessionModel.schema).deleteField("participants").update()
+    }
+}
+
+/// A conversation is its participant set, and its ID is derived from it
+/// (`ConversationID.derive`), so any combination of people names exactly one
+/// row. Rows are permanent and idempotent — creating the same combination
+/// twice returns the same row — and carry no lifetime state: whether a
+/// conversation is *live* is a fact about the present, kept in `SittingStore`.
+final class ConversationModel: Model, @unchecked Sendable {
+    static let schema = "conversations"
+
+    @ID(custom: "id", generatedBy: .user) var id: UUID?
+    @Field(key: "participants") var participantsJSON: String
+    @Timestamp(key: "created_at", on: .create) var createdAt: Date?
+
+    init() {}
+
+    init(participants: [UUID]) {
+        precondition(participants.count >= 2)
+        self.id = ConversationID.derive(participants)
+        self.participants = participants
+    }
+
+    var participants: [UUID] {
+        get {
+            (try? JSONDecoder().decode([UUID].self, from: Data(participantsJSON.utf8))) ?? []
+        }
+        set {
+            participantsJSON = String(
+                decoding: (try? JSONEncoder().encode(newValue)) ?? Data("[]".utf8), as: UTF8.self)
+        }
+    }
+
+    var isGroup: Bool { participants.count > 2 }
+
+    func includes(_ userID: UUID) -> Bool {
+        participants.contains(userID)
+    }
+}
+
+/// Creates `conversations` and backfills a pair conversation per accepted
+/// buddyship, so every 1:1 a client can open already has its row — a derived
+/// ID arriving on the wire can't be reversed into participants, so the row
+/// has to exist before anyone names it. Reads and writes raw SQL throughout:
+/// seeding through a model type couples the migration to the model's *current*
+/// columns rather than the schema this migration sees, which passes on every
+/// already-migrated database and dies on the next fresh one (production being
+/// the only fresh database that matters).
+struct AdoptDerivedConversations: AsyncMigration {
+    func prepare(on db: Database) async throws {
+        try await db.schema(ConversationModel.schema)
+            .field("id", .uuid, .identifier(auto: false))
+            .field("participants", .string, .required, .sql(.default("[]")))
+            .field("created_at", .datetime)
+            .create()
+        guard let sql = db as? SQLDatabase else { return }
+        let rows = try await sql
+            .raw("SELECT user_id, buddy_id FROM buddies WHERE status = 'accepted'")
+            .all()
+        var seen = Set<UUID>()
+        for row in rows {
+            guard let a = UUID(uuidString: try row.decode(column: "user_id", as: String.self)),
+                  let b = UUID(uuidString: try row.decode(column: "buddy_id", as: String.self)),
+                  a != b
+            else { continue }
+            let id = ConversationID.derive([a, b])
+            // Buddyships are one row per direction; both derive the same ID.
+            guard seen.insert(id).inserted else { continue }
+            let participants = String(
+                decoding: try JSONEncoder().encode([a, b]), as: UTF8.self)
+            try await sql.raw("""
+                INSERT OR IGNORE INTO conversations (id, participants)
+                VALUES (\(bind: id.uuidString), \(bind: participants))
+                """).run()
+        }
+    }
+
+    func revert(on db: Database) async throws {
+        try await db.schema(ConversationModel.schema).delete()
     }
 }
 

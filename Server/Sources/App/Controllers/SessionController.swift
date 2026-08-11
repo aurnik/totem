@@ -14,9 +14,12 @@ struct SessionController: RouteCollection {
         let participantIDs: [UUID]
     }
 
-    /// Creates a session with the caller plus the given participants, all of
-    /// whom must be accepted buddies of the caller. Two participants reuses
-    /// any open 1:1 session; three or more is a group chat.
+    /// Resolves the conversation for the caller plus the given participants,
+    /// all of whom must be accepted buddies of the caller. The combination
+    /// *is* the identity, so this is idempotent: the same people always get
+    /// the same conversation back. Creating a group also opens its sitting —
+    /// that's the deliberate act a group needs to be live, where a 1:1 sitting
+    /// opens on first traffic instead.
     func create(req: Request) async throws -> SessionInfo {
         let user = try req.auth.require(UserModel.self)
         let userID = try user.requireID()
@@ -32,21 +35,23 @@ struct SessionController: RouteCollection {
             }
         }
 
-        let session: SessionModel
-        if others.count == 1 {
-            session = try await gateway.openSession(between: userID, and: others[0])
-        } else {
-            session = SessionModel(participants: [userID] + others.sorted { $0.uuidString < $1.uuidString })
-            try await session.save(on: req.db)
-        }
-
-        let info = try await gateway.sessionInfo(session, on: req.db)
-        if session.isGroup {
-            for participant in session.participants {
+        let conversation = try await gateway.conversation(for: [userID] + others)
+        let conversationID = try conversation.requireID()
+        if conversation.isGroup {
+            let sitting = try await gateway.sittings.open(
+                conversationID, participants: conversation.participants, at: Date())
+            let info = try await gateway.sessionInfo(
+                id: conversationID, participants: conversation.participants,
+                startedAt: sitting.startedAt, on: req.db)
+            for participant in conversation.participants {
                 await gateway.connections.send(.sessionStarted(info), to: participant)
             }
+            return info
         }
-        return info
+        let startedAt = (try? await gateway.sittings.get(conversationID))?.startedAt ?? Date()
+        return try await gateway.sessionInfo(
+            id: conversationID, participants: conversation.participants,
+            startedAt: startedAt, on: req.db)
     }
 }
 

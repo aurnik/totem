@@ -4,6 +4,7 @@ import Crypto
 import Fluent
 import FluentSQLiteDriver
 import Redis
+import SQLKit
 import Vapor
 import VaporAPNS
 
@@ -42,7 +43,10 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddAvatar())
     app.migrations.add(AddBots())
     app.migrations.add(AddBotContextAliases())
+    app.migrations.add(AdoptDerivedConversations())
     try await app.autoMigrate()
+    // Runs after boot, not here: `app.redis` has no pools until then.
+    app.lifecycle.use(SittingAdoption())
     print("configure: routes")
 
     let connections = ConnectionManager()
@@ -69,6 +73,47 @@ func configure(_ app: Application) async throws {
 
     gateway.startLivenessSweep()
     print("configure: done")
+}
+
+/// One-shot adoption of group sessions that were open when derived-ID
+/// conversations shipped: each becomes a permanent conversation row plus a
+/// live sitting, and the old row is marked ended so a later boot can't
+/// resurrect a sitting that has since legitimately died. A lifecycle handler
+/// rather than a migration because sittings live in Redis, which migrations
+/// can't reach — and which isn't reachable at all until the app has booted.
+/// Once every old row is consumed this is a no-op forever.
+private struct SittingAdoption: LifecycleHandler {
+    func didBootAsync(_ app: Application) async throws {
+        try await adoptOpenGroupSessions(app)
+    }
+}
+
+private func adoptOpenGroupSessions(_ app: Application) async throws {
+    guard let sql = app.db as? SQLDatabase else { return }
+    let sittings = SittingStore(redis: app.redis)
+    let rows = try await sql
+        .raw("SELECT id, participants FROM sessions WHERE ended_at IS NULL")
+        .all()
+    for row in rows {
+        guard let participantsJSON = try? row.decode(column: "participants", as: String.self),
+              let participants = try? JSONDecoder().decode(
+                  [UUID].self, from: Data(participantsJSON.utf8)),
+              participants.count > 2
+        else { continue }
+        let conversation = ConversationModel(participants: participants)
+        do {
+            try await conversation.create(on: app.db)
+        } catch {
+            // The combination's row already exists — two old groups with the
+            // same roster merge into it, which is the point.
+        }
+        try await sittings.open(
+            try conversation.requireID(), participants: participants, at: Date())
+    }
+    // Open pair rows are simply orphaned era-1 state; consume everything so
+    // this can never run twice. The value is arbitrary — nothing reads these
+    // rows again except this function's own WHERE.
+    try await sql.raw("UPDATE sessions SET ended_at = 0 WHERE ended_at IS NULL").run()
 }
 
 /// `RedisConfiguration(url:)` resolves the hostname eagerly, and Railway's
