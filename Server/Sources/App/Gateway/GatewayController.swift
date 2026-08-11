@@ -539,14 +539,20 @@ struct GatewayController {
 
     // MARK: - Sessions
 
+    /// A group's `participant_a`/`participant_b` hold its first two members, so
+    /// the pair columns alone can't tell a 1:1 apart from a group that happens
+    /// to start with the same two people — and matching one stamps private
+    /// messages with the group's session ID, which is how clients key them.
+    /// `participants` is the source of truth, so the shape is filtered there.
     func openSession(between a: UUID, and b: UUID) async throws -> SessionModel {
-        let query = SessionModel.query(on: db)
+        let matches = try await SessionModel.query(on: db)
             .filter(\.$endedAt == nil)
             .group(.or) { or in
                 or.group(.and) { $0.filter(\.$participantA == a).filter(\.$participantB == b) }
                 or.group(.and) { $0.filter(\.$participantA == b).filter(\.$participantB == a) }
             }
-        if let existing = try await query.first() {
+            .all()
+        if let existing = matches.first(where: { !$0.isGroup }) {
             return existing
         }
         let session = SessionModel(participants: [a, b])
