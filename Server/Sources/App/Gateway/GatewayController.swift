@@ -286,6 +286,38 @@ struct GatewayController {
             case .signOff:
                 await goOffline(userID: userID)
 
+            case .send(let conversationID, let body, let clientMessageID, let dictated,
+                       let botContext):
+                guard let conversation = try await usableConversation(conversationID, by: userID)
+                else {
+                    await connections.send(.error("No such conversation."), to: userID)
+                    return
+                }
+                if conversation.isGroup {
+                    try await relaySessionMessage(
+                        from: userID, sessionID: conversationID, body: body,
+                        clientMessageID: clientMessageID, dictated: dictated,
+                        botContext: botContext)
+                } else {
+                    try await relayMessage(
+                        from: userID, to: conversation.peer(of: userID), body: body,
+                        clientMessageID: clientMessageID, dictated: dictated,
+                        botContext: botContext)
+                }
+
+            case .streamAudio(let conversationID, let chunk):
+                guard chunk.count <= AudioWire.chunkMaxBytes,
+                      let conversation = try await usableConversation(conversationID, by: userID)
+                else { return }
+                await send(.audio(conversationID: conversationID, senderID: userID, chunk: chunk),
+                           toParticipantsOf: conversation, except: userID)
+
+            case .setMuted(let conversationID, let muted):
+                guard let conversation = try await usableConversation(conversationID, by: userID)
+                else { return }
+                await send(.audioMuted(conversationID: conversationID, userID: userID, muted: muted),
+                           toParticipantsOf: conversation, except: userID)
+
             case .sendMessage(let recipientID, let body, let clientMessageID, let dictated,
                               let botContext):
                 try await relayMessage(
@@ -433,31 +465,35 @@ struct GatewayController {
         else { return }
         let message = ChatMessage(
             id: UUID(), sessionID: sessionID, senderID: botID, body: text, sentAt: Date())
-        let participants = conversation.participants
-        for participant in participants {
-            let conversationID = conversation.isGroup
-                ? sessionID
-                : (participants.first { $0 != participant } ?? participant)
+        // One key for every recipient: the conversation's own ID, which is
+        // what clients render by. No per-recipient computation — the shape
+        // that leaked a 1:1 bot reply to a whole group when the session
+        // lookup went wrong.
+        for participant in conversation.participants {
             await connections.send(
-                .botMessage(conversationID: conversationID, message: message), to: participant)
+                .botMessage(conversationID: sessionID, message: message), to: participant)
         }
     }
 
     // MARK: - Stage
 
     /// A stage lives in one of two shapes, and the wire doesn't say which:
-    /// clients send the same conversation key they render by, so a live group
-    /// wins if the ID names one the sender belongs to, and otherwise it's
-    /// read as a buddy's user ID.
+    /// clients send the conversation key they render by. That's the derived
+    /// conversation ID — resolved first, since only the sender's own
+    /// conversations can match — with a buddy's user ID still accepted as
+    /// the pre-derived-ID 1:1 convention installed builds send. The two can't
+    /// collide: user IDs are random v4s, derived IDs are v5s of a namespace
+    /// no user ID comes from.
     private enum StageConversation {
         case group(ConversationModel)
         case pair(peerID: UUID)
     }
 
     private func stageConversation(_ conversationID: UUID, for userID: UUID) async throws -> StageConversation? {
-        if let conversation = try await openConversation(conversationID, memberedBy: userID),
-           conversation.isGroup {
-            return .group(conversation)
+        if let conversation = try await usableConversation(conversationID, by: userID) {
+            return conversation.isGroup
+                ? .group(conversation)
+                : .pair(peerID: conversation.peer(of: userID))
         }
         guard try await areAcceptedBuddies(userID, conversationID) else { return nil }
         return .pair(peerID: conversationID)
@@ -510,8 +546,8 @@ struct GatewayController {
         }
     }
 
-    /// Every recipient gets the stage keyed the way they render it: the session
-    /// ID in a group, the other party's user ID in a 1:1.
+    /// Every recipient gets the stage keyed by the derived conversation ID —
+    /// one value for everyone, since every client can compute it.
     private func sendStage(_ stage: Stage?, in conversation: StageConversation,
                            from senderID: UUID?, actedBy userID: UUID) async {
         switch conversation {
@@ -523,10 +559,12 @@ struct GatewayController {
                     to: participant)
             }
         case .pair(let peerID):
-            await connections.send(
-                .stage(conversationID: peerID, senderID: senderID, stage: stage), to: userID)
-            await connections.send(
-                .stage(conversationID: userID, senderID: senderID, stage: stage), to: peerID)
+            let conversationID = ConversationID.derive([userID, peerID])
+            for participant in [userID, peerID] {
+                await connections.send(
+                    .stage(conversationID: conversationID, senderID: senderID, stage: stage),
+                    to: participant)
+            }
         }
     }
 
@@ -548,6 +586,23 @@ struct GatewayController {
               conversation.includes(userID),
               try await sittings.get(id) != nil
         else { return nil }
+        return conversation
+    }
+
+    /// A conversation this sender may act in right now. A group needs its
+    /// sitting live — a dead group is over for everyone. A pair needs only
+    /// the buddyship: its ephemera (audio, a stage) can precede any message
+    /// traffic, so there may be no sitting yet to check.
+    private func usableConversation(_ id: UUID, by userID: UUID) async throws -> ConversationModel? {
+        guard let conversation = try await ConversationModel.find(id, on: db),
+              conversation.includes(userID)
+        else { return nil }
+        if conversation.isGroup {
+            guard try await sittings.get(id) != nil else { return nil }
+        } else {
+            guard try await areAcceptedBuddies(userID, conversation.peer(of: userID))
+            else { return nil }
+        }
         return conversation
     }
 

@@ -29,16 +29,25 @@ final class AppModel {
         }
     }
 
-    /// Transcripts keyed by conversation ID — the peer's user ID for 1:1
-    /// chats, the session ID for group chats. Scoped to the local user's own
-    /// online session: one continuous log while signed on, no matter how
-    /// often peers come and go; cleared when this user's session ends
-    /// (deliberate sign-off, or a `freshSignOn` welcome after the server
-    /// marked them offline). Never persisted — messages live only in the RAM
-    /// of currently-online participants.
+    /// Transcripts keyed by conversation ID — derived from the participant
+    /// set (`ConversationID.derive`), the same value for every shape of chat
+    /// and every party in it. Scoped to the local user's own online session:
+    /// one continuous log while signed on, no matter how often peers come and
+    /// go; cleared when this user's session ends (deliberate sign-off, or a
+    /// `freshSignOn` welcome after the server marked them offline). Never
+    /// persisted — messages live only in the RAM of currently-online
+    /// participants.
     var transcripts: [UUID: [TranscriptItem]] = [:]
-    /// Open group sessions by session ID.
+    /// Group rosters by conversation ID. Kept after a group's sitting ends so
+    /// an open window still renders names — `endedGroups` marks those.
     var groupSessions: [UUID: SessionInfo] = [:]
+    /// Groups whose sitting has ended (fewer than two participants left).
+    /// The roster stays renderable; sending is over until it's started again.
+    var endedGroups: Set<UUID> = []
+    /// Derived pair conversation ID → the buddy behind it, rebuilt from the
+    /// buddy list. How an incoming conversation-keyed frame gets back to a
+    /// person to render.
+    private var pairPeers: [UUID: UUID] = [:]
     /// Bots this server runs, by bot ID — from the `welcome` frame, so a new
     /// bot needs no client build. Used to render a bot's bubbles and to bold
     /// its tag; the server alone decides whether a bot actually answers.
@@ -59,7 +68,6 @@ final class AppModel {
     /// clock — drives entrance animations without trusting server timestamps.
     private var lastAppended: (id: UUID, at: Date)?
     private var pendingSends: [UUID: UUID] = [:]
-    private var sessionPeers: [UUID: UUID] = [:]
     /// Where the last outbound message was typed — server error frames carry
     /// no context, so refusals ("they're offline") surface as notices there.
     private var lastSentConversation: UUID?
@@ -299,6 +307,7 @@ final class AppModel {
         currentUser = nil
         api.token = nil
         buddies = []
+        rebuildPairIndex()
         presences = [:]
         groupSessions = [:]
         clearSessionScopedState()
@@ -308,10 +317,35 @@ final class AppModel {
 
     func refreshBuddies() async throws {
         buddies = try await api.buddies()
+        rebuildPairIndex()
         // Contextual, never at launch (spec §7): ask only once buddies exist.
         if !buddies.isEmpty {
             NotificationManager.shared.requestPermissionIfNeeded()
         }
+    }
+
+    // MARK: - Conversation identity
+
+    /// The 1:1 conversation with a buddy — computed, never fetched, so
+    /// tapping a name opens a chat with no round trip.
+    func conversationID(with buddyID: UUID) -> UUID? {
+        currentUser.map { ConversationID.derive([$0.id, buddyID]) }
+    }
+
+    /// The buddy behind a pair conversation, nil for groups (and for pair
+    /// IDs no current buddy derives to).
+    func peer(of conversationID: UUID) -> UUID? {
+        pairPeers[conversationID]
+    }
+
+    private func rebuildPairIndex() {
+        guard let selfID = currentUser?.id else {
+            pairPeers = [:]
+            return
+        }
+        pairPeers = Dictionary(uniqueKeysWithValues: buddies.map {
+            (ConversationID.derive([selfID, $0.user.id]), $0.user.id)
+        })
     }
 
     /// Ascending by the requester's open-request count, so people who
@@ -377,7 +411,7 @@ final class AppModel {
     /// ended the previous session, and on log-out.
     private func clearSessionScopedState() {
         transcripts = [:]
-        sessionPeers = [:]
+        endedGroups = []
         pendingSends = [:]
         unreadPeers = []
         mutedListeners = [:]
@@ -459,13 +493,9 @@ final class AppModel {
         lastSentConversation = conversationID
         let spoken = dictated ? true : nil
         let context = botContext(for: trimmed, in: conversationID)
-        let frame: ClientFrame = groupSessions[conversationID] != nil
-            ? .sendSessionMessage(sessionID: conversationID, body: trimmed,
-                                  clientMessageID: clientID, dictated: spoken,
-                                  botContext: context)
-            : .sendMessage(recipientID: conversationID, body: trimmed,
-                           clientMessageID: clientID, dictated: spoken,
-                           botContext: context)
+        let frame: ClientFrame = .send(
+            conversationID: conversationID, body: trimmed,
+            clientMessageID: clientID, dictated: spoken, botContext: context)
         let socket = self.socket
         Task { [weak self] in
             do {
@@ -481,12 +511,16 @@ final class AppModel {
         }
     }
 
-    /// One participant opens the existing 1:1 conversation; more creates a
-    /// group session server-side. Returns the conversation ID to open.
+    /// One participant is the pair conversation, whose ID this client can
+    /// compute itself — no server involved in opening it. More participants
+    /// asks the server to start (or restart) the group's sitting.
     func startChat(with participantIDs: [UUID]) async throws -> UUID {
-        if participantIDs.count == 1 { return participantIDs[0] }
+        if participantIDs.count == 1, let pairID = conversationID(with: participantIDs[0]) {
+            return pairID
+        }
         let info = try await api.createSession(participantIDs: participantIDs)
         groupSessions[info.session.id] = info
+        endedGroups.remove(info.session.id)
         return info.session.id
     }
 
@@ -498,7 +532,10 @@ final class AppModel {
                 .sorted()
                 .joined(separator: ", ")
         }
-        return buddy(withID: conversationID)?.user.handle ?? "chat"
+        if let peerID = peer(of: conversationID) {
+            return buddy(withID: peerID)?.user.handle ?? "chat"
+        }
+        return "chat"
     }
 
     func handle(of userID: UUID) -> String? {
@@ -644,7 +681,6 @@ final class AppModel {
     func playSample(_ sample: SoundSample, in conversationID: UUID) {
         guard let data = try? Data(contentsOf: sampleURL(sample.id)), !data.isEmpty
         else { return }
-        let isGroup = groupSessions[conversationID] != nil
         let socket = self.socket
         let selfID = currentUser?.id
         // 100ms of wire PCM per chunk, matching the mic cadence.
@@ -654,7 +690,7 @@ final class AppModel {
             while offset < data.count {
                 let chunk = data.subdata(in: offset..<min(offset + step, data.count))
                 try? await socket?.send(
-                    Self.audioFrame(chunk, to: conversationID, isGroup: isGroup))
+                    .streamAudio(conversationID: conversationID, chunk: chunk))
                 if let self, let selfID {
                     self.receiveAudio(conversationID: conversationID, senderID: selfID, chunk: chunk)
                 }
@@ -768,7 +804,6 @@ final class AppModel {
 
         var chunkSink: (@Sendable (Data) -> Void)?
         if broadcasting, let socket {
-            let isGroup = groupSessions[conversationID] != nil
             // Chunks flow through one stream consumed by one task so sends
             // stay ordered — racing per-chunk Tasks would garble the audio.
             let (stream, continuation) = AsyncStream<Data>.makeStream(
@@ -778,7 +813,7 @@ final class AppModel {
             micSendTask = Task { [weak self] in
                 for await chunk in stream {
                     try? await socket.send(
-                        Self.audioFrame(chunk, to: conversationID, isGroup: isGroup))
+                        .streamAudio(conversationID: conversationID, chunk: chunk))
                     // Meter-only self monitor (no playback — that would echo)
                     // so the speaker can see their own audio going out.
                     if let self, let selfID = self.currentUser?.id {
@@ -873,18 +908,7 @@ final class AppModel {
     }
 
     private func sendAudioMuted(_ muted: Bool, in conversationID: UUID) {
-        fire(groupSessions[conversationID] != nil
-            ? .setSessionAudioMuted(sessionID: conversationID, muted: muted)
-            : .setAudioMuted(recipientID: conversationID, muted: muted))
-    }
-
-    /// Live audio is session-addressed in a group and peer-addressed in a 1:1.
-    /// Static so the send loops can build frames without capturing the model.
-    private static func audioFrame(_ chunk: Data, to conversationID: UUID,
-                                   isGroup: Bool) -> ClientFrame {
-        isGroup
-            ? .sendSessionAudio(sessionID: conversationID, chunk: chunk)
-            : .sendAudio(recipientID: conversationID, chunk: chunk)
+        fire(.setMuted(conversationID: conversationID, muted: muted))
     }
 
     /// Best-effort send: these frames carry no promise to the user, so a
@@ -1156,12 +1180,27 @@ final class AppModel {
             presences = Dictionary(uniqueKeysWithValues: buddies.compactMap { key, value in
                 UUID(uuidString: key).map { ($0, value) }
             })
-            groupSessions = Dictionary(
+            let live = Dictionary(
                 uniqueKeysWithValues: sessions.filter(\.isGroup).map { ($0.session.id, $0) })
+            if freshSignOn {
+                groupSessions = live
+            } else {
+                // A group we knew that's absent from the snapshot died while
+                // we weren't looking — no sessionClosed reached us. Its
+                // roster stays renderable behind the ended mark.
+                for id in groupSessions.keys where live[id] == nil {
+                    endedGroups.insert(id)
+                }
+                groupSessions.merge(live) { _, new in new }
+                endedGroups.subtract(live.keys)
+            }
             refreshOpenStages()
         case .sessionStarted(let info):
             if info.isGroup {
                 groupSessions[info.session.id] = info
+                // The same combination restarted is the same conversation —
+                // its sitting is live again.
+                endedGroups.remove(info.session.id)
             }
         case .avatarChanged(let userID, let avatar):
             applyAvatar(avatar, of: userID)
@@ -1169,33 +1208,38 @@ final class AppModel {
             let previous = presences[userID]
             let wasOffline = (previous?.state ?? .offline) == .offline
             presences[userID] = presence
-            let hasConversation = !(transcripts[userID] ?? []).isEmpty
-                || activeConversations.contains(userID)
+            // Where this buddy's conversation lives — notices about a person
+            // land in the chat with that person.
+            let pairID = conversationID(with: userID)
+            let hasConversation = pairID.map {
+                !(transcripts[$0] ?? []).isEmpty || activeConversations.contains($0)
+            } ?? false
             if let handle = buddy(withID: userID)?.user.handle, wasOffline,
                presence.state != .offline {
                 NotificationManager.shared.buddySignedOn(userID, handle: handle)
             }
-            if let handle = buddy(withID: userID)?.user.handle, hasConversation {
+            if let handle = buddy(withID: userID)?.user.handle, hasConversation,
+               let pairID {
                 let nowOffline = presence.state == .offline
                 if wasOffline != nowOffline {
                     append(.notice(id: UUID(), text: "\(handle) signed \(nowOffline ? "off" : "on")", at: Date()),
-                           to: userID)
+                           to: pairID)
                 }
                 let wasAway = previous?.state == .away
                 if let away = presence.awayMessage, away != previous?.awayMessage {
                     append(.notice(id: UUID(), text: "\(handle) is away: \"\(away)\"", at: Date()),
-                           to: userID)
+                           to: pairID)
                 } else if presence.isUnreachableMark, !wasAway {
                     // The server marked them away because it couldn't reach
                     // them, so there's nothing of theirs to quote.
                     append(.notice(id: UUID(), text: "\(handle) is away", at: Date()),
-                           to: userID)
+                           to: pairID)
                 }
                 // Coming back from away — but not by signing off, which
                 // already got its own notice above.
                 if wasAway, presence.state != .away, presence.state != .offline {
                     append(.notice(id: UUID(), text: "\(handle) is back", at: Date()),
-                           to: userID)
+                           to: pairID)
                 }
             }
             // Presence for someone not yet an accepted buddy means the list
@@ -1215,33 +1259,30 @@ final class AppModel {
                 }
                 // A 1:1 stage dies with the conversation, same as the server's
                 // copy — group stages outlive any one member going offline.
-                stages[userID] = nil
+                if let pairID {
+                    stages[pairID] = nil
+                }
             }
         case .message(let message):
-            let key = groupSessions[message.sessionID] != nil ? message.sessionID : message.senderID
-            if key == message.senderID {
-                sessionPeers[message.sessionID] = key
-            }
-            append(.message(message), to: key)
+            // The message carries its conversation: `sessionID` is the
+            // derived conversation ID, the key this client renders by. No
+            // inference from the sender — that inference is what filed 1:1
+            // messages into a group when the server keyed them wrong.
+            append(.message(message), to: message.sessionID)
             clearTyping(message.senderID)
-            if !activeConversations.contains(key) {
-                unreadPeers.insert(key)
+            if !activeConversations.contains(message.sessionID) {
+                unreadPeers.insert(message.sessionID)
             }
             SoundPlayer.play(.messageReceived)
         case .botMessage(let conversationID, let message):
-            // Unlike `message`, the key is on the frame: a bot isn't a
-            // participant, so it can't be inferred from the sender.
             append(.message(message), to: conversationID)
             if !activeConversations.contains(conversationID) {
                 unreadPeers.insert(conversationID)
             }
             SoundPlayer.play(.messageReceived)
         case .messageSent(let clientMessageID, let message):
-            if let key = pendingSends.removeValue(forKey: clientMessageID) {
-                if groupSessions[message.sessionID] == nil {
-                    sessionPeers[message.sessionID] = key
-                }
-                append(.message(message), to: key)
+            if pendingSends.removeValue(forKey: clientMessageID) != nil {
+                append(.message(message), to: message.sessionID)
                 SoundPlayer.play(.messageSent)
             }
         case .typing(let userID):
@@ -1262,15 +1303,19 @@ final class AppModel {
                 mutedListeners[conversationID]?.remove(userID)
             }
         case .sessionClosed(let sessionID):
-            // The peer went offline and the server archived the 1:1 session.
-            // Our own transcript survives — it's scoped to our online session,
-            // not the server's — and the next message simply starts a new
-            // server session under the same conversation key. Only the live
-            // ephemera stop.
-            if let peerID = sessionPeers.removeValue(forKey: sessionID) {
-                clearTyping(peerID)
-                silenceConversation(peerID)
+            // The conversation's sitting ended — fewer than two participants
+            // left. Our own transcript survives (it's scoped to our online
+            // session, not the sitting), and for a group the roster stays
+            // renderable behind an `endedGroups` mark; starting the same
+            // combination again revives the same conversation ID. Only the
+            // live ephemera stop.
+            if groupSessions[sessionID] != nil {
+                endedGroups.insert(sessionID)
             }
+            if let peerID = peer(of: sessionID) {
+                clearTyping(peerID)
+            }
+            silenceConversation(sessionID)
         case .stage(let conversationID, let senderID, let stage):
             applyStage(stage, in: conversationID, from: senderID)
         case .buddyRequest:

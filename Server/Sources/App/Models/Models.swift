@@ -168,6 +168,10 @@ final class ConversationModel: Model, @unchecked Sendable {
     func includes(_ userID: UUID) -> Bool {
         participants.contains(userID)
     }
+
+    func peer(of userID: UUID) -> UUID {
+        participants.first { $0 != userID } ?? userID
+    }
 }
 
 /// Creates `conversations` and backfills a pair conversation per accepted
