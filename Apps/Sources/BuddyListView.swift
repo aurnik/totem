@@ -114,7 +114,10 @@ struct BuddyListView: View {
 
     @ViewBuilder
     private var groupChatsSection: some View {
+        // Ended sittings stay in `groupSessions` so an open window keeps its
+        // roster, but a dead group isn't a chat you can enter from here.
         let groups = model.groupSessions.values
+            .filter { !model.endedGroups.contains($0.session.id) }
             .sorted { $0.session.startedAt > $1.session.startedAt }
         if !groups.isEmpty {
             Section("Group Chats") {
@@ -223,21 +226,27 @@ struct BuddyRow: View {
     #endif
     let buddy: Buddy
 
+    /// The pair conversation this row opens — computed from the two user IDs,
+    /// which is why tapping a name needs no round trip.
+    private var conversationID: UUID? {
+        model.conversationID(with: buddy.user.id)
+    }
+
     private var unread: Bool {
-        model.unreadPeers.contains(buddy.user.id)
+        conversationID.map { model.unreadPeers.contains($0) } ?? false
     }
 
     var body: some View {
-        if model.presence(of: buddy).state == .offline {
+        if model.presence(of: buddy).state == .offline || conversationID == nil {
             // Offline friends are listed but not openable: the server refuses
             // delivery to them, so there's no conversation to have.
             label
-        } else {
+        } else if let conversationID {
             #if os(iOS)
             // Custom chevron so it can darken with unread state — the system
             // NavigationLink accessory color isn't styleable.
             ZStack {
-                NavigationLink(value: buddy.user.id) { EmptyView() }
+                NavigationLink(value: conversationID) { EmptyView() }
                     .opacity(0)
                 HStack {
                     label
@@ -249,7 +258,7 @@ struct BuddyRow: View {
             }
             #else
             Button {
-                openWindow(value: buddy.user.id)
+                openWindow(value: conversationID)
             } label: {
                 label.contentShape(Rectangle())
             }

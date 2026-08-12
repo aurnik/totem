@@ -29,12 +29,26 @@ struct ConversationView: View {
         model.groupSessions[conversationID]
     }
 
+    /// The buddy behind a 1:1 conversation; nil for groups.
+    private var peerID: UUID? {
+        model.peer(of: conversationID)
+    }
+
     private var title: String {
         model.conversationTitle(conversationID)
     }
 
     private var peerOffline: Bool {
-        group == nil && (model.presences[conversationID]?.state ?? .offline) == .offline
+        guard group == nil else { return false }
+        guard let peerID else { return true }
+        return (model.presences[peerID]?.state ?? .offline) == .offline
+    }
+
+    /// The group's sitting ended — fewer than two people left. The transcript
+    /// and roster stay readable; sending is over until someone starts the
+    /// same combination again.
+    private var groupEnded: Bool {
+        model.endedGroups.contains(conversationID)
     }
 
     private var micIsLive: Bool {
@@ -79,7 +93,7 @@ struct ConversationView: View {
                 .prefix(3)
                 .compactMap { model.avatar(of: $0.id) }
         }
-        return [model.avatar(of: conversationID)].compactMap { $0 }
+        return [peerID.flatMap { model.avatar(of: $0) }].compactMap { $0 }
     }
 
     var body: some View {
@@ -88,6 +102,8 @@ struct ConversationView: View {
                 banner("Reconnecting — messages can't be sent right now.")
             } else if peerOffline {
                 banner("\(title) is offline — messages can't be delivered right now.")
+            } else if groupEnded {
+                banner("This group chat ended — start it again from New Chat.")
             }
             if showingMembers, let group {
                 memberList(group)
@@ -200,7 +216,7 @@ struct ConversationView: View {
                 .strokeBorder(.separator.opacity(0.6), lineWidth: 0.5)
         }
         .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
-        .disabled(peerOffline)
+        .disabled(peerOffline || groupEnded)
     }
 
     /// Four's glyph is drawn rather than an SF Symbol, so while the game is up
@@ -420,7 +436,7 @@ struct ConversationView: View {
                         anchor: anchor(for: item)
                     ))
                 }
-                if group == nil && model.isTyping(conversationID) {
+                if let peerID, model.isTyping(peerID) {
                     HStack {
                         TypingIndicatorBubble()
                         Spacer()
@@ -483,7 +499,7 @@ struct ConversationView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespaces).isEmpty && !peerOffline
+        !draft.trimmingCharacters(in: .whitespaces).isEmpty && !peerOffline && !groupEnded
     }
 
     /// Only the one-time model download — live words go in the draft bubble,
@@ -606,8 +622,8 @@ struct ConversationView: View {
                     .padding(.trailing, 6)
                     .padding(.vertical, 8)
                     .onChange(of: draft) { _, newValue in
-                        if !newValue.isEmpty, group == nil {
-                            model.sendTyping(to: conversationID)
+                        if !newValue.isEmpty, let peerID {
+                            model.sendTyping(to: peerID)
                         }
                     }
                 Button(action: send) {
@@ -639,8 +655,8 @@ struct ConversationView: View {
                             .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
                     )
                     .onChange(of: draft) { _, newValue in
-                        if !newValue.isEmpty, group == nil {
-                            model.sendTyping(to: conversationID)
+                        if !newValue.isEmpty, let peerID {
+                            model.sendTyping(to: peerID)
                         }
                     }
                 Button("Send", action: send)

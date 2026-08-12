@@ -6,33 +6,45 @@ public enum ClientFrame: Codable, Sendable {
     /// Client proposes a presence change; server is authoritative and echoes via `presence`.
     case setPresence(state: PresenceState, awayMessage: String?)
     case signOff
-    /// `dictated` marks a body the sender spoke rather than typed; nil from
-    /// clients that predate it, and relayed untouched. `botContext` is the
-    /// conversation so far, attached only when the body tags a bot with one of
-    /// its context aliases — the server keeps no transcript, so the sender's
-    /// client is the only party that can supply one. It is used for the bot
-    /// prompt and nothing else: never relayed, never stored.
-    case sendMessage(recipientID: UUID, body: String, clientMessageID: UUID,
-                     dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
-    /// Message into an existing (group) session the sender belongs to.
-    case sendSessionMessage(sessionID: UUID, body: String, clientMessageID: UUID,
-                            dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
-    case typing(recipientID: UUID)
+    /// The one way to say something, whatever the conversation's shape:
+    /// `conversationID` is the derived ID (`ConversationID.derive`) both
+    /// sides compute from the participant set. `dictated` marks a body the
+    /// sender spoke rather than typed; nil from clients that predate it, and
+    /// relayed untouched. `botContext` is the conversation so far, attached
+    /// only when the body tags a bot with one of its context aliases — the
+    /// server keeps no transcript, so the sender's client is the only party
+    /// that can supply one. It is used for the bot prompt and nothing else:
+    /// never relayed, never stored.
+    case send(conversationID: UUID, body: String, clientMessageID: UUID,
+              dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
     /// Live mic audio: raw little-endian Int16 mono PCM at
     /// `AudioWire.sampleRate`, ~100ms per chunk. Relay-only, best-effort —
     /// never stored, never acked, silently dropped for offline recipients.
-    case sendAudio(recipientID: UUID, chunk: Data)
-    case sendSessionAudio(sessionID: UUID, chunk: Data)
+    case streamAudio(conversationID: UUID, chunk: Data)
     /// This user can't hear incoming live audio right now (device volume at
     /// zero) — or can again. Sent on transitions while audio is audible in
     /// the chat, so other participants can show a crossed-out speaker.
+    case setMuted(conversationID: UUID, muted: Bool)
+    /// Superseded by `send`/`streamAudio`/`setMuted`: the pre-derived-ID
+    /// frames, one per conversation shape, addressed by peer for 1:1 and by
+    /// session for groups. Still accepted so installed builds keep working
+    /// until they're expired; new clients never send them.
+    case sendMessage(recipientID: UUID, body: String, clientMessageID: UUID,
+                     dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
+    case sendSessionMessage(sessionID: UUID, body: String, clientMessageID: UUID,
+                            dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
+    case sendAudio(recipientID: UUID, chunk: Data)
+    case sendSessionAudio(sessionID: UUID, chunk: Data)
     case setAudioMuted(recipientID: UUID, muted: Bool)
     case setSessionAudioMuted(sessionID: UUID, muted: Bool)
-    /// Drive the conversation's stage. Unlike the pairs above there's one
-    /// frame for both shapes: `conversationID` is the peer's user ID for 1:1
-    /// and the session ID for groups, and the server works out which.
-    /// `expectedVersion` is the stage version the sender was looking at,
-    /// required for conditional actions and ignored otherwise.
+    /// Typing stays peer-addressed: it's 1:1-only, and the recipient is the
+    /// address, not the conversation.
+    case typing(recipientID: UUID)
+    /// Drive the conversation's stage. `conversationID` is the derived
+    /// conversation ID; the server also still resolves a peer's user ID here,
+    /// the pre-derived-ID convention installed builds send. `expectedVersion`
+    /// is the stage version the sender was looking at, required for
+    /// conditional actions and ignored otherwise.
     case stageAction(conversationID: UUID, action: StageAction, expectedVersion: Int?)
     /// Ask for the current stage — sent when a conversation is opened, and
     /// again after a reconnect, since stage pushes during the gap were missed.
@@ -87,8 +99,10 @@ public enum ServerFrame: Codable, Sendable {
     case messageSent(clientMessageID: UUID, message: ChatMessage)
     case typing(userID: UUID)
     /// Live mic audio from a chat participant. `conversationID` is what the
-    /// receiving client keys the chat by: the sender's user ID for 1:1, the
-    /// session ID for groups.
+    /// receiving client keys the chat by: the derived conversation ID for
+    /// frames sent the unified way — or, relayed from an installed build's
+    /// peer-addressed frame, the sender's user ID, which only a same-era
+    /// client keys correctly.
     case audio(conversationID: UUID, senderID: UUID, chunk: Data)
     /// A chat participant's device went (or stopped being) unable to play
     /// live audio. Same `conversationID` keying as `audio`.
@@ -109,10 +123,11 @@ public enum ServerFrame: Codable, Sendable {
     /// means the stage is empty.
     case stage(conversationID: UUID, senderID: UUID?, stage: Stage?)
     /// A bot answered in a conversation. `message.senderID` is the bot's ID,
-    /// which clients resolve against the registry from `welcome`. Carries its
-    /// own `conversationID` — same keying as `audio` — because a bot isn't a
-    /// participant, so unlike `message` the client can't infer the key from
-    /// the sender. Sent to everyone in the conversation, the tagger included.
+    /// which clients resolve against the registry from `welcome`.
+    /// `conversationID` is the derived conversation ID — the same value as
+    /// `message.sessionID`, kept on the frame for decode compatibility with
+    /// builds that still read it. Sent to everyone in the conversation, the
+    /// tagger included.
     case botMessage(conversationID: UUID, message: ChatMessage)
     case error(String)
 }
