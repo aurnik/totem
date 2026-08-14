@@ -25,26 +25,12 @@ public enum ClientFrame: Codable, Sendable {
     /// zero) — or can again. Sent on transitions while audio is audible in
     /// the chat, so other participants can show a crossed-out speaker.
     case setMuted(conversationID: UUID, muted: Bool)
-    /// Superseded by `send`/`streamAudio`/`setMuted`: the pre-derived-ID
-    /// frames, one per conversation shape, addressed by peer for 1:1 and by
-    /// session for groups. Still accepted so installed builds keep working
-    /// until they're expired; new clients never send them.
-    case sendMessage(recipientID: UUID, body: String, clientMessageID: UUID,
-                     dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
-    case sendSessionMessage(sessionID: UUID, body: String, clientMessageID: UUID,
-                            dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
-    case sendAudio(recipientID: UUID, chunk: Data)
-    case sendSessionAudio(sessionID: UUID, chunk: Data)
-    case setAudioMuted(recipientID: UUID, muted: Bool)
-    case setSessionAudioMuted(sessionID: UUID, muted: Bool)
     /// Typing stays peer-addressed: it's 1:1-only, and the recipient is the
     /// address, not the conversation.
     case typing(recipientID: UUID)
-    /// Drive the conversation's stage. `conversationID` is the derived
-    /// conversation ID; the server also still resolves a peer's user ID here,
-    /// the pre-derived-ID convention installed builds send. `expectedVersion`
-    /// is the stage version the sender was looking at, required for
-    /// conditional actions and ignored otherwise.
+    /// Drive the conversation's stage. `expectedVersion` is the stage version
+    /// the sender was looking at, required for conditional actions and
+    /// ignored otherwise.
     case stageAction(conversationID: UUID, action: StageAction, expectedVersion: Int?)
     /// Ask for the current stage — sent when a conversation is opened, and
     /// again after a reconnect, since stage pushes during the gap were missed.
@@ -98,11 +84,7 @@ public enum ServerFrame: Codable, Sendable {
     /// Server ack for a sent message, correlating the client-generated ID.
     case messageSent(clientMessageID: UUID, message: ChatMessage)
     case typing(userID: UUID)
-    /// Live mic audio from a chat participant. `conversationID` is what the
-    /// receiving client keys the chat by: the derived conversation ID for
-    /// frames sent the unified way — or, relayed from an installed build's
-    /// peer-addressed frame, the sender's user ID, which only a same-era
-    /// client keys correctly.
+    /// Live mic audio from a chat participant, keyed by the conversation ID.
     case audio(conversationID: UUID, senderID: UUID, chunk: Data)
     /// A chat participant's device went (or stopped being) unable to play
     /// live audio. Same `conversationID` keying as `audio`.
