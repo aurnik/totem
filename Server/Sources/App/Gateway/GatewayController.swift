@@ -174,6 +174,7 @@ struct GatewayController {
                 let connections = self.connections
                 Task {
                     await pusher.buddySignedOn(userID, buddyIDs: buddyIDs, connections: connections)
+                    await pusher.refreshBadges(of: buddyIDs)
                 }
             }
         } catch {
@@ -242,6 +243,9 @@ struct GatewayController {
         do {
             try await presence.markOffline(for: userID)
             await fanOut(.presence(userID: userID, presence: .offline), toBuddiesOf: userID)
+            let pusher = self.pusher
+            let buddyIDs = try await acceptedBuddyIDs(of: userID)
+            Task { await pusher.refreshBadges(of: buddyIDs) }
             await endSittings(involving: userID)
             // The peer clears its own copy off the offline presence frame, so
             // this needs no fan-out of its own.
@@ -569,11 +573,7 @@ struct GatewayController {
     // MARK: - Buddies
 
     private func acceptedBuddyIDs(of userID: UUID) async throws -> [UUID] {
-        try await BuddyModel.query(on: db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$status == .accepted)
-            .all()
-            .map { $0.$buddy.id }
+        try await BuddyModel.acceptedBuddyIDs(of: userID, on: db)
     }
 
     func areAcceptedBuddies(_ a: UUID, _ b: UUID) async throws -> Bool {

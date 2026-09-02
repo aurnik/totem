@@ -133,7 +133,7 @@ final class AppModel {
     private var socketTask: Task<Void, Never>?
     /// Server-side setting: push "X signed on" to this account's devices
     /// while the app is closed.
-    var signOnPushes = UserDefaults.standard.object(forKey: "signOnPushes") as? Bool ?? true
+    var signOnPushes = UserDefaults.standard.object(forKey: "signOnPushes") as? Bool ?? false
 
     // MARK: - Appearance
 
@@ -1304,6 +1304,7 @@ final class AppModel {
             presences = Dictionary(uniqueKeysWithValues: buddies.compactMap { key, value in
                 UUID(uuidString: key).map { ($0, value) }
             })
+            NotificationManager.shared.showOnlineCount(onlineBuddyCount)
             let live = Dictionary(
                 uniqueKeysWithValues: sessions.filter(\.isGroup).map { ($0.session.id, $0) })
             if freshSignOn {
@@ -1332,6 +1333,7 @@ final class AppModel {
             let previous = presences[userID]
             let wasOffline = (previous?.state ?? .offline) == .offline
             presences[userID] = presence
+            NotificationManager.shared.showOnlineCount(onlineBuddyCount)
             if presence.state == .offline {
                 voice?.removePeer(userID)
             }
@@ -1341,7 +1343,7 @@ final class AppModel {
             let hasConversation = pairID.map {
                 !(transcripts[$0] ?? []).isEmpty || activeConversations.contains($0)
             } ?? false
-            if let handle = buddy(withID: userID)?.user.handle, wasOffline,
+            if signOnPushes, let handle = buddy(withID: userID)?.user.handle, wasOffline,
                presence.state != .offline {
                 NotificationManager.shared.buddySignedOn(userID, handle: handle)
             }

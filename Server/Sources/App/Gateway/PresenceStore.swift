@@ -55,6 +55,13 @@ struct PresenceStore {
         return try WireCoder.decoder().decode(Presence.self, from: Data(json.utf8))
     }
 
+    /// How many of `userIDs` are signed on. A key that exists is a user who
+    /// is present, whatever state it holds — away is still online.
+    func presentCount(among userIDs: [UUID]) async throws -> Int {
+        guard !userIDs.isEmpty else { return 0 }
+        return try await redis.mget(userIDs.map(presenceKey)).get().filter { !$0.isNull }.count
+    }
+
     func markOffline(for userID: UUID) async throws {
         _ = try await redis.delete(presenceKey(userID)).get()
     }

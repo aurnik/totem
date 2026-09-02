@@ -4,8 +4,8 @@ import UserNotifications
 import UIKit
 #endif
 
-/// Local sign-on notifications, raised on every sign-on. Permission is
-/// requested contextually once buddies exist, never at launch.
+/// The icon badge, and local sign-on banners for users who asked for them.
+/// Permission is requested contextually once buddies exist, never at launch.
 @MainActor
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
@@ -14,18 +14,22 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().delegate = self
     }
 
+    /// Prompts once; afterwards the system answers from the stored decision.
     func requestPermissionIfNeeded() {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: "askedNotificationPermission") else {
-            registerForRemotePushes()
-            return
-        }
-        defaults.set(true, forKey: "askedNotificationPermission")
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             if granted {
                 Task { @MainActor in self.registerForRemotePushes() }
             }
         }
+    }
+
+    /// How many buddies are online, on the app icon. The server pushes the
+    /// same number while the app is closed; this keeps the two agreeing
+    /// while it's open.
+    func showOnlineCount(_ count: Int) {
+        #if os(iOS)
+        UNUserNotificationCenter.current().setBadgeCount(count)
+        #endif
     }
 
     /// APNs registration for server-side sign-on pushes. Harmless on builds

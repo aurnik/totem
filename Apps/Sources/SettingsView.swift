@@ -22,7 +22,9 @@ struct SettingsSheet: View {
                 Section {
                     Toggle("Notify me when friends sign on", isOn: pushBinding)
                 } footer: {
-                    Text("Delivered even while Totem is closed.")
+                    #if os(iOS)
+                    Text("On or off, the badge on the app icon counts the friends who are online.")
+                    #endif
                 }
 
                 Section("Appearance") {

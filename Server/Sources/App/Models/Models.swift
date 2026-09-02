@@ -12,8 +12,9 @@ final class UserModel: Model, Content, @unchecked Sendable {
     @Field(key: "display_name") var displayName: String
     /// Cartoon-avatar settings as JSON (TotemKit.Avatar), set by the client.
     @OptionalField(key: "avatar") var avatarJSON: String?
-    /// User setting: push "X signed on" to this user's devices while the
-    /// app is closed. On by default, toggleable in the app.
+    /// User setting: alert this user when a buddy signs on — a banner while
+    /// the app is open, a push while it's closed. Off by default: the badge
+    /// carries who's online without interrupting anyone.
     @Field(key: "sign_on_pushes") var signOnPushes: Bool
     @Timestamp(key: "created_at", on: .create) var createdAt: Date?
 
@@ -22,7 +23,7 @@ final class UserModel: Model, Content, @unchecked Sendable {
     init(handle: String) {
         self.handle = handle
         self.displayName = handle
-        self.signOnPushes = true
+        self.signOnPushes = false
     }
 
     var dto: TotemKit.User {
@@ -66,6 +67,14 @@ final class BuddyModel: Model, @unchecked Sendable {
         self.$user.id = userID
         self.$buddy.id = buddyID
         self.status = status
+    }
+
+    static func acceptedBuddyIDs(of userID: UUID, on db: Database) async throws -> [UUID] {
+        try await query(on: db)
+            .filter(\.$user.$id == userID)
+            .filter(\.$status == .accepted)
+            .all()
+            .map { $0.$buddy.id }
     }
 }
 
@@ -326,6 +335,16 @@ struct AddPushSupport: AsyncMigration {
         try await db.schema(PushTokenModel.schema).delete()
         try await db.schema(UserModel.schema).deleteField("sign_on_pushes").update()
     }
+}
+
+/// Sign-on alerts became opt-in when the badge took over saying who's online.
+/// Nobody had chosen the old default, so everyone starts from the new one.
+struct SignOnAlertsOptIn: AsyncMigration {
+    func prepare(on db: Database) async throws {
+        try await UserModel.query(on: db).set(\.$signOnPushes, to: false).update()
+    }
+
+    func revert(on db: Database) async throws {}
 }
 
 struct AddAvatar: AsyncMigration {

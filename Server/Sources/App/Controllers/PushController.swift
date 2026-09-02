@@ -50,8 +50,8 @@ struct PushController: RouteCollection {
     }
 }
 
-/// APNs alerts for the two things that happen while the app isn't looking:
-/// buddies signing on, and buddy requests arriving.
+/// APNs for what happens while the app isn't looking: the icon badge counting
+/// buddies online, and alerts for buddy requests and, if asked, sign-ons.
 actor Pusher {
     static let bundleID = "com.deadsimple.totem"
 
@@ -91,6 +91,40 @@ actor Pusher {
             }
         } catch {
             app.logger.report(error: error)
+        }
+    }
+
+    /// The icon badge is how many of the user's buddies are online. It is
+    /// recomputed from presence at every offline↔online transition rather
+    /// than counted up, so it can't drift and zero clears it — and it goes to
+    /// every token, connected or not: a value rather than an event, so a
+    /// redundant delivery costs nothing and needs no reconciling.
+    func refreshBadges(of recipients: [UUID]) async {
+        guard isConfigured else { return }
+        for recipient in recipients {
+            do {
+                let tokens = try await PushTokenModel.query(on: app.db)
+                    .filter(\.$user.$id == recipient).all()
+                guard !tokens.isEmpty else { continue }
+                let online = try await PresenceStore(redis: app.redis).presentCount(
+                    among: BuddyModel.acceptedBuddyIDs(of: recipient, on: app.db))
+                for row in tokens {
+                    // Absolute values supersede each other, so one collapse ID
+                    // per recipient replaces an undelivered older badge rather
+                    // than playing it back first. Past an hour a stored value
+                    // is likelier wrong than right; the app corrects it on open.
+                    let request = APNSRequest(
+                        message: BadgeMessage(count: online), deviceToken: row.token,
+                        pushType: .alert,
+                        expiration: .timeIntervalSince1970InSeconds(
+                            Int(Date().timeIntervalSince1970 + 60 * 60)),
+                        priority: .immediately, apnsID: nil, topic: Self.bundleID,
+                        collapseID: "badge")
+                    await deliver(to: row) { _ = try await app.apns.client.send(request) }
+                }
+            } catch {
+                app.logger.report(error: error)
+            }
         }
     }
 
@@ -156,24 +190,46 @@ actor Pusher {
     /// the way the local notification replaces itself by identifier.
     private func send(_ body: String, about userID: UUID, handle: String, kind: String,
                       expiresIn: TimeInterval, to row: PushTokenModel) async {
-        do {
-            var notification = APNSAlertNotification(
-                alert: .init(title: .raw(handle), body: .raw(body)),
-                expiration: .timeIntervalSince1970InSeconds(
-                    Int(Date().timeIntervalSince1970 + expiresIn)),
-                priority: .immediately,
-                topic: Self.bundleID,
-                payload: EmptyPayload(),
-                sound: .default,
-                threadID: userID.uuidString)
-            notification.collapseID = "\(kind)-\(userID)"
+        var notification = APNSAlertNotification(
+            alert: .init(title: .raw(handle), body: .raw(body)),
+            expiration: .timeIntervalSince1970InSeconds(
+                Int(Date().timeIntervalSince1970 + expiresIn)),
+            priority: .immediately,
+            topic: Self.bundleID,
+            payload: EmptyPayload(),
+            sound: .default,
+            threadID: userID.uuidString)
+        notification.collapseID = "\(kind)-\(userID)"
+        await deliver(to: row) {
             try await app.apns.client.sendAlertNotification(notification, deviceToken: row.token)
+        }
+    }
+
+    /// A token APNs calls dead is dropped so the device's next registration
+    /// starts clean; any other failure is logged and forgotten.
+    private func deliver(to row: PushTokenModel, _ attempt: () async throws -> Void) async {
+        do {
+            try await attempt()
         } catch let error as APNSError where error.reason == .badDeviceToken
             || error.reason == .unregistered {
             try? await row.delete(on: app.db)
         } catch {
             app.logger.warning("push failed: \(error)")
         }
+    }
+}
+
+/// `{"aps":{"badge":n}}` and nothing else: an alert-type push with no alert
+/// and no sound sets the icon badge without showing or sounding anything.
+private struct BadgeMessage: APNSMessage {
+    struct APS: Encodable {
+        let badge: Int
+    }
+
+    let aps: APS
+
+    init(count: Int) {
+        aps = APS(badge: count)
     }
 }
 

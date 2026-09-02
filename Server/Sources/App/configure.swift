@@ -43,6 +43,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddBotContextAliases())
     app.migrations.add(AdoptDerivedConversations())
     app.migrations.add(DropSessionStorage())
+    app.migrations.add(SignOnAlertsOptIn())
     try await app.autoMigrate()
     print("configure: routes")
 
