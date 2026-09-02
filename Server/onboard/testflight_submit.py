@@ -83,7 +83,10 @@ def commit_titles(previous, current):
     with `date +%Y%m%d%H%M`, so two of them bound the range directly — no tag
     or recorded SHA needed."""
     def when(stamp):
-        return f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[8:10]}:{stamp[10:12]}"
+        # Stamps have minute resolution and a build is archived from the
+        # working tree, usually a moment before its commit lands, so a
+        # build's minute belongs to it whole.
+        return f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[8:10]}:{stamp[10:12]}:59"
 
     result = subprocess.run(
         ["git", "log", "--no-merges", "--pretty=format:%s",
