@@ -7,6 +7,11 @@ import TotemKit
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    #if os(iOS)
+    @Environment(\.scenePhase) private var scenePhase
+    #else
+    @Environment(\.controlActiveState) private var controlActiveState
+    #endif
     let conversationID: UUID
     @State private var draft = ""
     @State private var pulsing = false
@@ -44,6 +49,21 @@ struct ConversationView: View {
         return (model.presences[peerID]?.state ?? .offline) == .offline
     }
 
+    /// Whether someone looking at their screen would see this chat: the app
+    /// in front on iOS, this window key on macOS. Gone while the app is in
+    /// the switcher or another app is in front.
+    private var isFrontmost: Bool {
+        #if os(iOS)
+        scenePhase == .active
+        #else
+        controlActiveState == .key
+        #endif
+    }
+
+    private var peerViewing: Bool {
+        group == nil && model.peerViewing.contains(conversationID)
+    }
+
     /// The group's sitting ended — fewer than two people left. The transcript
     /// and roster stay readable; sending is over until someone starts the
     /// same combination again.
@@ -59,10 +79,18 @@ struct ConversationView: View {
         model.dictationConversation == conversationID
     }
 
+    /// Everyone audible in this chat. We only count while our own mic is
+    /// live: the monitor exists to show our voice going out, and once the mic
+    /// is off there's nothing to show.
     private var speakers: [(id: UUID, handle: String)] {
         (model.speakingUsers[conversationID] ?? [])
+            .filter { micIsLive || $0 != model.currentUser?.id }
             .map { (id: $0, handle: model.handle(of: $0) ?? "?") }
             .sorted { $0.handle < $1.handle }
+    }
+
+    private var othersSpeaking: Bool {
+        speakers.contains { $0.id != model.currentUser?.id }
     }
 
     private var mutedListenerNames: [String] {
@@ -109,9 +137,10 @@ struct ConversationView: View {
                 memberList(group)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            // Also shown while broadcasting with no one talking back — the
-            // speaker is exactly who needs to know a listener can't hear.
-            if !speakers.isEmpty || (micIsLive && !mutedListenerNames.isEmpty) {
+            // Voice holds the top while anyone is audible or our own mic is
+            // open — the speaker is exactly who needs to know a listener
+            // can't hear, and the way off the mic lives here.
+            if !speakers.isEmpty || micIsLive {
                 speakersSection
             }
             transcript
@@ -155,6 +184,13 @@ struct ConversationView: View {
                 }
             }
             #else
+            // The window title carries the name here, so the dot stands alone.
+            if peerViewing {
+                ToolbarItem(placement: .principal) {
+                    ViewingDot()
+                        .help("\(title) has this chat open")
+                }
+            }
             if group != nil {
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: toggleMembers) {
@@ -177,8 +213,14 @@ struct ConversationView: View {
             YouTubePickerSheet(conversationID: conversationID)
                 .environment(model)
         }
-        .onAppear { model.conversationOpened(conversationID) }
+        .onAppear {
+            model.conversationOpened(conversationID)
+            model.conversationViewed(conversationID, isFrontmost)
+        }
         .onDisappear { model.conversationClosed(conversationID) }
+        .onChange(of: isFrontmost) { _, frontmost in
+            model.conversationViewed(conversationID, frontmost)
+        }
         .onChange(of: model.isSignedOn) { _, signedOn in
             if !signedOn { dismiss() }
         }
@@ -288,6 +330,9 @@ struct ConversationView: View {
             }
             Text(title)
                 .font(.subheadline.weight(.semibold))
+            if peerViewing {
+                ViewingDot()
+            }
             if group != nil {
                 Image(systemName: "chevron.down")
                     .font(.caption2.weight(.semibold))
@@ -296,6 +341,17 @@ struct ConversationView: View {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    /// The peer has this chat on screen right now.
+    private struct ViewingDot: View {
+        var body: some View {
+            Circle()
+                .fill(.green)
+                .frame(width: 8, height: 8)
+                .transition(.scale.combined(with: .opacity))
+                .accessibilityLabel("Has this chat open")
+        }
     }
 
     private func toggleMembers() {
@@ -383,11 +439,33 @@ struct ConversationView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             }
+            #if os(iOS)
+            voiceExit
+            #endif
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.accentColor.opacity(0.12))
     }
+
+    #if os(iOS)
+    /// Whoever is talking gets off the mic here; whoever is only listening
+    /// decides whether to keep hearing it.
+    @ViewBuilder
+    private var voiceExit: some View {
+        if micIsLive {
+            StageExit(label: "End Voice", symbol: "mic.slash.fill") {
+                model.toggleMic(in: conversationID)
+            }
+        } else if othersSpeaking {
+            let muted = model.voiceMuted(in: conversationID)
+            StageExit(label: muted ? "Unmute Voice" : "Mute Voice",
+                      symbol: muted ? "speaker.wave.2.fill" : "speaker.slash.fill") {
+                model.toggleVoiceMute(in: conversationID)
+            }
+        }
+    }
+    #endif
 
     private func banner(_ text: String) -> some View {
         Text(text)

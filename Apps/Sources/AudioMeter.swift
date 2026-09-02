@@ -1,10 +1,9 @@
-import Foundation
+import AVFoundation
 import SwiftUI
-import TotemKit
 
-/// Minimal spectrum analysis of a wire-format audio chunk: Goertzel magnitude
-/// at log-spaced frequencies, one per display band. Not a real FFT power
-/// spectrum — just enough to draw a live equalizer at ~10 updates/s.
+/// Minimal spectrum analysis of one codec frame: Goertzel magnitude at
+/// log-spaced frequencies, one per display band. Not a real FFT power
+/// spectrum — just enough to draw a live equalizer.
 enum AudioAnalyzer {
     static let bandCount = 4
     /// Log-spaced probe frequencies across the speech range.
@@ -19,13 +18,13 @@ enum AudioAnalyzer {
     }
 
     /// Per-band levels normalized to 0...1 (floor −50 dBFS).
-    static func spectrum(of chunk: Data) -> [Float] {
-        let samples: [Float] = chunk.withUnsafeBytes { raw in
-            raw.bindMemory(to: Int16.self).map { Float($0) / 32_768 }
+    static func spectrum(of buffer: AVAudioPCMBuffer) -> [Float] {
+        guard let channel = buffer.floatChannelData, buffer.frameLength > 32 else {
+            return Array(repeating: 0, count: bandCount)
         }
-        guard samples.count > 32 else { return Array(repeating: 0, count: bandCount) }
+        let samples = UnsafeBufferPointer(start: channel[0], count: Int(buffer.frameLength))
         return frequencies.enumerated().map { band, frequency in
-            let coefficient = Float(2 * cos(2 * .pi * frequency / AudioWire.sampleRate))
+            let coefficient = Float(2 * cos(2 * .pi * frequency / buffer.format.sampleRate))
             var s1: Float = 0, s2: Float = 0
             for sample in samples {
                 let s = sample + coefficient * s1 - s2

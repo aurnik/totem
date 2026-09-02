@@ -32,6 +32,9 @@ struct GatewayController {
             return
         }
         let generation = await connections.register(ws, for: userID)
+        // A socket this one replaced may have left a chat on screen; this one
+        // hasn't said what it shows yet.
+        await stopViewing(userID)
 
         ws.onBinary { _, buffer in
             await handleFrame(buffer: Data(buffer.readableBytesView), from: userID)
@@ -58,7 +61,7 @@ struct GatewayController {
                 for userID in await self.connections.connectedUserIDs() {
                     let current = try? await self.presence.get(for: userID)
                     if current?.state ?? .offline == .offline {
-                        await self.connections.expire(userID)
+                        await self.reap(userID)
                         await self.goOffline(userID: userID)
                     }
                 }
@@ -147,6 +150,19 @@ struct GatewayController {
                          bots: await bots.all(),
                          latestBuild: Environment.get("LATEST_CLIENT_BUILD")),
                 to: userID)
+            // What peers have on screen, and where their voice endpoints are,
+            // is socket state, so it isn't in the welcome; a client back from
+            // a drop is told afresh.
+            for (viewerID, conversationID) in await connections.viewers(of: userID) {
+                await connections.send(
+                    .viewing(conversationID: conversationID, userID: viewerID, viewing: true),
+                    to: userID)
+            }
+            for peerID in await renderers(of: userID) {
+                if let ticket = await connections.endpoint(of: peerID) {
+                    await connections.send(.endpoint(userID: peerID, ticket: ticket), to: userID)
+                }
+            }
             await fanOut(.presence(userID: userID, presence: current), toBuddiesOf: userID)
             // Buddies' cached lists were fetched at their own launch and can
             // predate this user ever publishing an avatar.
@@ -169,8 +185,16 @@ struct GatewayController {
     /// in a tunnel doesn't flap to offline (spec §10). If they haven't
     /// reconnected when the grace elapses, they go offline.
     private func handleClose(userID: UUID, ws: WebSocket, generation: Int) async {
-        await connections.unregister(userID, ifStill: ws)
+        if await connections.unregister(userID, ifStill: ws) {
+            await stopViewing(userID)
+        }
         await goOffline(userID: userID, afterGraceFrom: generation)
+    }
+
+    /// Force-close a silent socket. Whatever it had on screen went with it.
+    private func reap(_ userID: UUID) async {
+        await connections.expire(userID)
+        await stopViewing(userID)
     }
 
     /// Offline once the grace elapses, unless they came back. The generation
@@ -198,7 +222,7 @@ struct GatewayController {
         // is reaped here or not at all. Reaping supersedes the countdown its
         // own close would have started, so this takes over that duty.
         if await connections.isConnected(userID) {
-            await connections.expire(userID)
+            await reap(userID)
             let generation = await connections.generation(of: userID)
             Task { await goOffline(userID: userID, afterGraceFrom: generation) }
         }
@@ -292,15 +316,15 @@ struct GatewayController {
                                 clientMessageID: clientMessageID, dictated: dictated,
                                 botContext: botContext)
 
-            // Live audio is best-effort relay: no ack, no error frames, no
-            // ping-verify (chunks arrive ~10/s), nothing stored. A recipient
-            // without the chat open just drops the chunks client-side.
-            case .streamAudio(let conversationID, let chunk):
-                guard chunk.count <= AudioWire.chunkMaxBytes,
-                      let conversation = try await usableConversation(conversationID, by: userID)
-                else { return }
-                await send(.audio(conversationID: conversationID, senderID: userID, chunk: chunk),
-                           toParticipantsOf: conversation, except: userID)
+            // Live voice itself never comes through here: peers dial each
+            // other's endpoints directly. The server only introduces them, to
+            // exactly the people who render this user.
+            case .announceEndpoint(let ticket):
+                guard ticket.count <= Limits.endpointTicketMaxLength else { return }
+                await connections.setEndpoint(ticket, for: userID)
+                for id in await renderers(of: userID) {
+                    await connections.send(.endpoint(userID: userID, ticket: ticket), to: id)
+                }
 
             case .setMuted(let conversationID, let muted):
                 guard let conversation = try await usableConversation(conversationID, by: userID)
@@ -312,6 +336,20 @@ struct GatewayController {
                 if try await areAcceptedBuddies(userID, recipientID) {
                     await connections.send(.typing(userID: userID), to: recipientID)
                 }
+
+            // Only a 1:1 has a peer to tell; a group on screen counts as
+            // nothing on screen, which still takes down the dot in whichever
+            // pair chat they just left.
+            case .viewing(let conversationID):
+                var target: ConnectionManager.Viewing?
+                if let conversationID,
+                   let conversation = try await usableConversation(conversationID, by: userID),
+                   !conversation.isGroup {
+                    target = .init(conversationID: conversationID,
+                                   peerID: conversation.peer(of: userID))
+                }
+                let previous = await connections.setViewing(target, for: userID)
+                await announceViewing(of: userID, from: previous, to: target)
 
             case .stageAction(let conversationID, let action, let expectedVersion):
                 try await applyStageAction(action, expectedVersion: expectedVersion,
@@ -476,6 +514,30 @@ struct GatewayController {
         return conversation
     }
 
+    // MARK: - Viewing
+
+    private func stopViewing(_ userID: UUID) async {
+        let previous = await connections.setViewing(nil, for: userID)
+        await announceViewing(of: userID, from: previous, to: nil)
+    }
+
+    /// The peer they left hears the dot go out before the peer they joined
+    /// hears it come on; a resend of the same target says nothing.
+    private func announceViewing(of userID: UUID, from previous: ConnectionManager.Viewing?,
+                                 to current: ConnectionManager.Viewing?) async {
+        guard previous != current else { return }
+        if let previous {
+            await connections.send(
+                .viewing(conversationID: previous.conversationID, userID: userID, viewing: false),
+                to: previous.peerID)
+        }
+        if let current {
+            await connections.send(
+                .viewing(conversationID: current.conversationID, userID: userID, viewing: true),
+                to: current.peerID)
+        }
+    }
+
     private func send(_ frame: ServerFrame, toParticipantsOf conversation: ConversationModel,
                       except senderID: UUID) async {
         for participant in conversation.participants where participant != senderID {
@@ -531,14 +593,18 @@ struct GatewayController {
 
     /// Everyone who renders this user right now: accepted buddies plus
     /// co-participants of live group sittings, who may not be buddies at all.
-    func fanOutAvatar(_ avatar: Avatar, of userID: UUID) async {
+    private func renderers(of userID: UUID) async -> Set<UUID> {
         var recipients = Set((try? await acceptedBuddyIDs(of: userID)) ?? [])
         for (_, sitting) in (try? await sittings.all()) ?? [:]
         where sitting.participants.count > 2 && sitting.participants.contains(userID) {
             recipients.formUnion(sitting.participants)
         }
         recipients.remove(userID)
-        for id in recipients {
+        return recipients
+    }
+
+    func fanOutAvatar(_ avatar: Avatar, of userID: UUID) async {
+        for id in await renderers(of: userID) {
             await connections.send(.avatarChanged(userID: userID, avatar: avatar), to: id)
         }
     }

@@ -17,10 +17,11 @@ public enum ClientFrame: Codable, Sendable {
     /// never relayed, never stored.
     case send(conversationID: UUID, body: String, clientMessageID: UUID,
               dictated: Bool? = nil, botContext: [BotContextMessage]? = nil)
-    /// Live mic audio: raw little-endian Int16 mono PCM at
-    /// `AudioWire.sampleRate`, ~100ms per chunk. Relay-only, best-effort —
-    /// never stored, never acked, silently dropped for offline recipients.
-    case streamAudio(conversationID: UUID, chunk: Data)
+    /// This device's iroh endpoint ticket — how peers dial it for live voice,
+    /// which never crosses the server. Socket state, like `viewing`: sent once
+    /// the endpoint is online, again after every reconnect, and whenever its
+    /// addresses change.
+    case announceEndpoint(ticket: String)
     /// This user can't hear incoming live audio right now (device volume at
     /// zero) — or can again. Sent on transitions while audio is audible in
     /// the chat, so other participants can show a crossed-out speaker.
@@ -28,6 +29,12 @@ public enum ClientFrame: Codable, Sendable {
     /// Typing stays peer-addressed: it's 1:1-only, and the recipient is the
     /// address, not the conversation.
     case typing(recipientID: UUID)
+    /// The conversation this client has on screen right now — nil when none
+    /// (chat list showing, app in the background). Absolute, not a toggle, so
+    /// a resend after a reconnect is harmless; the server derives the
+    /// transitions and tells the peer of a 1:1. Groups are accepted and
+    /// treated as nil.
+    case viewing(conversationID: UUID?)
     /// Drive the conversation's stage. `expectedVersion` is the stage version
     /// the sender was looking at, required for conditional actions and
     /// ignored otherwise.
@@ -36,12 +43,6 @@ public enum ClientFrame: Codable, Sendable {
     /// again after a reconnect, since stage pushes during the gap were missed.
     case requestStage(conversationID: UUID)
     case closeStage(conversationID: UUID)
-}
-
-public enum AudioWire {
-    public static let sampleRate: Double = 16_000
-    /// ~1s of PCM — anything larger is malformed and dropped by the server.
-    public static let chunkMaxBytes = 32_768
 }
 
 /// A session plus the users in it — what a client needs to render a group chat.
@@ -84,10 +85,16 @@ public enum ServerFrame: Codable, Sendable {
     /// Server ack for a sent message, correlating the client-generated ID.
     case messageSent(clientMessageID: UUID, message: ChatMessage)
     case typing(userID: UUID)
-    /// Live mic audio from a chat participant, keyed by the conversation ID.
-    case audio(conversationID: UUID, senderID: UUID, chunk: Data)
+    /// The peer of this 1:1 conversation opened it on screen, or left it —
+    /// including by their socket dropping. Connection state, not presence: it
+    /// is never in `welcome`, so a reconnecting client is told again.
+    case viewing(conversationID: UUID, userID: UUID, viewing: Bool)
+    /// A buddy's or group co-participant's live-voice endpoint. Connection
+    /// state like `viewing`: never in `welcome`, but a connecting client is
+    /// sent every one currently known; a peer going offline retires theirs.
+    case endpoint(userID: UUID, ticket: String)
     /// A chat participant's device went (or stopped being) unable to play
-    /// live audio. Same `conversationID` keying as `audio`.
+    /// live audio, keyed by the conversation ID.
     case audioMuted(conversationID: UUID, userID: UUID, muted: Bool)
     /// A buddy (or group co-participant) published a new avatar, or signed on
     /// carrying one the recipient's cached buddy list predates. Clients patch
@@ -98,8 +105,8 @@ public enum ServerFrame: Codable, Sendable {
     /// `presence` push). Clients refetch the buddy list rather than patching
     /// local state.
     case buddyRequest
-    /// The conversation's stage, authoritative. Same `conversationID` keying as
-    /// `audio`. `senderID` is whoever acted, and nil when this is a snapshot
+    /// The conversation's stage, authoritative, keyed by the conversation ID.
+    /// `senderID` is whoever acted, and nil when this is a snapshot
     /// reply or a re-sync after a rejected action — clients only post a
     /// transcript notice when someone actually did something. A nil `stage`
     /// means the stage is empty.

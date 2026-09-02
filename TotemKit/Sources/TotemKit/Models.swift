@@ -152,6 +152,9 @@ public struct PushSettings: Codable, Sendable {
 public enum Limits {
     public static let maxBuddies = 100
     public static let awayMessageMaxLength = 140
+    /// An iroh endpoint ticket is a couple of hundred characters; anything
+    /// past this is not one.
+    public static let endpointTicketMaxLength = 1024
     public static let handleLength = 3...16
     /// At most one sign-on *push* per buddy per rolling 15 minutes (spec §7
     /// asked for 30). Pushes alone, because they interrupt someone who isn't

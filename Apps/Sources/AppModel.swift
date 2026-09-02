@@ -60,6 +60,18 @@ final class AppModel {
     /// wire; the spec's no-read-receipts rule is about the other party.
     var unreadPeers: Set<UUID> = []
     private var activeConversations: Set<UUID> = []
+    /// The one conversation on screen in a frontmost window — narrower than
+    /// `activeConversations`, which is every open chat. Sent to the server
+    /// on every change and again after a reconnect, since the server forgets
+    /// it with the socket.
+    private var viewedConversation: UUID? {
+        didSet {
+            guard viewedConversation != oldValue else { return }
+            fire(.viewing(conversationID: viewedConversation))
+        }
+    }
+    /// Pair conversations the peer has on screen right now — the header dot.
+    var peerViewing: Set<UUID> = []
     /// Peers currently typing. Plain observable state (expired by tasks, not
     /// polled) so views update reliably — offscreen TimelineViews pause on iOS.
     private var typingPeers: Set<UUID> = []
@@ -82,8 +94,12 @@ final class AppModel {
     /// per conversation — drives the crossed-out speaker row while voice is
     /// live so speakers know who can't hear them.
     var mutedListeners: [UUID: Set<UUID>] = [:]
-    /// Conversations we've told peers *we* can't hear — cleared when the
-    /// volume comes back (with a follow-up frame) or the chat goes silent.
+    /// Conversations this user chose not to hear. Packets still arrive and
+    /// still drive the meters, so who's talking stays visible; only the
+    /// speaker is skipped. Scoped to the chat being open, like voice itself.
+    private var mutedConversations: Set<UUID> = []
+    /// Conversations we've told peers *we* can't hear — cleared when hearing
+    /// comes back (with a follow-up frame) or the chat goes silent.
     private var reportedMutedConversations: Set<UUID> = []
     /// Per-chunk spectrum frames for the speaker meters, keyed by speaking user.
     var speakerSpectrum: [UUID: [Float]] = [:]
@@ -95,8 +111,6 @@ final class AppModel {
     /// throttles the notice to once per sign-on.
     private var playbackFailureNoticed: Set<UUID> = []
     private var speakingExpiry: [UUID: Task<Void, Never>] = [:]
-    private var micSendTask: Task<Void, Never>?
-    private var micChunks: AsyncStream<Data>.Continuation?
     private var captureTask: Task<Void, Never>?
     /// Dictation: the conversation the mic is being transcribed into — one at
     /// a time, and the same mic the broadcast uses.
@@ -108,6 +122,9 @@ final class AppModel {
     private var dictationTranscriber: AnyObject?
     private var dictationSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     private let audio = AudioStreamer()
+    /// The peer-to-peer side of live voice, one per sign-on: it exists while
+    /// the socket does, since the server is what introduces its peers.
+    private var voice: VoiceLink?
 
     private var api = APIClient()
     private var socket: SocketClient?
@@ -219,6 +236,7 @@ final class AppModel {
     init() {
         NotificationManager.shared.activate()
         audio.onOutputVolumeChange = { [weak self] in self?.outputVolumeChanged() }
+        pruneUnreadableSamples()
         #if os(macOS)
         observeSystemSleep()
         #endif
@@ -399,6 +417,18 @@ final class AppModel {
         refreshPushSettings()
         let socket = SocketClient(url: api.socketURL, token: token)
         self.socket = socket
+        let voice = VoiceLink(
+            onTicket: { [weak self] ticket in
+                Task { @MainActor in self?.fire(.announceEndpoint(ticket: ticket)) }
+            },
+            onFrame: { [weak self] frame in
+                Task { @MainActor in
+                    self?.receiveAudio(conversationID: frame.conversationID,
+                                       senderID: frame.senderID, packet: frame.packet)
+                }
+            })
+        self.voice = voice
+        Task { await voice.start() }
         socketTask = Task { [weak self] in
             for await event in await socket.events() {
                 await self?.handle(event)
@@ -415,8 +445,10 @@ final class AppModel {
         pendingSends = [:]
         unreadPeers = []
         mutedListeners = [:]
+        mutedConversations = []
         reportedMutedConversations = []
         stages = [:]
+        peerViewing = []
     }
 
     func signOff() {
@@ -425,6 +457,9 @@ final class AppModel {
         let socket = self.socket
         Task { await socket?.close() }
         self.socket = nil
+        let voice = self.voice
+        Task { await voice?.stop() }
+        self.voice = nil
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
@@ -586,8 +621,8 @@ final class AppModel {
 
     /// A short recorded sound the user can broadcast into a chat from the
     /// mic button's long-press menu. Audio lives on this device only, as
-    /// wire-format PCM in Application Support; only the labels are listed
-    /// here (persisted in UserDefaults).
+    /// Opus packets in Application Support (`OpusPacketFile`); only the
+    /// labels are listed here (persisted in UserDefaults).
     struct SoundSample: Identifiable, Codable, Hashable {
         let id: UUID
         var label: String
@@ -604,36 +639,46 @@ final class AppModel {
     }()
     var isRecordingSample = false
     var sampleRecordingSeconds: Double = 0
-    private var sampleRecordingData = Data()
+    private var sampleRecordingPackets: [Data] = []
 
     private var samplesDir: URL {
         URL.applicationSupportDirectory.appendingPathComponent("SoundSamples", isDirectory: true)
     }
 
     private func sampleURL(_ id: UUID) -> URL {
-        samplesDir.appendingPathComponent("\(id).pcm")
+        samplesDir.appendingPathComponent("\(id).opus")
+    }
+
+    /// Samples recorded before the Opus cutover are in a format nothing can
+    /// play any more; their files and labels go together.
+    private func pruneUnreadableSamples() {
+        let stale = soundSamples.filter { !FileManager.default.fileExists(atPath: sampleURL($0.id).path) }
+        guard !stale.isEmpty else { return }
+        for sample in stale {
+            try? FileManager.default.removeItem(at: samplesDir.appendingPathComponent("\(sample.id).pcm"))
+        }
+        soundSamples.removeAll { stale.contains($0) }
+        persistSamples()
     }
 
     func startSampleRecording() async -> Bool {
         stopMic()
-        sampleRecordingData = Data()
+        sampleRecordingPackets = []
         sampleRecordingSeconds = 0
-        let started = await audio.startMic(onChunk: { [weak self] chunk in
-            Task { @MainActor in self?.appendSampleChunk(chunk) }
+        let started = await audio.startMic(onPacket: { [weak self] packet, _ in
+            Task { @MainActor in self?.appendSamplePacket(packet) }
         })
         isRecordingSample = started
         return started
     }
 
-    private func appendSampleChunk(_ chunk: Data) {
+    private func appendSamplePacket(_ packet: Data) {
         guard isRecordingSample else { return }
-        sampleRecordingData.append(chunk)
-        let maxBytes = Int(Self.sampleMaxSeconds * AudioWire.sampleRate) * 2
-        if sampleRecordingData.count >= maxBytes {
-            sampleRecordingData = sampleRecordingData.prefix(maxBytes)
+        sampleRecordingPackets.append(packet)
+        sampleRecordingSeconds = Double(sampleRecordingPackets.count) * 0.02
+        if sampleRecordingSeconds >= Self.sampleMaxSeconds {
             stopSampleRecording()
         }
-        sampleRecordingSeconds = Double(sampleRecordingData.count) / (AudioWire.sampleRate * 2)
     }
 
     func stopSampleRecording() {
@@ -645,21 +690,21 @@ final class AppModel {
     func saveRecordedSample(label: String) {
         stopSampleRecording()
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !sampleRecordingData.isEmpty,
+        guard !trimmed.isEmpty, !sampleRecordingPackets.isEmpty,
               soundSamples.count < Self.maxSoundSamples
         else { return }
         let sample = SoundSample(id: UUID(), label: String(trimmed.prefix(30)))
         do {
             try FileManager.default.createDirectory(
                 at: samplesDir, withIntermediateDirectories: true)
-            try sampleRecordingData.write(to: sampleURL(sample.id))
+            try OpusPacketFile.encode(sampleRecordingPackets).write(to: sampleURL(sample.id))
         } catch {
             print("sample save failed: \(error)")
             return
         }
         soundSamples.append(sample)
         persistSamples()
-        sampleRecordingData = Data()
+        sampleRecordingPackets = []
         sampleRecordingSeconds = 0
     }
 
@@ -675,27 +720,21 @@ final class AppModel {
         }
     }
 
-    /// Broadcasts a sample into the chat over the live-audio relay, paced in
-    /// real time like mic chunks so recipients' meters and speaker expiry
-    /// behave normally — and looped back locally so the sender hears it too.
+    /// Broadcasts a sample into the chat over the same peer links as the mic,
+    /// paced in real time so recipients' meters and speaker expiry behave
+    /// normally — and looped back locally so the sender hears it too.
     func playSample(_ sample: SoundSample, in conversationID: UUID) {
-        guard let data = try? Data(contentsOf: sampleURL(sample.id)), !data.isEmpty
+        guard let voice, let selfID = currentUser?.id,
+              let data = try? Data(contentsOf: sampleURL(sample.id))
         else { return }
-        let socket = self.socket
-        let selfID = currentUser?.id
-        // 100ms of wire PCM per chunk, matching the mic cadence.
-        let step = Int(AudioWire.sampleRate * 2) / 10
+        let packets = OpusPacketFile.decode(data)
+        guard !packets.isEmpty else { return }
+        voice.setRecipients(voiceRecipients(in: conversationID), of: conversationID)
         Task { [weak self] in
-            var offset = 0
-            while offset < data.count {
-                let chunk = data.subdata(in: offset..<min(offset + step, data.count))
-                try? await socket?.send(
-                    .streamAudio(conversationID: conversationID, chunk: chunk))
-                if let self, let selfID {
-                    self.receiveAudio(conversationID: conversationID, senderID: selfID, chunk: chunk)
-                }
-                offset += step
-                try? await Task.sleep(for: .milliseconds(100))
+            for packet in packets {
+                voice.send(packet, in: conversationID)
+                self?.receiveAudio(conversationID: conversationID, senderID: selfID, packet: packet)
+                try? await Task.sleep(for: AudioStreamer.frameDuration)
             }
         }
     }
@@ -707,6 +746,7 @@ final class AppModel {
     /// is off.
     func toggleMic(in conversationID: UUID) {
         if liveMicConversation == conversationID {
+            stopSelfMonitor(in: conversationID)
             liveMicConversation = nil
             dictationConversation = nil
         } else {
@@ -732,20 +772,32 @@ final class AppModel {
         guard let previous = liveMicConversation ?? dictationConversation,
               previous != conversationID
         else { return }
+        stopSelfMonitor(in: previous)
         liveMicConversation = nil
         dictationConversation = nil
         applyCapture(in: previous)
     }
 
+    /// The self monitor ends with the mic, not after the silence expiry: a
+    /// speaker strip that outlives the mic offers the listener's controls.
+    /// The tap can still deliver a frame or two after this — those are
+    /// dropped where they'd re-light it.
+    private func stopSelfMonitor(in conversationID: UUID) {
+        guard let selfID = currentUser?.id else { return }
+        speakingUsers[conversationID]?.remove(selfID)
+        speakerSpectrum[selfID] = nil
+        speakingExpiry[selfID]?.cancel()
+        speakingExpiry[selfID] = nil
+    }
+
     func stopMic() {
         captureTask?.cancel()
         captureTask = nil
+        if let conversationID = liveMicConversation {
+            stopSelfMonitor(in: conversationID)
+        }
         liveMicConversation = nil
         dictationConversation = nil
-        micChunks?.finish()
-        micChunks = nil
-        micSendTask?.cancel()
-        micSendTask = nil
         let stopDictating = takeDictationStop()
         audio.stopMic()
         if let stopDictating { Task { await stopDictating() } }
@@ -782,18 +834,12 @@ final class AppModel {
     }
 
     private func reconcileCapture(in conversationID: UUID) async {
-        // The outbound pump is rebuilt below if broadcast is still wanted.
-        micChunks?.finish()
-        micChunks = nil
-        micSendTask?.cancel()
-        micSendTask = nil
-
         if dictationConversation == conversationID {
             await startDictation(in: conversationID)
         } else {
             await stopDictation()
         }
-        if liveMicConversation == conversationID, socket == nil {
+        if liveMicConversation == conversationID, voice == nil {
             liveMicConversation = nil
         }
         let broadcasting = liveMicConversation == conversationID
@@ -802,31 +848,38 @@ final class AppModel {
             return
         }
 
-        var chunkSink: (@Sendable (Data) -> Void)?
-        if broadcasting, let socket {
-            // Chunks flow through one stream consumed by one task so sends
-            // stay ordered — racing per-chunk Tasks would garble the audio.
-            let (stream, continuation) = AsyncStream<Data>.makeStream(
-                bufferingPolicy: .bufferingNewest(8))
-            micChunks = continuation
-            chunkSink = { continuation.yield($0) }
-            micSendTask = Task { [weak self] in
-                for await chunk in stream {
-                    try? await socket.send(
-                        .streamAudio(conversationID: conversationID, chunk: chunk))
-                    // Meter-only self monitor (no playback — that would echo)
-                    // so the speaker can see their own audio going out.
-                    if let self, let selfID = self.currentUser?.id {
-                        self.markSpeaking(selfID, in: conversationID, chunk: chunk)
-                    }
+        var packetSink: (@Sendable (Data, [Float]) -> Void)?
+        if broadcasting, let voice {
+            voice.setRecipients(voiceRecipients(in: conversationID), of: conversationID)
+            let selfID = currentUser?.id
+            packetSink = { [weak self] packet, spectrum in
+                // Straight off the audio thread: the link is thread-safe and
+                // datagrams don't block.
+                voice.send(packet, in: conversationID)
+                // Meter-only self monitor (no playback — that would echo)
+                // so the speaker can see their own audio going out.
+                guard let selfID else { return }
+                Task { @MainActor in
+                    guard let self, self.liveMicConversation == conversationID else { return }
+                    self.markSpeaking(selfID, in: conversationID, spectrum: spectrum)
                 }
             }
         }
 
-        guard await audio.startMic(onChunk: chunkSink, onBuffer: dictationSink) else {
+        guard await audio.startMic(onPacket: packetSink, onBuffer: dictationSink) else {
             stopMic()
             return
         }
+    }
+
+    /// Who hears voice in a conversation: the buddy of a pair, or everyone
+    /// else in a group. Anyone the server hasn't introduced yet is simply
+    /// not dialled.
+    private func voiceRecipients(in conversationID: UUID) -> Set<UUID> {
+        if let peerID = peer(of: conversationID) { return [peerID] }
+        var members = Set(groupSessions[conversationID]?.participants.map(\.id) ?? [])
+        if let selfID = currentUser?.id { members.remove(selfID) }
+        return members
     }
 
     // MARK: - Dictation
@@ -875,6 +928,7 @@ final class AppModel {
     private func silenceConversation(_ conversationID: UUID) {
         if micConversation == conversationID { stopMic() }
         mutedListeners[conversationID] = nil
+        mutedConversations.remove(conversationID)
         reportedMutedConversations.remove(conversationID)
         for senderID in speakingUsers.removeValue(forKey: conversationID) ?? [] {
             audio.stopSpeaker(senderID)
@@ -882,6 +936,28 @@ final class AppModel {
             speakingExpiry[senderID] = nil
             speakerSpectrum[senderID] = nil
         }
+    }
+
+    func voiceMuted(in conversationID: UUID) -> Bool {
+        mutedConversations.contains(conversationID)
+    }
+
+    /// Stop (or resume) hearing a conversation. To whoever is talking it is
+    /// the same fact as the volume being at zero: this listener can't hear.
+    func toggleVoiceMute(in conversationID: UUID) {
+        if mutedConversations.remove(conversationID) == nil {
+            mutedConversations.insert(conversationID)
+            if !(speakingUsers[conversationID] ?? []).isEmpty {
+                reportMutedIfNeeded(in: conversationID)
+            }
+        } else {
+            reportHearingIfRestored(in: conversationID)
+        }
+    }
+
+    /// Whether live voice in a conversation reaches this user's ears right now.
+    private func cannotHear(in conversationID: UUID) -> Bool {
+        audio.outputMuted || mutedConversations.contains(conversationID)
     }
 
     /// On transitions only: while audio is audible in a conversation, tell its
@@ -894,17 +970,23 @@ final class AppModel {
             }
         } else {
             for conversationID in reportedMutedConversations {
-                sendAudioMuted(false, in: conversationID)
+                reportHearingIfRestored(in: conversationID)
             }
-            reportedMutedConversations = []
         }
     }
 
     private func reportMutedIfNeeded(in conversationID: UUID) {
-        guard audio.outputMuted, !reportedMutedConversations.contains(conversationID)
+        guard cannotHear(in: conversationID), !reportedMutedConversations.contains(conversationID)
         else { return }
         reportedMutedConversations.insert(conversationID)
         sendAudioMuted(true, in: conversationID)
+    }
+
+    private func reportHearingIfRestored(in conversationID: UUID) {
+        guard !cannotHear(in: conversationID),
+              reportedMutedConversations.remove(conversationID) != nil
+        else { return }
+        sendAudioMuted(false, in: conversationID)
     }
 
     private func sendAudioMuted(_ muted: Bool, in conversationID: UUID) {
@@ -966,6 +1048,17 @@ final class AppModel {
         fire(.requestStage(conversationID: peerID))
     }
 
+    /// A chat reports itself viewed when it's on screen in the frontmost
+    /// window and not otherwise; with one window per conversation on macOS
+    /// several can report, so only the one reporting true wins.
+    func conversationViewed(_ conversationID: UUID, _ viewed: Bool) {
+        if viewed {
+            viewedConversation = conversationID
+        } else if viewedConversation == conversationID {
+            viewedConversation = nil
+        }
+    }
+
     // MARK: - Stage
 
     /// Conditional actions carry the version they were aimed at, so the server
@@ -993,10 +1086,17 @@ final class AppModel {
     }
 
     /// After a reconnect the stage may have moved on without us — anything
-    /// pushed during the gap never arrived.
-    private func refreshOpenStages() {
+    /// pushed during the gap never arrived — and the server forgot what this
+    /// socket had told it: what's on screen, and where our voice endpoint is.
+    private func resendAfterReconnect() {
         for conversationID in activeConversations {
             fire(.requestStage(conversationID: conversationID))
+        }
+        if let viewedConversation {
+            fire(.viewing(conversationID: viewedConversation))
+        }
+        if let ticket = voice?.ticket {
+            fire(.announceEndpoint(ticket: ticket))
         }
     }
 
@@ -1055,6 +1155,7 @@ final class AppModel {
 
     func conversationClosed(_ peerID: UUID) {
         activeConversations.remove(peerID)
+        conversationViewed(peerID, false)
         silenceConversation(peerID)
     }
 
@@ -1177,6 +1278,9 @@ final class AppModel {
             if freshSignOn {
                 clearSessionScopedState()
             }
+            // Socket state on the server's side too: anyone still looking is
+            // re-announced right after this frame.
+            peerViewing = []
             presences = Dictionary(uniqueKeysWithValues: buddies.compactMap { key, value in
                 UUID(uuidString: key).map { ($0, value) }
             })
@@ -1194,7 +1298,7 @@ final class AppModel {
                 groupSessions.merge(live) { _, new in new }
                 endedGroups.subtract(live.keys)
             }
-            refreshOpenStages()
+            resendAfterReconnect()
         case .sessionStarted(let info):
             if info.isGroup {
                 groupSessions[info.session.id] = info
@@ -1208,6 +1312,9 @@ final class AppModel {
             let previous = presences[userID]
             let wasOffline = (previous?.state ?? .offline) == .offline
             presences[userID] = presence
+            if presence.state == .offline {
+                voice?.removePeer(userID)
+            }
             // Where this buddy's conversation lives — notices about a person
             // land in the chat with that person.
             let pairID = conversationID(with: userID)
@@ -1261,6 +1368,7 @@ final class AppModel {
                 // copy — group stages outlive any one member going offline.
                 if let pairID {
                     stages[pairID] = nil
+                    peerViewing.remove(pairID)
                 }
             }
         case .message(let message):
@@ -1293,8 +1401,14 @@ final class AppModel {
                 guard !Task.isCancelled else { return }
                 self?.typingPeers.remove(userID)
             }
-        case .audio(let conversationID, let senderID, let chunk):
-            receiveAudio(conversationID: conversationID, senderID: senderID, chunk: chunk)
+        case .viewing(let conversationID, _, let viewing):
+            if viewing {
+                peerViewing.insert(conversationID)
+            } else {
+                peerViewing.remove(conversationID)
+            }
+        case .endpoint(let userID, let ticket):
+            voice?.setPeer(userID, ticket: ticket)
         case .audioMuted(let conversationID, let userID, let muted):
             guard activeConversations.contains(conversationID) else { return }
             if muted {
@@ -1328,30 +1442,41 @@ final class AppModel {
         }
     }
 
-    /// One live-audio chunk reaching the ears and meters — from the wire, or
-    /// looped back locally while broadcasting a sound sample.
-    private func receiveAudio(conversationID: UUID, senderID: UUID, chunk: Data) {
+    /// One live-voice packet reaching the ears and meters — from a peer, or
+    /// looped back locally while broadcasting a sound sample. A peer's packet
+    /// only counts for a conversation they're actually in: the link vouches
+    /// for who sent it, not for what they labelled it.
+    private func receiveAudio(conversationID: UUID, senderID: UUID, packet: Data) {
         // Live voice only reaches ears with that chat open.
-        guard activeConversations.contains(conversationID) else { return }
-        if let failure = audio.play(chunk, from: senderID),
-           !playbackFailureNoticed.contains(conversationID) {
-            playbackFailureNoticed.insert(conversationID)
-            append(.notice(id: UUID(), text: "Can't play live audio — \(failure)", at: Date()),
-                   to: conversationID)
+        guard activeConversations.contains(conversationID),
+              senderID == currentUser?.id || voiceRecipients(in: conversationID).contains(senderID)
+        else { return }
+        let spectrum: [Float]
+        switch audio.play(packet, from: senderID,
+                          audible: !mutedConversations.contains(conversationID)) {
+        case .heard(let heard):
+            spectrum = heard
+        case .silent(let reason):
+            spectrum = Array(repeating: 0, count: AudioAnalyzer.bandCount)
+            if !playbackFailureNoticed.contains(conversationID) {
+                playbackFailureNoticed.insert(conversationID)
+                append(.notice(id: UUID(), text: "Can't play live audio — \(reason)", at: Date()),
+                       to: conversationID)
+            }
         }
         // A silent chat just became audible — if our volume is at zero,
         // that's the moment the speaker needs to know we can't hear.
         if (speakingUsers[conversationID] ?? []).isEmpty {
             reportMutedIfNeeded(in: conversationID)
         }
-        markSpeaking(senderID, in: conversationID, chunk: chunk)
+        markSpeaking(senderID, in: conversationID, spectrum: spectrum)
     }
 
-    /// Lights up the speaker meters for one chunk — remote audio, the local
+    /// Lights up the speaker meters for one frame — remote audio, the local
     /// mic monitor, or a sample loopback — and schedules the quiet-expiry.
-    private func markSpeaking(_ senderID: UUID, in conversationID: UUID, chunk: Data) {
+    private func markSpeaking(_ senderID: UUID, in conversationID: UUID, spectrum: [Float]) {
         speakingUsers[conversationID, default: []].insert(senderID)
-        speakerSpectrum[senderID] = AudioAnalyzer.spectrum(of: chunk)
+        speakerSpectrum[senderID] = spectrum
         speakingExpiry[senderID]?.cancel()
         speakingExpiry[senderID] = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1.2))

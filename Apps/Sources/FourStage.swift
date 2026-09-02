@@ -287,11 +287,15 @@ struct FourStageView: View {
 
     // MARK: - Below the board
 
+    /// On the phone the stage's own red exit already closes a finished game.
     @ViewBuilder
     private var footer: some View {
+        #if os(macOS)
         if four.outcome != nil {
             action("Close") { model.closeStage(in: conversationID) }
-        } else if four.yellow == nil, four.red != me {
+        }
+        #endif
+        if four.outcome == nil, four.yellow == nil, four.red != me {
             // The player waiting for an opponent needs no caption — the open
             // seat beside the board already says what's missing.
             action("Join") { model.sendStageAction(.four(.join), in: conversationID) }

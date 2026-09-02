@@ -3,8 +3,10 @@
 Instructions for setting up Totem's production topology. Read `CLAUDE.md`
 first for the architecture.
 
-- **Railway** runs everything user-facing 24/7: the chat/presence/audio relay
-  (all communication flows through it — nothing is peer-to-peer).
+- **Railway** runs everything user-facing 24/7: the chat/presence relay.
+  Messages and presence flow through it; live voice does not — peers dial
+  each other directly over iroh, and the server only hands out their
+  endpoint tickets (see `CLAUDE.md`, "Live voice").
 - **The Mac mini** is a build machine only (iOS signing needs macOS +
   Xcode). It archives and uploads TestFlight builds; it is never exposed to
   the internet, no funnel, no static IP, no server.

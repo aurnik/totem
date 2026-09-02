@@ -118,6 +118,42 @@ hidden by rendering the iframe taller than the visible box and cropping, which c
 `AVPlayer` is not an option; YouTube's own `youtube-ios-player-helper` is a WKWebView around the same
 IFrame API.
 
+### Live voice is peer-to-peer
+
+Voice never touches the server. Each signed-on device runs an iroh endpoint (`VoiceLink`, the
+`iroh-ffi` Swift package, pinned exact version) and sends Opus at 32 kbps in 20 ms frames, one QUIC
+datagram per frame, straight to the other participants — every one of them in a group, one link per
+peer. The server only introduces people: a client sends `announceEndpoint` with its ticket once the
+endpoint is online, again after every reconnect, and whenever its addresses move; the gateway keeps it
+as socket state in `ConnectionManager` (like `viewing`) and forwards it as `endpoint` to buddies and
+group co-participants, sending a connecting client every ticket it already holds. That user↔endpoint
+map is the whole access control: `VoiceLink` refuses a connection from an endpoint the server never
+named, and a packet is only played for a conversation its sender is actually in. Measured on this
+network: phone on LTE ↔ Mac at home punched to a direct IPv6 path within seconds, 0.4% loss, 60 ms
+round trip; the n0 relay carries only the first seconds.
+
+Things that were learned the hard way, all still true:
+
+- **Await `online()` before publishing the address.** Binding alone never registers with a relay;
+  without that call the Mac sat unregistered for minutes and nobody off the LAN could dial it.
+- **iroh 1.1.0's `watchAddr` panics from Swift** ("no reactor running"). Fixed upstream after the
+  release; until a release carries it, `VoiceLink` polls the address every 15 s instead.
+- **An engine tap delivers 100 ms at a time** whatever buffer size is requested — that is its
+  documented floor — so every tap is five packets. `PacketPacer` lets them out on a strict 20 ms
+  timer; one-shot dispatch delays got coalesced on macOS and the bunching came through as stutter.
+- **The receiver holds three frames before playing** (`JitterBuffer`) and re-primes after a starve;
+  past 15 queued it drops, because a queue on a player node drains at exactly real time and a burst
+  would otherwise be a permanent delay. The cap is that loose because Bluetooth outputs report
+  playback in ~100 ms batches — an 8-frame cap tripped on every batch.
+- **The apps use the system default devices.** AirPods bound to the other test device leave the Mac
+  capturing silence and unable to start its playback engine (`nope`); switch the Mac to the built-in
+  mic and speakers, then relaunch — the engine binds its input at first use and a default-device
+  change underneath it is not yet handled.
+- **Floors:** iOS 17.5 / macOS 14.5, set by the package. Same-room testing echoes, since only iOS
+  runs echo cancellation; headphones on the Mac.
+- Sound samples are stored as Opus packets (`OpusPacketFile`); samples from before the cutover are
+  pruned at launch.
+
 ### Presence liveness (three mechanisms, all server-side in `GatewayController`)
 
 1. Explicit sign-off / app-termination handlers → immediate offline fan-out.

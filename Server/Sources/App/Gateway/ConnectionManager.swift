@@ -11,20 +11,58 @@ actor ConnectionManager {
     private var generations: [UUID: Int] = [:]
     private var lastActivity: [UUID: Date] = [:]
     private var lastPong: [UUID: Date] = [:]
+    /// The 1:1 conversation each connection reports having on screen. State
+    /// of the socket, not the user: it's cleared wherever a socket is dropped
+    /// or replaced, and a fresh socket has nothing on screen until it says so.
+    private var viewing: [UUID: Viewing] = [:]
+
+    struct Viewing: Equatable {
+        let conversationID: UUID
+        let peerID: UUID
+    }
+    /// Each connection's live-voice endpoint ticket, socket state the same
+    /// way: a fresh socket has none until it announces one.
+    private var endpoints: [UUID: String] = [:]
 
     func register(_ ws: WebSocket, for userID: UUID) async -> Int {
         if let old = sockets[userID] {
             try? await old.close(code: .policyViolation)
         }
         sockets[userID] = ws
+        endpoints[userID] = nil
         let generation = (generations[userID] ?? 0) + 1
         generations[userID] = generation
         return generation
     }
 
-    func unregister(_ userID: UUID, ifStill ws: WebSocket) {
-        if sockets[userID] === ws {
-            sockets[userID] = nil
+    /// True when this socket was the live one and is now gone; false when a
+    /// newer socket had already replaced it.
+    func unregister(_ userID: UUID, ifStill ws: WebSocket) -> Bool {
+        guard sockets[userID] === ws else { return false }
+        sockets[userID] = nil
+        endpoints[userID] = nil
+        return true
+    }
+
+    func setEndpoint(_ ticket: String, for userID: UUID) {
+        endpoints[userID] = ticket
+    }
+
+    func endpoint(of userID: UUID) -> String? {
+        endpoints[userID]
+    }
+
+    /// Returns what they were viewing before, so the caller can tell that peer.
+    func setViewing(_ target: Viewing?, for userID: UUID) -> Viewing? {
+        let previous = viewing[userID]
+        viewing[userID] = target
+        return previous
+    }
+
+    /// Everyone currently looking at a conversation with this user.
+    func viewers(of userID: UUID) -> [(viewerID: UUID, conversationID: UUID)] {
+        viewing.compactMap { viewerID, target in
+            target.peerID == userID ? (viewerID, target.conversationID) : nil
         }
     }
 
@@ -74,6 +112,7 @@ actor ConnectionManager {
         if let ws = sockets.removeValue(forKey: userID) {
             try? await ws.close(code: .goingAway)
         }
+        endpoints[userID] = nil
         generations[userID, default: 0] += 1
     }
 
