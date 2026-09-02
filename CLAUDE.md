@@ -118,6 +118,12 @@ hidden by rendering the iframe taller than the visible box and cropping, which c
 `AVPlayer` is not an option; YouTube's own `youtube-ios-player-helper` is a WKWebView around the same
 IFrame API.
 
+### Who's looking
+
+`viewing` is socket state (see the wire enum): the server derives transitions and tells the peer of a
+1:1. In the chat header the peer's presence avatar, or their dot, sits at half opacity while they're
+online but not looking; macOS has no header avatar, so it shows a green dot instead.
+
 ### Live voice is peer-to-peer
 
 Voice never touches the server. Each signed-on device runs an iroh endpoint (`VoiceLink`, the
@@ -147,8 +153,12 @@ Things that were learned the hard way, all still true:
   playback in ~100 ms batches — an 8-frame cap tripped on every batch.
 - **The apps use the system default devices.** AirPods bound to the other test device leave the Mac
   capturing silence and unable to start its playback engine (`nope`); switch the Mac to the built-in
-  mic and speakers, then relaunch — the engine binds its input at first use and a default-device
-  change underneath it is not yet handled.
+  mic and speakers. A device change mid-call stops the engine and posts
+  `AVAudioEngineConfigurationChange`; `AudioStreamer` rebuilds the tap and restarts — on the node's
+  *input* format, since `outputFormat` still reports the old device's rate afterwards and a tap in
+  that format throws.
+- **The strip's caption is the link state** (`VoiceLink.LinkState` → `AppModel.voiceStatus`, worst
+  link across the conversation's members): connecting, on the relay, or direct — in plain words.
 - **Floors:** iOS 17.5 / macOS 14.5, set by the package. Same-room testing echoes, since only iOS
   runs echo cancellation; headphones on the Mac.
 - Sound samples are stored as Opus packets (`OpusPacketFile`); samples from before the cutover are

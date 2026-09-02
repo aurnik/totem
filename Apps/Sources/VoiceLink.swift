@@ -16,6 +16,12 @@ final class VoiceLink: @unchecked Sendable {
         let packet: Data
     }
 
+    /// How a peer is reached right now. A link opens on the relay and moves
+    /// to a direct path once hole punching lands, usually within seconds.
+    enum LinkState: Sendable {
+        case connecting, relay, direct
+    }
+
     private static let alpn = Data("totem/voice/1".utf8)
     /// Conversation ID, then a per-sender sequence number, ahead of the packet.
     private static let headerBytes = 16 + 4
@@ -38,11 +44,15 @@ final class VoiceLink: @unchecked Sendable {
     private var lastSequence: [UUID: UInt32] = [:]
     private let onTicket: @Sendable (String) -> Void
     private let onFrame: @Sendable (Frame) -> Void
+    /// Nil when the link to that user is gone.
+    private let onLink: @Sendable (UUID, LinkState?) -> Void
 
     init(onTicket: @escaping @Sendable (String) -> Void,
-         onFrame: @escaping @Sendable (Frame) -> Void) {
+         onFrame: @escaping @Sendable (Frame) -> Void,
+         onLink: @escaping @Sendable (UUID, LinkState?) -> Void) {
         self.onTicket = onTicket
         self.onFrame = onFrame
+        self.onLink = onLink
     }
 
     // MARK: - Lifecycle
@@ -162,10 +172,14 @@ final class VoiceLink: @unchecked Sendable {
             return (endpoint, addr)
         }
         guard let (endpoint, addr) = target else { return }
+        onLink(userID, .connecting)
         Task {
             defer { lock.withLock { _ = dialing.remove(userID) } }
             guard let connection = try? await endpoint.connect(addr: addr, alpn: Self.alpn)
-            else { return }
+            else {
+                if lock.withLock({ connections[userID] == nil }) { onLink(userID, nil) }
+                return
+            }
             adopt(connection, from: userID)
         }
     }
@@ -184,21 +198,31 @@ final class VoiceLink: @unchecked Sendable {
     /// and every one is read until it closes.
     private func adopt(_ connection: Connection, from userID: UUID) {
         lock.withLock { connections[userID] = connection }
-        Task { [weak self] in
-            // Whether the link punched through or is riding a relay is the
-            // one fact worth having when someone reports choppy voice.
-            try? await Task.sleep(for: .seconds(3))
-            let paths = connection.paths().filter(\.isSelected)
-                .map { "\($0.isIp ? "direct" : "relay") \($0.remoteAddr)" }
-            print("voice: \(userID) via \(paths.joined(separator: ", "))")
-        }
-        Task { [weak self] in
+        let reading = Task { [weak self] in
             while let datagram = try? await connection.readDatagram() {
                 self?.receive(datagram, from: userID)
             }
-            self?.lock.withLock {
-                guard let self, self.connections[userID] === connection else { return }
+            let wasCurrent = self?.lock.withLock {
+                guard let self, self.connections[userID] === connection else { return false }
                 self.connections[userID] = nil
+                return true
+            } ?? false
+            if wasCurrent { self?.onLink(userID, nil) }
+        }
+        // Whether the link punched through or is riding the relay is worth
+        // both showing and logging — it's the one fact that explains voice
+        // that sounds fine one minute and choppy the next.
+        Task { [weak self] in
+            var last: LinkState?
+            while !reading.isCancelled, let self, self.lock.withLock({ self.connections[userID] === connection }) {
+                let selected = connection.paths().first { $0.isSelected }
+                let state: LinkState = selected.map { $0.isIp ? .direct : .relay } ?? .connecting
+                if state != last {
+                    last = state
+                    self.onLink(userID, state)
+                    print("voice: \(userID) \(state) \(selected?.remoteAddr ?? "")")
+                }
+                try? await Task.sleep(for: .milliseconds(500))
             }
         }
     }

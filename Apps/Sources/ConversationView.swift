@@ -110,18 +110,25 @@ struct ConversationView: View {
         model.stages[conversationID]?.state.extensionID == id
     }
 
-    /// Who to picture in the header: the peer for 1:1, up to three
-    /// participants for groups (matching the title's handle order).
-    /// Participants without a published avatar are simply left out.
-    private var headerAvatars: [Avatar] {
-        if let group {
-            return group.participants
-                .filter { $0.id != model.currentUser?.id }
-                .sorted { $0.handle < $1.handle }
-                .prefix(3)
-                .compactMap { model.avatar(of: $0.id) }
-        }
-        return [peerID.flatMap { model.avatar(of: $0) }].compactMap { $0 }
+    /// Who to picture in a group header: up to three participants (matching
+    /// the title's handle order). Participants without a published avatar
+    /// are simply left out.
+    private var groupHeaderAvatars: [Avatar] {
+        (group?.participants ?? [])
+            .filter { $0.id != model.currentUser?.id }
+            .sorted { $0.handle < $1.handle }
+            .prefix(3)
+            .compactMap { model.avatar(of: $0.id) }
+    }
+
+    private var peerState: PresenceState {
+        peerID.flatMap { model.presences[$0]?.state } ?? .offline
+    }
+
+    /// Online but not looking at this chat reads at half strength: present,
+    /// just not here.
+    private var peerAttention: Double {
+        peerState == .online && !peerViewing ? 0.5 : 1
     }
 
     var body: some View {
@@ -323,16 +330,19 @@ struct ConversationView: View {
 
     private var headerLabel: some View {
         HStack(spacing: 6) {
-            HStack(spacing: -10) {
-                ForEach(Array(headerAvatars.enumerated()), id: \.offset) { _, avatar in
-                    AvatarHeadView(avatar: avatar, size: 26, animated: false)
+            if group != nil {
+                HStack(spacing: -10) {
+                    ForEach(Array(groupHeaderAvatars.enumerated()), id: \.offset) { _, avatar in
+                        AvatarHeadView(avatar: avatar, size: 26, animated: false)
+                    }
                 }
+            } else if let peerID {
+                PresenceAvatar(avatar: model.avatar(of: peerID), state: peerState, size: 26)
+                    .opacity(peerAttention)
+                    .animation(.default, value: peerAttention)
             }
             Text(title)
                 .font(.subheadline.weight(.semibold))
-            if peerViewing {
-                ViewingDot()
-            }
             if group != nil {
                 Image(systemName: "chevron.down")
                     .font(.caption2.weight(.semibold))
@@ -343,6 +353,7 @@ struct ConversationView: View {
         .contentShape(Rectangle())
     }
 
+    #if os(macOS)
     /// The peer has this chat on screen right now.
     private struct ViewingDot: View {
         var body: some View {
@@ -353,6 +364,7 @@ struct ConversationView: View {
                 .accessibilityLabel("Has this chat open")
         }
     }
+    #endif
 
     private func toggleMembers() {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -439,6 +451,9 @@ struct ConversationView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             }
+            if let status = model.voiceStatus(in: conversationID) {
+                voiceStatusLine(status)
+            }
             #if os(iOS)
             voiceExit
             #endif
@@ -446,6 +461,28 @@ struct ConversationView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.accentColor.opacity(0.12))
+    }
+
+    /// Where the voice link stands, in plain words: it opens through a relay
+    /// and moves to a direct path once hole punching lands, and the
+    /// difference is audible — but nobody needs the mechanism to read it.
+    private func voiceStatusLine(_ status: AppModel.VoiceStatus) -> some View {
+        HStack(spacing: 5) {
+            switch status {
+            case .connecting:
+                Image(systemName: "ellipsis.circle")
+                Text("Connecting…")
+            case .relay:
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                Text("Connected · finding a faster route")
+            case .direct:
+                Image(systemName: "checkmark.circle.fill")
+                Text("Best connection")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .animation(.default, value: status)
     }
 
     #if os(iOS)

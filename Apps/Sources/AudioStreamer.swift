@@ -42,6 +42,11 @@ final class AudioStreamer {
     private var activeSpeakers: Set<UUID> = []
     private var micLive = false
     private var pacer: PacketPacer?
+    /// What the live tap feeds, kept so the tap can be rebuilt on a device
+    /// change without the owner knowing anything happened.
+    private var captureSinks: (packet: (@Sendable (Data, [Float]) -> Void)?,
+                               buffer: (@Sendable (AVAudioPCMBuffer) -> Void)?)?
+    private var configurationObservers: [NSObjectProtocol] = []
     /// Last session/engine failure — playback problems are otherwise
     /// invisible (the meters run off decoded audio, not the engine).
     private var lastError: String?
@@ -67,6 +72,17 @@ final class AudioStreamer {
         playbackEngine = AVAudioEngine()
         captureEngine = AVAudioEngine()
         #endif
+        // A device coming or going (AirPods mid-call, a default-device switch)
+        // stops the engine and changes the input node's format; nothing
+        // resumes on its own. Observed per engine — one on iOS, two on macOS.
+        let engines = playbackEngine === captureEngine ? [playbackEngine] : [playbackEngine, captureEngine]
+        for engine in engines {
+            configurationObservers.append(NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+            ) { [weak self] _ in
+                Task { @MainActor in self?.recoverFromConfigurationChange() }
+            })
+        }
     }
 
     /// True when the device can't render incoming voice: hardware volume at
@@ -97,8 +113,20 @@ final class AudioStreamer {
 
         prepareForCapture()
         configureSession()
+        if micLive { captureEngine.inputNode.removeTap(onBus: 0) }
+        captureSinks = (onPacket, onBuffer)
+        guard installCapture(onPacket: onPacket, onBuffer: onBuffer) else { return false }
+        micLive = true
+        return startCaptureEngine()
+    }
+
+    /// Builds the codec path and taps the mic. The tap takes the node's
+    /// *input* format: after a device change the output format still reports
+    /// the old device's rate, and a tap in that format is rejected outright.
+    private func installCapture(onPacket: (@Sendable (Data, [Float]) -> Void)?,
+                                onBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?) -> Bool {
         let input = captureEngine.inputNode
-        let tapFormat = input.outputFormat(forBus: 0)
+        let tapFormat = input.inputFormat(forBus: 0)
         guard tapFormat.sampleRate > 0,
               let resampler = AVAudioConverter(from: tapFormat, to: OpusCodec.pcmFormat),
               let encoder = try? OpusCodec()
@@ -113,7 +141,6 @@ final class AudioStreamer {
             pacer.start { packet, spectrum in sink(packet, spectrum) }
             return pacer
         }
-        if micLive { input.removeTap(onBus: 0) }
 
         var reportedBufferSize = false
         input.installTap(onBus: 0, bufferSize: Self.frameSamples, format: tapFormat) { buffer, _ in
@@ -142,8 +169,10 @@ final class AudioStreamer {
                 pacer.enqueue(packet, spectrum)
             }
         }
+        return true
+    }
 
-        micLive = true
+    private func startCaptureEngine() -> Bool {
         captureEngine.prepare()
         do {
             try captureEngine.start()
@@ -156,11 +185,30 @@ final class AudioStreamer {
         return true
     }
 
+    /// The engine has stopped under us. Put back whatever was running: the
+    /// tap on the new input format, and playback for anyone still audible.
+    private func recoverFromConfigurationChange() {
+        if micLive, let sinks = captureSinks {
+            captureEngine.inputNode.removeTap(onBus: 0)
+            if installCapture(onPacket: sinks.packet, onBuffer: sinks.buffer) {
+                _ = startCaptureEngine()
+            } else {
+                stopMic()
+            }
+        }
+        if !activeSpeakers.isEmpty, startPlaybackEngine() {
+            for id in activeSpeakers {
+                players[id]?.play()
+            }
+        }
+    }
+
     func stopMic() {
         guard micLive else { return }
         micLive = false
         pacer?.stop()
         pacer = nil
+        captureSinks = nil
         captureEngine.inputNode.removeTap(onBus: 0)
         #if os(iOS)
         // Shared engine: keep it alive if playback still needs it.

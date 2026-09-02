@@ -98,6 +98,8 @@ final class AppModel {
     /// still drive the meters, so who's talking stays visible; only the
     /// speaker is skipped. Scoped to the chat being open, like voice itself.
     private var mutedConversations: Set<UUID> = []
+    /// How each peer's voice link is reaching them, from `VoiceLink`.
+    private var voiceLinks: [UUID: VoiceLink.LinkState] = [:]
     /// Conversations we've told peers *we* can't hear — cleared when hearing
     /// comes back (with a follow-up frame) or the chat goes silent.
     private var reportedMutedConversations: Set<UUID> = []
@@ -426,6 +428,9 @@ final class AppModel {
                     self?.receiveAudio(conversationID: frame.conversationID,
                                        senderID: frame.senderID, packet: frame.packet)
                 }
+            },
+            onLink: { [weak self] userID, state in
+                Task { @MainActor in self?.voiceLinks[userID] = state }
             })
         self.voice = voice
         Task { await voice.start() }
@@ -460,6 +465,7 @@ final class AppModel {
         let voice = self.voice
         Task { await voice?.stop() }
         self.voice = nil
+        voiceLinks = [:]
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
@@ -940,6 +946,20 @@ final class AppModel {
 
     func voiceMuted(in conversationID: UUID) -> Bool {
         mutedConversations.contains(conversationID)
+    }
+
+    enum VoiceStatus {
+        case connecting, relay, direct
+    }
+
+    /// The worst of the links to this conversation's participants, nil when
+    /// none exists — a group is only as direct as its slowest member.
+    func voiceStatus(in conversationID: UUID) -> VoiceStatus? {
+        let states = voiceRecipients(in: conversationID).compactMap { voiceLinks[$0] }
+        guard !states.isEmpty else { return nil }
+        if states.contains(.connecting) { return .connecting }
+        if states.contains(.relay) { return .relay }
+        return .direct
     }
 
     /// Stop (or resume) hearing a conversation. To whoever is talking it is
