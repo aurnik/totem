@@ -17,12 +17,13 @@ import AVFoundation
 /// answer.
 @MainActor
 final class AudioStreamer {
-    static let sampleRate: Double = 48_000
+    // Shared with the codec and pacer, which live off the main actor.
+    nonisolated static let sampleRate: Double = 48_000
     /// 20 ms at 48 kHz: Opus's native frame, and a packet that fits a QUIC
     /// datagram with room to spare.
-    static let frameSamples: AVAudioFrameCount = 960
-    static let frameDuration: Duration = .milliseconds(20)
-    static let bitrate = 32_000
+    nonisolated static let frameSamples: AVAudioFrameCount = 960
+    nonisolated static let frameDuration: Duration = .milliseconds(20)
+    nonisolated static let bitrate = 32_000
 
     enum Playback {
         case heard(spectrum: [Float])
