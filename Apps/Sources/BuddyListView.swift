@@ -86,15 +86,22 @@ struct BuddyListView: View {
     }
 
     /// Testers aren't emailed about new builds, so this is how they find out.
-    /// One tap to the update, per the fewest-taps rule; the public link opens
-    /// TestFlight straight to Totem whether or not they're already a tester.
+    /// One tap to the update, per the fewest-taps rule. TestFlight's own
+    /// scheme opens Totem's page with the Update button; the public join
+    /// link is the become-a-tester flow, which tells someone who already is
+    /// one that the beta "isn't accepting new testers", so it's only the
+    /// fallback for a phone without TestFlight installed.
     @ViewBuilder
     private var updateBanner: some View {
         if model.updateAvailable {
             Section {
                 HStack {
                     Button {
-                        openURL(URL(string: "https://testflight.apple.com/join/7QCwQhqT")!)
+                        openURL(URL(string: "itms-beta://beta.itunes.apple.com/v1/app/6796788149")!) { opened in
+                            if !opened {
+                                openURL(URL(string: "https://testflight.apple.com/join/7QCwQhqT")!)
+                            }
+                        }
                     } label: {
                         Label("A newer build is ready in TestFlight",
                               systemImage: "arrow.down.circle.fill")
