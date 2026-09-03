@@ -541,6 +541,7 @@ struct ConversationView: View {
                             MessageRow(
                                 message: message,
                                 isMine: isMine,
+                                pending: isMine && model.isPendingDelivery(message.id),
                                 senderName: (group != nil && !isMine && bot == nil)
                                     ? model.handle(of: message.senderID) : nil,
                                 senderAvatar: (group != nil && !isMine)
@@ -862,6 +863,11 @@ private struct TypingDot: View {
 struct MessageRow: View {
     let message: ChatMessage
     let isMine: Bool
+    /// One of my messages that no recipient has acknowledged yet. Shown at
+    /// half strength until a peer's ack lands, so a message in flight — or to
+    /// someone briefly unreachable — reads as not-yet-delivered without a
+    /// notice of its own.
+    var pending: Bool = false
     var senderName: String?
     /// Group chats only: the sender's avatar beside their bubble.
     var senderAvatar: Avatar?
@@ -958,6 +964,8 @@ struct MessageRow: View {
                         }
                         .foregroundStyle(botOrOwnForeground)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .opacity(pending ? 0.5 : 1)
+                        .animation(.easeOut(duration: 0.2), value: pending)
                     if !isMine, message.dictated == true { dictationGlyph }
                 }
             }

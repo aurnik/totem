@@ -92,11 +92,14 @@ final class AppModel {
     /// accepts bytes into a buffer whose far end may be in airplane mode —
     /// so only the recipient's `ack` counts, and silence past the window is
     /// "not delivered".
-    private var awaitedAcks: [AckKey: CheckedContinuation<Bool, Never>] = [:]
-    private struct AckKey: Hashable {
-        let messageID: UUID
-        let recipientID: UUID
-    }
+    /// My sent messages no recipient has acknowledged yet, each with the set
+    /// of recipients still owed an ack. A message leaves this the moment its
+    /// last recipient acks; its bubble is half-lit until then. A write
+    /// completing says nothing — QUIC buffers into a send buffer whose far
+    /// end may be in airplane mode — so only the recipient's `ack` clears it,
+    /// and a message to someone briefly unreachable simply stays half-lit and
+    /// turns solid when it finally lands.
+    private var unackedRecipients: [UUID: Set<UUID>] = [:]
     static let deliveryTimeout: Duration = .seconds(5)
     private var lastTypingSentAt: [UUID: Date] = [:]
     /// Live voice: the conversation the local mic streams into (one at a
@@ -486,6 +489,7 @@ final class AppModel {
         transcripts = [:]
         endedGroups = []
         reportedActive = []
+        unackedRecipients = [:]
         unreadPeers = []
         mutedListeners = [:]
         mutedConversations = []
@@ -504,9 +508,6 @@ final class AppModel {
         Task { await peers?.stop() }
         self.peers = nil
         links = [:]
-        for key in awaitedAcks.keys {
-            resolveAck(key, delivered: false)
-        }
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
@@ -597,29 +598,33 @@ final class AppModel {
                            context: botContext(for: trimmed, in: conversationID)))
         }
         let recipients = participants(in: conversationID)
-        Task { [weak self] in
-            let failed = await self?.deliverMessage(message, to: recipients) ?? []
-            guard let self, !failed.isEmpty else { return }
-            if let peerID {
-                append(.notice(id: UUID(), text: "Message not delivered", at: Date()),
-                       to: conversationID)
-                // The server decides whether that means they're gone: it
-                // pings them itself before marking anyone away.
-                fire(.unreachable(userID: peerID))
-            } else {
-                // A group is best effort — offline members miss messages —
-                // but someone the buddy list shows online deserves a word.
-                let missed = failed
-                    .filter { (presences[$0]?.state ?? .offline) != .offline }
-                    .compactMap { handle(of: $0) }
-                    .sorted()
-                if !missed.isEmpty {
-                    append(.notice(id: UUID(), text: "Not delivered to \(missed.joined(separator: ", "))",
-                                   at: Date()),
-                           to: conversationID)
-                }
+        // Half-lit until acknowledged. No recipients (a group all offline)
+        // means delivered to no one, so it never lights.
+        if !recipients.isEmpty {
+            unackedRecipients[message.id] = recipients
+        }
+        for userID in recipients {
+            peers?.sendBestEffort(.message(message), to: userID)
+        }
+        // If a 1:1 message goes unacked for a spell, nudge the server to check
+        // whether the peer is still reachable so the buddy list can catch up.
+        // The bubble stays half-lit regardless, and lights when a late ack
+        // lands.
+        if let peerID {
+            Task { [weak self] in
+                try? await Task.sleep(for: Self.deliveryTimeout)
+                guard let self, self.isPendingDelivery(message.id) else { return }
+                self.fire(.unreachable(userID: peerID))
             }
         }
+    }
+
+    /// A recipient acknowledged one of my messages; its bubble lights once the
+    /// last recipient has.
+    private func markAcked(_ messageID: UUID, by userID: UUID) {
+        guard var remaining = unackedRecipients[messageID] else { return }
+        remaining.remove(userID)
+        unackedRecipients[messageID] = remaining.isEmpty ? nil : remaining
     }
 
     /// Writes a frame to each recipient's link, waiting briefly for links
@@ -643,45 +648,6 @@ final class AppModel {
             }
             return failed
         }
-    }
-
-    /// A message counts as delivered only once its recipient acknowledges
-    /// it; a write that lands but is never answered within the window is a
-    /// failure like any other.
-    private func deliverMessage(_ message: ChatMessage, to recipients: Set<UUID>) async -> Set<UUID> {
-        guard let peers else { return recipients }
-        // The write is fired best-effort and never awaited: a peer that went
-        // silent leaves it blocked on a full send buffer for the whole idle
-        // timeout, and the verdict must not wait that out. Delivery is the
-        // ack coming back inside the window, nothing else.
-        return await withTaskGroup(of: UUID?.self) { group in
-            for userID in recipients {
-                peers.sendBestEffort(.message(message), to: userID)
-                group.addTask { [weak self] in
-                    await self?.awaitAck(for: message.id, from: userID) == true ? nil : userID
-                }
-            }
-            var failed = Set<UUID>()
-            for await userID in group {
-                if let userID { failed.insert(userID) }
-            }
-            return failed
-        }
-    }
-
-    private func awaitAck(for messageID: UUID, from userID: UUID) async -> Bool {
-        let key = AckKey(messageID: messageID, recipientID: userID)
-        return await withCheckedContinuation { continuation in
-            awaitedAcks[key] = continuation
-            Task { [weak self] in
-                try? await Task.sleep(for: Self.deliveryTimeout)
-                self?.resolveAck(key, delivered: false)
-            }
-        }
-    }
-
-    private func resolveAck(_ key: AckKey, delivered: Bool) {
-        awaitedAcks.removeValue(forKey: key)?.resume(returning: delivered)
     }
 
     /// Best-effort delivery for frames that carry no promise to the user.
@@ -1208,6 +1174,11 @@ final class AppModel {
         typingPeers.contains(peerID)
     }
 
+    /// One of my messages still waiting for a recipient's ack.
+    func isPendingDelivery(_ messageID: UUID) -> Bool {
+        unackedRecipients[messageID] != nil
+    }
+
     func isNewlyAppended(_ itemID: UUID) -> Bool {
         guard let last = lastAppended, last.id == itemID else { return false }
         return Date().timeIntervalSince(last.at) < 3
@@ -1584,19 +1555,15 @@ final class AppModel {
                     append(.notice(id: UUID(), text: "\(handle) signed \(nowOffline ? "off" : "on")", at: Date()),
                            to: pairID)
                 }
-                let wasAway = previous?.state == .away
+                // A message the user wrote is worth a notice. The server's
+                // own message-less unreachable mark is not — it's just "we
+                // couldn't reach them right now", which the half-lit message
+                // bubble already conveys — and neither is coming back from it.
+                let hadAwayMessage = previous?.awayMessage != nil
                 if let away = presence.awayMessage, away != previous?.awayMessage {
                     append(.notice(id: UUID(), text: "\(handle) is away: \"\(away)\"", at: Date()),
                            to: pairID)
-                } else if presence.isUnreachableMark, !wasAway {
-                    // The server marked them away because it couldn't reach
-                    // them, so there's nothing of theirs to quote.
-                    append(.notice(id: UUID(), text: "\(handle) is away", at: Date()),
-                           to: pairID)
-                }
-                // Coming back from away — but not by signing off, which
-                // already got its own notice above.
-                if wasAway, presence.state != .away, presence.state != .offline {
+                } else if hadAwayMessage, presence.state != .away, presence.state != .offline {
                     append(.notice(id: UUID(), text: "\(handle) is back", at: Date()),
                            to: pairID)
                 }
@@ -1676,7 +1643,7 @@ final class AppModel {
             receiveMessage(message)
             sendToPeers(.ack(messageID: message.id), [senderID])
         case .ack(let messageID):
-            resolveAck(AckKey(messageID: messageID, recipientID: senderID), delivered: true)
+            markAcked(messageID, by: senderID)
         case .typing(let conversationID):
             guard peer(of: conversationID) == senderID else { return }
             noteTyping(senderID)
