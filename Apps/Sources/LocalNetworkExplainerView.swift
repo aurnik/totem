@@ -25,6 +25,32 @@ enum LocalNetworkExplainer {
         UserDefaults.standard.set(true, forKey: shownKey)
     }
 
+    /// Reaching the server itself can be local network access — a Bonjour
+    /// name resolves over multicast, a private address is on the LAN — in
+    /// which case the system asks at the first sign-in request, long before
+    /// the endpoint binds. The explainer's moment has passed by then, so it
+    /// is counted as shown rather than raised after the fact. Loopback is
+    /// exempt from the prompt and from this.
+    static func noteReached(_ url: URL) {
+        guard let host = url.host?.lowercased(), isLocalNetwork(host) else { return }
+        markShown()
+    }
+
+    private static func isLocalNetwork(_ host: String) -> Bool {
+        if host.hasSuffix(".local") || host.hasSuffix(".local.") { return true }
+        let octets = host.split(separator: ".").compactMap { UInt8($0) }
+        if octets.count == 4 {
+            return octets[0] == 10
+                || (octets[0] == 172 && (16...31).contains(octets[1]))
+                || (octets[0] == 192 && octets[1] == 168)
+                || (octets[0] == 169 && octets[1] == 254)
+        }
+        // IPv6 link-local and unique-local, with any zone or brackets.
+        let v6 = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        return v6.hasPrefix("fe8") || v6.hasPrefix("fe9") || v6.hasPrefix("fea")
+            || v6.hasPrefix("feb") || v6.hasPrefix("fc") || v6.hasPrefix("fd")
+    }
+
     /// Apple's documented way to raise the alert (TN3179): connecting a UDP
     /// socket to a link-local address counts as local network access without
     /// sending anything. Best effort — if it doesn't fire, the endpoint's own
@@ -137,7 +163,8 @@ private struct ConnectionVisualization: View {
 
         // The path between them: a faint arc, with soft dots drifting along
         // it from one person to the other and back, spaced evenly so the
-        // motion reads as a steady flow rather than a clump.
+        // motion reads as a steady flow rather than a clump. Each dot wears
+        // the colour of whoever it set out from.
         let control = CGPoint(x: mid.x, y: mid.y - 44)
         var arc = Path()
         arc.move(to: left)
@@ -153,10 +180,13 @@ private struct ConnectionVisualization: View {
                 y: u * u * left.y + 2 * u * s * control.y + s * s * right.y)
             let dotRadius = 5 + 2 * sin(s * .pi)
             let opacity = 0.3 + 0.6 * sin(s * .pi)
+            // The first half of the cycle runs left to right, the second
+            // half back again.
+            let origin = phase < 0.5 ? Color.explainerYou : Color.explainerFriend
             canvas.fill(
                 Path(ellipseIn: CGRect(x: point.x - dotRadius, y: point.y - dotRadius,
                                        width: dotRadius * 2, height: dotRadius * 2)),
-                with: .color(Color.explainerSignal.opacity(opacity)))
+                with: .color(origin.opacity(opacity)))
         }
 
         for (point, color, offset) in [(left, Color.explainerYou, 0.0), (right, Color.explainerFriend, 1.3)] {

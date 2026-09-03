@@ -314,6 +314,9 @@ final class AppModel {
     func signIn(handle: String, serverURL: String) async throws {
         guard let url = URL(string: serverURL) else { throw URLError(.badURL) }
         api.baseURL = url
+        // Before the request, not after: the prompt is raised by the attempt,
+        // whether or not the server answers.
+        LocalNetworkExplainer.noteReached(url)
         let response = try await api.devLogin(handle: handle)
         api.token = response.token
         currentUser = response.user
