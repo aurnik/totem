@@ -38,7 +38,7 @@ public struct YouTubeState: Codable, Hashable, Sendable {
     }
 }
 
-public enum YouTubeAction: Codable, Sendable {
+public enum YouTubeAction: Codable, Hashable, Sendable {
     /// Puts a video on the stage, replacing whatever was playing.
     case setVideo(videoID: String, title: String, thumbnailURL: URL?)
     /// Absolute, never a toggle: two people pausing at the same moment must
@@ -164,7 +164,7 @@ public struct FourState: Codable, Hashable, Sendable {
     }
 }
 
-public enum FourAction: Codable, Sendable {
+public enum FourAction: Codable, Hashable, Sendable {
     /// Puts an empty board on the stage with the sender as red.
     case start
     /// Takes the second seat, which only stays open until someone does.
@@ -201,7 +201,7 @@ public enum StageState: Codable, Hashable, Sendable {
     }
 }
 
-public enum StageAction: Codable, Sendable {
+public enum StageAction: Codable, Hashable, Sendable {
     case youtube(YouTubeAction)
     case four(FourAction)
 
@@ -231,15 +231,22 @@ public enum StageAction: Codable, Sendable {
 public struct Stage: Codable, Hashable, Sendable {
     public var version: Int
     public var state: StageState
+    /// Whoever claimed the stage from empty, and has held it since — the
+    /// stage changes hands only by emptying. Their device runs the reducer
+    /// for everyone else's actions and is the one party whose broadcast of
+    /// the stage counts (`StageHost`).
+    public var ownerID: UUID
 
-    public init(version: Int, state: StageState) {
+    public init(version: Int, state: StageState, ownerID: UUID) {
         self.version = version
         self.state = state
+        self.ownerID = ownerID
     }
 }
 
-/// Pure and shared: the server runs this to stay authoritative, and clients
-/// carry the identical code so both agree on what an action means.
+/// Pure and shared: the stage's owner runs this for everyone's actions, and
+/// every client carries the identical code so all agree on what an action
+/// means.
 public enum StageReducer {
     public enum Outcome: Sendable, Equatable {
         /// Store it and broadcast to every participant, including the sender.
@@ -270,17 +277,26 @@ public enum StageReducer {
         }
 
         switch action {
-        case .youtube(let action): return apply(action, to: current, at: now)
+        case .youtube(let action): return apply(action, by: actorID, to: current, at: now)
         case .four(let action): return apply(action, by: actorID, to: current, at: now)
         }
     }
 
-    private static func apply(_ action: YouTubeAction, to current: Stage?, at now: Date) -> Outcome {
+    /// The next version of the stage. Ownership is settled here and nowhere
+    /// else: an empty stage goes to whoever fills it, and a held one stays
+    /// with its owner whatever is put on it.
+    private static func next(_ current: Stage?, _ state: StageState, by actorID: UUID) -> Stage {
+        Stage(version: (current?.version ?? 0) + 1, state: state,
+              ownerID: current?.ownerID ?? actorID)
+    }
+
+    private static func apply(_ action: YouTubeAction, by actorID: UUID,
+                              to current: Stage?, at now: Date) -> Outcome {
         switch action {
         case let .setVideo(videoID, title, thumbnailURL):
             let state = YouTubeState(videoID: videoID, title: title, thumbnailURL: thumbnailURL,
                                      isPlaying: true, positionSeconds: 0, positionAt: now)
-            return .updated(Stage(version: (current?.version ?? 0) + 1, state: .youtube(state)))
+            return .updated(next(current, .youtube(state), by: actorID))
 
         case let .setPlaying(isPlaying, positionSeconds):
             guard let current, case .youtube(var state) = current.state else { return .rejected }
@@ -288,13 +304,13 @@ public enum StageReducer {
             state.isPlaying = isPlaying
             state.positionSeconds = max(0, positionSeconds)
             state.positionAt = now
-            return .updated(Stage(version: current.version + 1, state: .youtube(state)))
+            return .updated(next(current, .youtube(state), by: actorID))
 
         case let .seek(positionSeconds):
             guard let current, case .youtube(var state) = current.state else { return .rejected }
             state.positionSeconds = max(0, positionSeconds)
             state.positionAt = now
-            return .updated(Stage(version: current.version + 1, state: .youtube(state)))
+            return .updated(next(current, .youtube(state), by: actorID))
 
         case .ended:
             // The version check above already dropped every report but the
@@ -315,15 +331,14 @@ public enum StageReducer {
             if let current, case .four(let game) = current.state, game.outcome == nil {
                 return .rejected
             }
-            return .updated(Stage(version: (current?.version ?? 0) + 1,
-                                  state: .four(FourState(red: actorID))))
+            return .updated(next(current, .four(FourState(red: actorID)), by: actorID))
 
         case .join:
             guard let current, case .four(var game) = current.state,
                   game.yellow == nil, game.red != actorID
             else { return .rejected }
             game.yellow = actorID
-            return .updated(Stage(version: current.version + 1, state: .four(game)))
+            return .updated(next(current, .four(game), by: actorID))
 
         case .drop(let column):
             guard let current, case .four(var game) = current.state,
@@ -345,7 +360,7 @@ public enum StageReducer {
                 game.outcome = .draw
                 game.finishedAt = now
             }
-            return .updated(Stage(version: current.version + 1, state: .four(game)))
+            return .updated(next(current, .four(game), by: actorID))
 
         case .expire:
             // A win leaves the board up so everyone sees the line; this is what

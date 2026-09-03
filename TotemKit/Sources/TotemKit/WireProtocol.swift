@@ -43,6 +43,18 @@ public enum ClientFrame: Codable, Sendable {
     /// again after a reconnect, since stage pushes during the gap were missed.
     case requestStage(conversationID: UUID)
     case closeStage(conversationID: UUID)
+    /// A message that tagged a bot. It went to the humans over the peer
+    /// links; this copy is for the server alone, which runs the bot and fans
+    /// its reply out as `botMessage`. Bots see nothing that doesn't tag them.
+    /// `context` is as on `send`: used for the prompt, never relayed.
+    case botQuery(conversationID: UUID, body: String, context: [BotContextMessage]?)
+    /// A 1:1 message found no peer link to travel on. The server ping-verifies
+    /// the user before marking them away — a client's word alone is never
+    /// enough to change what everyone else sees of someone.
+    case unreachable(userID: UUID)
+    /// Message traffic just started in a pair, on either end — the server
+    /// opens the sitting, since it no longer sees the traffic itself.
+    case conversationActive(conversationID: UUID)
 }
 
 /// A session plus the users in it — what a client needs to render a group chat.

@@ -372,6 +372,41 @@ struct GatewayController {
                 else { return }
                 await stages.clear(conversationID)
                 await sendStage(nil, in: conversation, from: userID)
+
+            // The humans already have the message, over their peer links;
+            // the server only sees the copy that tagged a bot, and only so
+            // the bot can answer it.
+            case .botQuery(let conversationID, let body, let context):
+                guard let conversation = try await usableConversation(conversationID, by: userID)
+                else { return }
+                // The reply is fanned out only into a live sitting, and the
+                // client's `conversationActive` for this message may not have
+                // been sent yet — the tag doesn't wait on it.
+                if !conversation.isGroup {
+                    try await sittings.open(
+                        conversationID, participants: conversation.participants, at: Date())
+                }
+                botDispatcher.dispatch(body: body, from: userID, sessionID: conversationID,
+                                       context: context)
+
+            // A peer link that wouldn't come up is the client's evidence; the
+            // server's own ping is the judgement, exactly as it was when the
+            // server relayed the message itself.
+            case .unreachable(let peerID):
+                guard try await areAcceptedBuddies(userID, peerID),
+                      await !connections.verifyAlive(peerID)
+                else { return }
+                await markUnreachable(peerID)
+
+            // Traffic opens the pair's sitting; its death on either party's
+            // sign-off is what tells the peer to drop the conversation's
+            // live ephemera. A group's sitting was opened by creating it.
+            case .conversationActive(let conversationID):
+                guard let conversation = try await usableConversation(conversationID, by: userID),
+                      !conversation.isGroup
+                else { return }
+                try await sittings.open(
+                    conversationID, participants: conversation.participants, at: Date())
             }
         } catch {
             app.logger.report(error: error)

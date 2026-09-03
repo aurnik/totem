@@ -100,7 +100,7 @@ struct ConversationView: View {
     }
 
     /// Another extension holds the stage and would lose real state if this one
-    /// took it — the server refuses that anyway, so don't offer it.
+    /// took it — the stage's owner refuses that anyway, so don't offer it.
     private func stageIsProtected(against id: ChatExtensionID) -> Bool {
         guard let stage = model.stages[conversationID] else { return false }
         return stage.state.extensionID != id && stage.state.preservesState

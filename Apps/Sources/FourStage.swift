@@ -100,8 +100,8 @@ struct FourBoardPlate: Shape {
 
 /// A game of Connect 4 everyone in the chat watches, and two of them play. Like
 /// the video stage, nothing is applied locally: a tap sends a drop and the board
-/// only moves when the server says it did, so both players always see the same
-/// position.
+/// only moves when the stage's owner says it did, so both players always see the
+/// same position.
 struct FourStageView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.stageBox) private var stageBox
@@ -319,7 +319,7 @@ struct FourStageView: View {
 
     // MARK: - The falling piece
 
-    /// Works out what changed rather than being told: the server sends whole
+    /// Works out what changed rather than being told: the owner sends whole
     /// boards, and exactly one column can have grown.
     private func noteDrop(from old: FourState, to new: FourState) {
         // A fresh game rather than a move — nothing fell.
@@ -350,7 +350,7 @@ struct FourStageView: View {
 
     /// The finished board stays up long enough for everyone to read it, then
     /// clears itself. Every client with the chat open runs this; the version
-    /// check means only the first report lands. Timed from the server's stamp,
+    /// check means only the first report lands. Timed from the owner's stamp,
     /// so opening the chat late doesn't restart the countdown.
     private func expireWhenTimeIsUp() async {
         guard let finishedAt = four.finishedAt else { return }

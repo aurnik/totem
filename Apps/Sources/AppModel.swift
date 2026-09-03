@@ -79,10 +79,14 @@ final class AppModel {
     /// The most recently appended transcript item, stamped with the local
     /// clock — drives entrance animations without trusting server timestamps.
     private var lastAppended: (id: UUID, at: Date)?
-    private var pendingSends: [UUID: UUID] = [:]
     /// Where the last outbound message was typed — server error frames carry
     /// no context, so refusals ("they're offline") surface as notices there.
     private var lastSentConversation: UUID?
+    /// Pair conversations whose sitting this client has told the server about
+    /// this session. Messages travel peer-to-peer, so the server learns that
+    /// a pair is talking only from whichever end says so; once is enough
+    /// until the sitting ends.
+    private var reportedActive: Set<UUID> = []
     private var lastTypingSentAt: [UUID: Date] = [:]
     /// Live voice: the conversation the local mic streams into (one at a
     /// time) and who we currently hear, per conversation. Speakers are
@@ -98,16 +102,17 @@ final class AppModel {
     /// still drive the meters, so who's talking stays visible; only the
     /// speaker is skipped. Scoped to the chat being open, like voice itself.
     private var mutedConversations: Set<UUID> = []
-    /// How each peer's voice link is reaching them, from `VoiceLink`.
-    private var voiceLinks: [UUID: VoiceLink.LinkState] = [:]
+    /// How each peer's link is reaching them, from `PeerLink`.
+    private var links: [UUID: PeerLink.LinkState] = [:]
     /// Conversations we've told peers *we* can't hear — cleared when hearing
     /// comes back (with a follow-up frame) or the chat goes silent.
     private var reportedMutedConversations: Set<UUID> = []
     /// Per-chunk spectrum frames for the speaker meters, keyed by speaking user.
     var speakerSpectrum: [UUID: [Float]] = [:]
     /// What's on each conversation's stage, keyed by conversation ID. The
-    /// server owns this: clients send actions and render whatever comes back,
-    /// never applying anything optimistically.
+    /// stage's owner (`Stage.ownerID`) holds the authoritative copy and runs
+    /// the reducer; everyone else sends actions there and renders whatever
+    /// the owner broadcasts back, never applying anything optimistically.
     var stages: [UUID: Stage] = [:]
     /// Conversations already told (via notice) that playback is broken —
     /// throttles the notice to once per sign-on.
@@ -124,9 +129,10 @@ final class AppModel {
     private var dictationTranscriber: AnyObject?
     private var dictationSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     private let audio = AudioStreamer()
-    /// The peer-to-peer side of live voice, one per sign-on: it exists while
-    /// the socket does, since the server is what introduces its peers.
-    private var voice: VoiceLink?
+    /// The peer-to-peer side of every conversation, one per sign-on: it
+    /// exists while the socket does, since the server is what introduces its
+    /// peers.
+    private var peers: PeerLink?
 
     private var api = APIClient()
     private var socket: SocketClient?
@@ -427,21 +433,24 @@ final class AppModel {
         refreshPushSettings()
         let socket = SocketClient(url: api.socketURL, token: token)
         self.socket = socket
-        let voice = VoiceLink(
+        let peers = PeerLink(
             onTicket: { [weak self] ticket in
                 Task { @MainActor in self?.fire(.announceEndpoint(ticket: ticket)) }
             },
-            onFrame: { [weak self] frame in
+            onAudio: { [weak self] frame in
                 Task { @MainActor in
                     self?.receiveAudio(conversationID: frame.conversationID,
                                        senderID: frame.senderID, packet: frame.packet)
                 }
             },
+            onFrame: { [weak self] inbound in
+                Task { @MainActor in self?.handle(inbound) }
+            },
             onLink: { [weak self] userID, state in
-                Task { @MainActor in self?.voiceLinks[userID] = state }
+                Task { @MainActor in self?.links[userID] = state }
             })
-        self.voice = voice
-        Task { await voice.start() }
+        self.peers = peers
+        Task { await peers.start() }
         socketTask = Task { [weak self] in
             for await event in await socket.events() {
                 await self?.handle(event)
@@ -462,7 +471,7 @@ final class AppModel {
     private func clearSessionScopedState() {
         transcripts = [:]
         endedGroups = []
-        pendingSends = [:]
+        reportedActive = []
         unreadPeers = []
         mutedListeners = [:]
         mutedConversations = []
@@ -477,10 +486,10 @@ final class AppModel {
         let socket = self.socket
         Task { await socket?.close() }
         self.socket = nil
-        let voice = self.voice
-        Task { await voice?.stop() }
-        self.voice = nil
-        voiceLinks = [:]
+        let peers = self.peers
+        Task { await peers?.stop() }
+        self.peers = nil
+        links = [:]
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
@@ -541,30 +550,95 @@ final class AppModel {
         }
     }
 
+    /// A message goes straight to the people in the conversation over their
+    /// peer links; the server never sees it. It's minted here — ID and
+    /// timestamp — and lands in the transcript at once, since there is no
+    /// ack to wait for; a link that won't come up is reported afterwards
+    /// where the message was typed.
     func sendMessage(to conversationID: UUID, body: String, dictated: Bool = false) {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let clientID = UUID()
-        pendingSends[clientID] = conversationID
+        guard !trimmed.isEmpty, let selfID = currentUser?.id else { return }
         lastSentConversation = conversationID
-        let spoken = dictated ? true : nil
-        let context = botContext(for: trimmed, in: conversationID)
-        let frame: ClientFrame = .send(
-            conversationID: conversationID, body: trimmed,
-            clientMessageID: clientID, dictated: spoken, botContext: context)
-        let socket = self.socket
+        let peerID = peer(of: conversationID)
+        // The check the server used to make: a 1:1 to someone offline is
+        // refused, never spooled.
+        if let peerID, (presences[peerID]?.state ?? .offline) == .offline {
+            append(.notice(id: UUID(), text: "Message not delivered — they're offline", at: Date()),
+                   to: conversationID)
+            return
+        }
+        let message = ChatMessage(
+            id: UUID(), sessionID: conversationID, senderID: selfID, body: trimmed,
+            sentAt: Date(), dictated: dictated ? true : nil)
+        append(.message(message), to: conversationID)
+        SoundPlayer.play(.messageSent)
+        noteTraffic(in: conversationID)
+        // Bots are the server's, so a tagged message is the one thing it is
+        // still told about — with the conversation, when the tag asks for it.
+        if taggedBot(in: trimmed) != nil {
+            fire(.botQuery(conversationID: conversationID, body: trimmed,
+                           context: botContext(for: trimmed, in: conversationID)))
+        }
+        let recipients = participants(in: conversationID)
         Task { [weak self] in
-            do {
-                guard let socket else { throw URLError(.networkConnectionLost) }
-                try await socket.send(frame)
-            } catch {
-                // The ack will never come — say so where the message was typed.
-                self?.pendingSends[clientID] = nil
-                self?.append(.notice(id: UUID(), text: "Message not sent — connection lost",
-                                     at: Date()),
-                             to: conversationID)
+            let failed = await self?.deliver(.message(message), to: recipients) ?? []
+            guard let self, !failed.isEmpty else { return }
+            if let peerID {
+                append(.notice(id: UUID(), text: "Message not delivered", at: Date()),
+                       to: conversationID)
+                // The server decides whether that means they're gone: it
+                // pings them itself before marking anyone away.
+                fire(.unreachable(userID: peerID))
+            } else {
+                // A group is best effort — offline members miss messages —
+                // but someone the buddy list shows online deserves a word.
+                let missed = failed
+                    .filter { (presences[$0]?.state ?? .offline) != .offline }
+                    .compactMap { handle(of: $0) }
+                    .sorted()
+                if !missed.isEmpty {
+                    append(.notice(id: UUID(), text: "Not delivered to \(missed.joined(separator: ", "))",
+                                   at: Date()),
+                           to: conversationID)
+                }
             }
         }
+    }
+
+    /// Writes a frame to each recipient's link, waiting briefly for links
+    /// that aren't up yet, and returns whoever it couldn't reach.
+    private func deliver(_ frame: PeerFrame, to recipients: Set<UUID>) async -> Set<UUID> {
+        guard let peers else { return recipients }
+        return await withTaskGroup(of: UUID?.self) { group in
+            for userID in recipients {
+                group.addTask {
+                    do {
+                        try await peers.send(frame, to: userID)
+                        return nil
+                    } catch {
+                        return userID
+                    }
+                }
+            }
+            var failed = Set<UUID>()
+            for await userID in group {
+                if let userID { failed.insert(userID) }
+            }
+            return failed
+        }
+    }
+
+    /// Best-effort delivery for frames that carry no promise to the user.
+    private func sendToPeers(_ frame: PeerFrame, _ recipients: Set<UUID>) {
+        Task { [weak self] in _ = await self?.deliver(frame, to: recipients) }
+    }
+
+    /// The first message in or out of a pair this session opens its sitting
+    /// on the server, which can no longer see the traffic itself.
+    private func noteTraffic(in conversationID: UUID) {
+        guard peer(of: conversationID) != nil, reportedActive.insert(conversationID).inserted
+        else { return }
+        fire(.conversationActive(conversationID: conversationID))
     }
 
     /// One participant is the pair conversation, whose ID this client can
@@ -745,15 +819,15 @@ final class AppModel {
     /// paced in real time so recipients' meters and speaker expiry behave
     /// normally — and looped back locally so the sender hears it too.
     func playSample(_ sample: SoundSample, in conversationID: UUID) {
-        guard let voice, let selfID = currentUser?.id,
+        guard let peers, let selfID = currentUser?.id,
               let data = try? Data(contentsOf: sampleURL(sample.id))
         else { return }
         let packets = OpusPacketFile.decode(data)
         guard !packets.isEmpty else { return }
-        voice.setRecipients(voiceRecipients(in: conversationID), of: conversationID)
+        peers.setRecipients(participants(in: conversationID), of: conversationID)
         Task { [weak self] in
             for packet in packets {
-                voice.send(packet, in: conversationID)
+                peers.send(packet, in: conversationID)
                 self?.receiveAudio(conversationID: conversationID, senderID: selfID, packet: packet)
                 try? await Task.sleep(for: AudioStreamer.frameDuration)
             }
@@ -860,7 +934,7 @@ final class AppModel {
         } else {
             await stopDictation()
         }
-        if liveMicConversation == conversationID, voice == nil {
+        if liveMicConversation == conversationID, peers == nil {
             liveMicConversation = nil
         }
         let broadcasting = liveMicConversation == conversationID
@@ -870,13 +944,13 @@ final class AppModel {
         }
 
         var packetSink: (@Sendable (Data, [Float]) -> Void)?
-        if broadcasting, let voice {
-            voice.setRecipients(voiceRecipients(in: conversationID), of: conversationID)
+        if broadcasting, let peers {
+            peers.setRecipients(participants(in: conversationID), of: conversationID)
             let selfID = currentUser?.id
             packetSink = { [weak self] packet, spectrum in
                 // Straight off the audio thread: the link is thread-safe and
                 // datagrams don't block.
-                voice.send(packet, in: conversationID)
+                peers.send(packet, in: conversationID)
                 // Meter-only self monitor (no playback — that would echo)
                 // so the speaker can see their own audio going out.
                 guard let selfID else { return }
@@ -893,14 +967,33 @@ final class AppModel {
         }
     }
 
-    /// Who hears voice in a conversation: the buddy of a pair, or everyone
-    /// else in a group. Anyone the server hasn't introduced yet is simply
-    /// not dialled.
-    private func voiceRecipients(in conversationID: UUID) -> Set<UUID> {
+    /// Everyone else in a conversation: the buddy of a pair, or the rest of
+    /// a group. Where every frame goes, and who a frame may come from.
+    /// Anyone the server hasn't introduced yet is simply not dialled.
+    private func participants(in conversationID: UUID) -> Set<UUID> {
         if let peerID = peer(of: conversationID) { return [peerID] }
         var members = Set(groupSessions[conversationID]?.participants.map(\.id) ?? [])
         if let selfID = currentUser?.id { members.remove(selfID) }
         return members
+    }
+
+    /// The client's copy of the server's `usableConversation` check: a frame
+    /// counts only from someone in the conversation — a buddy for a pair, a
+    /// member of a group whose sitting is still live. A derived conversation
+    /// ID is computable by anyone, so it is not a capability here either.
+    private func canReceive(from senderID: UUID, in conversationID: UUID) -> Bool {
+        guard participants(in: conversationID).contains(senderID) else { return false }
+        return peer(of: conversationID) != nil || !endedGroups.contains(conversationID)
+    }
+
+    /// Links stay up to everyone in an open chat, so the first keystroke
+    /// doesn't wait on a handshake.
+    private func refreshWarmLinks() {
+        var wanted = Set<UUID>()
+        for conversationID in activeConversations {
+            wanted.formUnion(participants(in: conversationID))
+        }
+        peers?.keepWarm(wanted)
     }
 
     // MARK: - Dictation
@@ -970,7 +1063,7 @@ final class AppModel {
     /// The worst of the links to this conversation's participants, nil when
     /// none exists — a group is only as direct as its slowest member.
     func voiceStatus(in conversationID: UUID) -> VoiceStatus? {
-        let states = voiceRecipients(in: conversationID).compactMap { voiceLinks[$0] }
+        let states = participants(in: conversationID).compactMap { links[$0] }
         guard !states.isEmpty else { return nil }
         if states.contains(.connecting) { return .connecting }
         if states.contains(.relay) { return .relay }
@@ -1025,7 +1118,8 @@ final class AppModel {
     }
 
     private func sendAudioMuted(_ muted: Bool, in conversationID: UUID) {
-        fire(.setMuted(conversationID: conversationID, muted: muted))
+        sendToPeers(.audioMuted(conversationID: conversationID, muted: muted),
+                    participants(in: conversationID))
     }
 
     /// Best-effort send: these frames carry no promise to the user, so a
@@ -1037,10 +1131,21 @@ final class AppModel {
 
     /// Throttled to one event per 3s per peer (spec §6).
     func sendTyping(to peerID: UUID) {
+        guard let pairID = conversationID(with: peerID) else { return }
         let now = Date()
         if let last = lastTypingSentAt[peerID], now.timeIntervalSince(last) < 3 { return }
         lastTypingSentAt[peerID] = now
-        fire(.typing(recipientID: peerID))
+        sendToPeers(.typing(conversationID: pairID), [peerID])
+    }
+
+    private func noteTyping(_ userID: UUID) {
+        typingPeers.insert(userID)
+        typingExpiry[userID]?.cancel()
+        typingExpiry[userID] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            self?.typingPeers.remove(userID)
+        }
     }
 
     func isTyping(_ peerID: UUID) -> Bool {
@@ -1075,12 +1180,18 @@ final class AppModel {
         return detached
     }
 
-    func conversationOpened(_ peerID: UUID) {
-        activeConversations.insert(peerID)
-        unreadPeers.remove(peerID)
-        // Stage pushes that landed while this chat was closed were dropped, so
-        // ask for the current one rather than rendering a stale stage.
-        fire(.requestStage(conversationID: peerID))
+    func conversationOpened(_ conversationID: UUID) {
+        activeConversations.insert(conversationID)
+        unreadPeers.remove(conversationID)
+        refreshWarmLinks()
+        requestStage(in: conversationID)
+    }
+
+    /// Asked of everyone; only the stage's owner answers, and silence means
+    /// there's nothing on. Catches up on broadcasts missed while the link to
+    /// the owner was down.
+    private func requestStage(in conversationID: UUID) {
+        sendToPeers(.stageRequest(conversationID: conversationID), participants(in: conversationID))
     }
 
     /// A chat reports itself viewed when it's on screen in the frontmost
@@ -1096,15 +1207,54 @@ final class AppModel {
 
     // MARK: - Stage
 
-    /// Conditional actions carry the version they were aimed at, so the server
-    /// can drop one that no longer applies to what's on the stage now.
+    /// Hosted here when this user owns the stage (or nobody does yet);
+    /// otherwise sent to whoever does, with the version it was aimed at, so
+    /// the owner can drop one that no longer applies.
     func sendStageAction(_ action: StageAction, in conversationID: UUID) {
-        fire(.stageAction(conversationID: conversationID, action: action,
-                          expectedVersion: action.isConditional ? stages[conversationID]?.version : nil))
+        guard let selfID = currentUser?.id else { return }
+        let effects = StageHost.act(action, on: stages[conversationID], by: selfID, at: Date())
+        // A finished board's time is up on every clock at once. The owner's
+        // broadcast makes it official, but this copy needn't wait for it —
+        // and if the owner's link is down, it would otherwise never come.
+        if case .four(.expire) = action {
+            stages[conversationID] = nil
+        }
+        perform(effects, in: conversationID)
     }
 
     func closeStage(in conversationID: UUID) {
-        fire(.closeStage(conversationID: conversationID))
+        guard let selfID = currentUser?.id else { return }
+        perform(StageHost.close(on: stages[conversationID], by: selfID), in: conversationID)
+    }
+
+    private func perform(_ effects: [StageHost.Effect], in conversationID: UUID) {
+        for effect in effects {
+            switch effect {
+            case .broadcast(let stage, let actorID):
+                applyStage(stage, in: conversationID, from: actorID)
+                sendToPeers(.stage(conversationID: conversationID, stage: stage, actorID: actorID),
+                            participants(in: conversationID))
+            case .resync(let stage, let to):
+                sendToPeers(.stage(conversationID: conversationID, stage: stage, actorID: nil), [to])
+            case .forward(let action, let expectedVersion, let to):
+                sendToPeers(.stageAction(conversationID: conversationID, action: action,
+                                         expectedVersion: expectedVersion), [to])
+            case .forwardClose(let to):
+                sendToPeers(.stageClose(conversationID: conversationID), [to])
+            }
+        }
+    }
+
+    /// A stage lives on its owner's device, so it goes when they do — and a
+    /// game needs both its players, so it goes when either does.
+    private func clearStages(dependingOn userID: UUID) {
+        for (conversationID, stage) in stages {
+            var doomed = stage.ownerID == userID
+            if case .four(let game) = stage.state, game.red == userID || game.yellow == userID {
+                doomed = true
+            }
+            if doomed { stages[conversationID] = nil }
+        }
     }
 
     func searchYouTube(_ query: String) async throws -> [YouTubeVideo] {
@@ -1120,27 +1270,27 @@ final class AppModel {
                       playing: youtube.isPlaying)
     }
 
-    /// After a reconnect the stage may have moved on without us — anything
-    /// pushed during the gap never arrived — and the server forgot what this
-    /// socket had told it: what's on screen, and where our voice endpoint is.
+    /// After a reconnect the server has forgotten what this socket had told
+    /// it — what's on screen, and where our endpoint is — and the peers may
+    /// have moved a stage on while our links were down with the network.
     private func resendAfterReconnect() {
         for conversationID in activeConversations {
-            fire(.requestStage(conversationID: conversationID))
+            requestStage(in: conversationID)
         }
         if let viewedConversation {
             fire(.viewing(conversationID: viewedConversation))
         }
-        if let ticket = voice?.ticket {
+        if let ticket = peers?.ticket {
             fire(.announceEndpoint(ticket: ticket))
         }
     }
 
-    private func applyStage(_ stage: Stage?, in conversationID: UUID, from senderID: UUID?) {
+    private func applyStage(_ stage: Stage?, in conversationID: UUID, from actorID: UUID?) {
         let previous = stages[conversationID]
         stages[conversationID] = stage
         // Snapshot replies and re-syncs after a rejected action carry no
-        // sender: nobody did anything, so nothing is worth announcing.
-        guard let senderID, let handle = handle(of: senderID),
+        // actor: nobody did anything, so nothing is worth announcing.
+        guard let actorID, let handle = handle(of: actorID),
               let text = Self.stageNotice(from: previous, to: stage, by: handle)
         else { return }
         append(.notice(id: UUID(), text: text, at: Date()), to: conversationID)
@@ -1188,10 +1338,11 @@ final class AppModel {
         }
     }
 
-    func conversationClosed(_ peerID: UUID) {
-        activeConversations.remove(peerID)
-        conversationViewed(peerID, false)
-        silenceConversation(peerID)
+    func conversationClosed(_ conversationID: UUID) {
+        activeConversations.remove(conversationID)
+        conversationViewed(conversationID, false)
+        silenceConversation(conversationID)
+        refreshWarmLinks()
     }
 
     /// Most recent distinct away messages, newest first — the quick-tap
@@ -1350,7 +1501,8 @@ final class AppModel {
             presences[userID] = presence
             NotificationManager.shared.showOnlineCount(onlineBuddyCount)
             if presence.state == .offline {
-                voice?.removePeer(userID)
+                peers?.removePeer(userID)
+                clearStages(dependingOn: userID)
             }
             // Where this buddy's conversation lives — notices about a person
             // land in the chat with that person.
@@ -1401,43 +1553,28 @@ final class AppModel {
                 for key in mutedListeners.keys {
                     mutedListeners[key]?.remove(userID)
                 }
-                // A 1:1 stage dies with the conversation, same as the server's
-                // copy — group stages outlive any one member going offline.
+                // A 1:1 stage dies with the conversation — whoever owned it.
                 if let pairID {
                     stages[pairID] = nil
                     peerViewing.remove(pairID)
                 }
             }
+        // Messages arrive over the peer links now; this is the server
+        // relaying for a build that predates them, kept for one release.
         case .message(let message):
-            // The message carries its conversation: `sessionID` is the
-            // derived conversation ID, the key this client renders by. No
-            // inference from the sender — that inference is what filed 1:1
-            // messages into a group when the server keyed them wrong.
-            append(.message(message), to: message.sessionID)
-            clearTyping(message.senderID)
-            if !activeConversations.contains(message.sessionID) {
-                unreadPeers.insert(message.sessionID)
-            }
-            SoundPlayer.play(.messageReceived)
+            receiveMessage(message)
         case .botMessage(let conversationID, let message):
             append(.message(message), to: conversationID)
             if !activeConversations.contains(conversationID) {
                 unreadPeers.insert(conversationID)
             }
             SoundPlayer.play(.messageReceived)
-        case .messageSent(let clientMessageID, let message):
-            if pendingSends.removeValue(forKey: clientMessageID) != nil {
-                append(.message(message), to: message.sessionID)
-                SoundPlayer.play(.messageSent)
-            }
+        case .messageSent:
+            // Nothing waits on the server's ack any more: the sender's copy
+            // went into the transcript when it was sent.
+            break
         case .typing(let userID):
-            typingPeers.insert(userID)
-            typingExpiry[userID]?.cancel()
-            typingExpiry[userID] = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(5))
-                guard !Task.isCancelled else { return }
-                self?.typingPeers.remove(userID)
-            }
+            noteTyping(userID)
         case .viewing(let conversationID, _, let viewing):
             if viewing {
                 peerViewing.insert(conversationID)
@@ -1445,14 +1582,9 @@ final class AppModel {
                 peerViewing.remove(conversationID)
             }
         case .endpoint(let userID, let ticket):
-            voice?.setPeer(userID, ticket: ticket)
+            peers?.setPeer(userID, ticket: ticket)
         case .audioMuted(let conversationID, let userID, let muted):
-            guard activeConversations.contains(conversationID) else { return }
-            if muted {
-                mutedListeners[conversationID, default: []].insert(userID)
-            } else {
-                mutedListeners[conversationID]?.remove(userID)
-            }
+            setMutedListener(userID, muted: muted, in: conversationID)
         case .sessionClosed(let sessionID):
             // The conversation's sitting ended — fewer than two participants
             // left. Our own transcript survives (it's scoped to our online
@@ -1466,6 +1598,8 @@ final class AppModel {
             if let peerID = peer(of: sessionID) {
                 clearTyping(peerID)
             }
+            reportedActive.remove(sessionID)
+            stages[sessionID] = nil
             silenceConversation(sessionID)
         case .stage(let conversationID, let senderID, let stage):
             applyStage(stage, in: conversationID, from: senderID)
@@ -1479,6 +1613,68 @@ final class AppModel {
         }
     }
 
+    // MARK: - Peer frames
+
+    /// A frame off a peer link. The link vouches for who sent it; what it
+    /// says about a conversation counts only if the sender is in it.
+    private func handle(_ inbound: PeerLink.Inbound) {
+        let senderID = inbound.senderID
+        guard let selfID = currentUser?.id else { return }
+        switch inbound.frame {
+        case .message(var message):
+            guard canReceive(from: senderID, in: message.sessionID) else { return }
+            message.senderID = senderID
+            receiveMessage(message)
+        case .typing(let conversationID):
+            guard peer(of: conversationID) == senderID else { return }
+            noteTyping(senderID)
+        case .audioMuted(let conversationID, let muted):
+            guard canReceive(from: senderID, in: conversationID) else { return }
+            setMutedListener(senderID, muted: muted, in: conversationID)
+        case .stageAction(let conversationID, let action, let expectedVersion):
+            guard canReceive(from: senderID, in: conversationID) else { return }
+            perform(StageHost.receive(action, expectedVersion: expectedVersion, from: senderID,
+                                      on: stages[conversationID], selfID: selfID, at: Date()),
+                    in: conversationID)
+        case .stageClose(let conversationID):
+            guard canReceive(from: senderID, in: conversationID) else { return }
+            perform(StageHost.receiveClose(from: senderID, on: stages[conversationID], selfID: selfID),
+                    in: conversationID)
+        case .stageRequest(let conversationID):
+            guard canReceive(from: senderID, in: conversationID) else { return }
+            perform(StageHost.receiveRequest(from: senderID, on: stages[conversationID], selfID: selfID),
+                    in: conversationID)
+        case .stage(let conversationID, let stage, let actorID):
+            guard canReceive(from: senderID, in: conversationID),
+                  StageHost.accepts(stage, from: senderID, on: stages[conversationID], selfID: selfID)
+            else { return }
+            applyStage(stage, in: conversationID, from: actorID)
+        }
+    }
+
+    /// The message carries its conversation: `sessionID` is the derived
+    /// conversation ID, the key this client renders by. No inference from
+    /// the sender — that inference is what filed 1:1 messages into a group
+    /// when the server keyed them wrong.
+    private func receiveMessage(_ message: ChatMessage) {
+        append(.message(message), to: message.sessionID)
+        clearTyping(message.senderID)
+        if !activeConversations.contains(message.sessionID) {
+            unreadPeers.insert(message.sessionID)
+        }
+        SoundPlayer.play(.messageReceived)
+        noteTraffic(in: message.sessionID)
+    }
+
+    private func setMutedListener(_ userID: UUID, muted: Bool, in conversationID: UUID) {
+        guard activeConversations.contains(conversationID) else { return }
+        if muted {
+            mutedListeners[conversationID, default: []].insert(userID)
+        } else {
+            mutedListeners[conversationID]?.remove(userID)
+        }
+    }
+
     /// One live-voice packet reaching the ears and meters — from a peer, or
     /// looped back locally while broadcasting a sound sample. A peer's packet
     /// only counts for a conversation they're actually in: the link vouches
@@ -1486,7 +1682,7 @@ final class AppModel {
     private func receiveAudio(conversationID: UUID, senderID: UUID, packet: Data) {
         // Live voice only reaches ears with that chat open.
         guard activeConversations.contains(conversationID),
-              senderID == currentUser?.id || voiceRecipients(in: conversationID).contains(senderID)
+              senderID == currentUser?.id || participants(in: conversationID).contains(senderID)
         else { return }
         let spectrum: [Float]
         switch audio.play(packet, from: senderID,

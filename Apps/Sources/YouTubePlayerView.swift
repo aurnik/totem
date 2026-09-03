@@ -149,7 +149,7 @@ struct YouTubePlayerView {
             switch state {
             case 0:
                 // Ended. Every client with the chat open reports this; the
-                // server keeps the first and rejects the rest.
+                // stage's owner keeps the first and rejects the rest.
                 parent.onEnded()
             case 1, 2, 5:
                 // Cued (5) counts as settled too: a load that comes to rest

@@ -219,7 +219,7 @@ final class StageReducerTests: XCTestCase {
         let id = UUID(), sender = UUID()
         let stage = Stage(version: 3, state: .youtube(
             YouTubeState(videoID: "v", title: "Title", thumbnailURL: URL(string: "https://img.example/1.jpg"),
-                         isPlaying: true, positionSeconds: 12.5, positionAt: t0)))
+                         isPlaying: true, positionSeconds: 12.5, positionAt: t0)), ownerID: me)
 
         for payload in [stage, nil] as [Stage?] {
             let frame = ServerFrame.stage(conversationID: id, senderID: sender, stage: payload)

@@ -215,7 +215,7 @@ final class FourReducerTests: XCTestCase {
         var stacks = [[FourDisc]](repeating: [], count: FourState.columns)
         for column in [0, 1, 3, 4] { stacks[column] = [.red] }
         let state = FourState(stacks: stacks, red: red, yellow: yellow)
-        let stage = Stage(version: 1, state: .four(state))
+        let stage = Stage(version: 1, state: .four(state), ownerID: red)
 
         // Eight pieces are down, so it's red's turn, and column 2 joins the two
         // halves into a run of five.
@@ -243,7 +243,7 @@ final class FourReducerTests: XCTestCase {
         var stacks = (0..<FourState.columns).map { $0.isMultiple(of: 2) ? even : odd }
         stacks[1].removeLast()
 
-        let stage = Stage(version: 4, state: .four(FourState(stacks: stacks, red: red, yellow: yellow)))
+        let stage = Stage(version: 4, state: .four(FourState(stacks: stacks, red: red, yellow: yellow)), ownerID: red)
         XCTAssertEqual(game(stage).turn, .yellow, "the one cell left wants a yellow")
 
         let full = updated(StageReducer.reduce(stage, .four(.drop(column: 1)), by: yellow,
@@ -343,7 +343,7 @@ final class FourReducerTests: XCTestCase {
 
         for state in [live, finished] {
             let frame = ServerFrame.stage(conversationID: id, senderID: sender,
-                                          stage: Stage(version: 9, state: .four(state)))
+                                          stage: Stage(version: 9, state: .four(state), ownerID: red))
             let data = try WireCoder.encoder().encode(frame)
             let decoded = try WireCoder.decoder().decode(ServerFrame.self, from: data)
             guard case let .stage(gotID, gotSender, gotStage) = decoded else {
@@ -351,7 +351,7 @@ final class FourReducerTests: XCTestCase {
             }
             XCTAssertEqual(gotID, id)
             XCTAssertEqual(gotSender, sender)
-            XCTAssertEqual(gotStage, Stage(version: 9, state: .four(state)))
+            XCTAssertEqual(gotStage, Stage(version: 9, state: .four(state), ownerID: red))
         }
     }
 }
