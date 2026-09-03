@@ -1249,14 +1249,25 @@ final class AppModel {
     }
 
     /// A stage lives on its owner's device, so it goes when they do — and a
-    /// game needs both its players, so it goes when either does.
+    /// game needs both its players, so it goes when either does. A group
+    /// gets told why, since nothing else in a group announces a departure; a
+    /// pair's sign-off notice already has.
     private func clearStages(dependingOn userID: UUID) {
         for (conversationID, stage) in stages {
             var doomed = stage.ownerID == userID
             if case .four(let game) = stage.state, game.red == userID || game.yellow == userID {
                 doomed = true
             }
-            if doomed { stages[conversationID] = nil }
+            guard doomed else { continue }
+            stages[conversationID] = nil
+            if peer(of: conversationID) == nil, let handle = handle(of: userID) {
+                let what = switch stage.state {
+                case .youtube: "the video"
+                case .four: "the game"
+                }
+                append(.notice(id: UUID(), text: "\(handle) disconnected — \(what) is gone", at: Date()),
+                       to: conversationID)
+            }
         }
     }
 
