@@ -43,7 +43,19 @@ final class PeerLink: @unchecked Sendable {
         /// never introduced them.
         case noLink
         case stopped
+        /// The write couldn't drain inside the deadline. A completed QUIC
+        /// write means the bytes reached the local send buffer, not the peer,
+        /// so a peer that stops acknowledging — a phone whose radio just went
+        /// off — lets the flow-control window fill and then `writeAll` blocks
+        /// for the whole idle timeout. That is a failed delivery now, not in
+        /// thirty seconds.
+        case writeStalled
     }
+
+    /// A stalled write is abandoned after this. It sits just under the
+    /// delivery timeout the model reports on, so "not delivered" is the
+    /// write giving up, not the ack.
+    static let writeTimeout: Duration = .seconds(4)
 
     private static let alpn = Data("totem/peer/1".utf8)
     /// Conversation ID, then a per-sender sequence number, ahead of the packet.
@@ -338,6 +350,16 @@ final class PeerLink: @unchecked Sendable {
         try await writer.write(data)
     }
 
+    /// Write with no one waiting on the bytes reaching the buffer. Delivery is
+    /// judged by the peer's ack, not by the write returning — a write into a
+    /// full flow-control window (a peer that went silent) blocks for the
+    /// connection's whole idle timeout, and nothing that matters should wait
+    /// on it. The write still runs, bounded and self-healing, so it lands if
+    /// the peer is merely slow.
+    func sendBestEffort(_ frame: PeerFrame, to userID: UUID) {
+        Task { [weak self] in try? await self?.send(frame, to: userID) }
+    }
+
     private func link(to userID: UUID) async throws -> Connection {
         if let connection = lock.withLock({ connections[userID] }) { return connection }
         return try await withCheckedThrowingContinuation { continuation in
@@ -432,11 +454,43 @@ final class PeerLink: @unchecked Sendable {
                 self.stream = stream
             }
             do {
-                try await stream.writeAll(buf: data)
+                try await withDeadline(PeerLink.writeTimeout) {
+                    try await stream.writeAll(buf: data)
+                } onExpiry: {
+                    // Abort the stuck write so `writeAll` throws instead of
+                    // waiting out the connection's idle timeout; a reset
+                    // stream is spent, so the next frame opens a new one.
+                    try? await stream.reset(errorCode: 0)
+                }
             } catch {
                 self.stream = nil
                 throw error
             }
+        }
+    }
+
+    /// Runs `work` but gives up after `deadline`, calling `onExpiry` to unwedge
+    /// whatever it was blocked on so it actually returns. Without the unwedge a
+    /// non-cancellable FFI call would keep the task group from ever unwinding.
+    private static func withDeadline(
+        _ deadline: Duration,
+        _ work: @escaping @Sendable () async throws -> Void,
+        onExpiry: @escaping @Sendable () async -> Void
+    ) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await withTaskCancellationHandler {
+                    try await work()
+                } onCancel: {
+                    Task { await onExpiry() }
+                }
+            }
+            group.addTask {
+                try await Task.sleep(for: deadline)
+                throw LinkError.writeStalled
+            }
+            defer { group.cancelAll() }
+            try await group.next()
         }
     }
 

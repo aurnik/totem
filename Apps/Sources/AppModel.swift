@@ -650,13 +650,15 @@ final class AppModel {
     /// failure like any other.
     private func deliverMessage(_ message: ChatMessage, to recipients: Set<UUID>) async -> Set<UUID> {
         guard let peers else { return recipients }
+        // The write is fired best-effort and never awaited: a peer that went
+        // silent leaves it blocked on a full send buffer for the whole idle
+        // timeout, and the verdict must not wait that out. Delivery is the
+        // ack coming back inside the window, nothing else.
         return await withTaskGroup(of: UUID?.self) { group in
             for userID in recipients {
+                peers.sendBestEffort(.message(message), to: userID)
                 group.addTask { [weak self] in
-                    guard (try? await peers.send(.message(message), to: userID)) != nil,
-                          await self?.awaitAck(for: message.id, from: userID) == true
-                    else { return userID }
-                    return nil
+                    await self?.awaitAck(for: message.id, from: userID) == true ? nil : userID
                 }
             }
             var failed = Set<UUID>()

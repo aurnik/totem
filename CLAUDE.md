@@ -150,10 +150,12 @@ the whole access control: `PeerLink` refuses a connection from an endpoint the s
 stamps every inbound frame with the user it accepted the connection for (the frame's own `senderID`
 is overwritten), and `AppModel.canReceive` applies a frame only for a conversation that sender is in —
 the client's copy of the server's `usableConversation`. Links are dialled when a chat is opened
-(`keepWarm`) and redialled when they drop; a send with no link waits up to 5 s for one. **A completed
-write is not delivery** — QUIC accepts bytes into a send buffer whose far end may be in airplane mode
-(measured: the Mac "sent" to a phone with its radio off) — so every message is answered with
-`PeerFrame.ack` and one unanswered for 5 s is "Message not delivered". Measured on this network: phone on LTE ↔ Mac at
+(`keepWarm`) and redialled when they drop. **A completed write is not delivery** — QUIC accepts bytes
+into a send buffer whose far end may be in airplane mode, and once that buffer fills against a silent
+peer `writeAll` blocks for the connection's whole idle timeout (measured: ~30 s). So the message write
+is fired best-effort and never awaited (`PeerLink.sendBestEffort`); delivery is judged only by the
+peer's `PeerFrame.ack` coming back inside 5 s, and one that doesn't is "Message not delivered". A
+stalled write is separately bounded and reset so it can't wedge later frames. Measured on this network: phone on LTE ↔ Mac at
 home punched to a direct IPv6 path within seconds, 0.4% loss, 60 ms round trip; the n0 relay carries
 only the first seconds.
 
