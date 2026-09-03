@@ -199,10 +199,10 @@ final class StageReducerTests: XCTestCase {
     func testStageActionFrameRoundTripsWithOptionalVersion() throws {
         let id = UUID()
         for expected in [nil, 7] as [Int?] {
-            let frame = ClientFrame.stageAction(conversationID: id, action: video("xyz"),
-                                                expectedVersion: expected)
+            let frame = PeerFrame.stageAction(conversationID: id, action: video("xyz"),
+                                              expectedVersion: expected)
             let data = try WireCoder.encoder().encode(frame)
-            let decoded = try WireCoder.decoder().decode(ClientFrame.self, from: data)
+            let decoded = try WireCoder.decoder().decode(PeerFrame.self, from: data)
             guard case let .stageAction(gotID, gotAction, gotVersion) = decoded else {
                 return XCTFail("wrong case: \(decoded)")
             }
@@ -222,10 +222,10 @@ final class StageReducerTests: XCTestCase {
                          isPlaying: true, positionSeconds: 12.5, positionAt: t0)), ownerID: me)
 
         for payload in [stage, nil] as [Stage?] {
-            let frame = ServerFrame.stage(conversationID: id, senderID: sender, stage: payload)
+            let frame = PeerFrame.stage(conversationID: id, stage: payload, actorID: sender)
             let data = try WireCoder.encoder().encode(frame)
-            let decoded = try WireCoder.decoder().decode(ServerFrame.self, from: data)
-            guard case let .stage(gotID, gotSender, gotStage) = decoded else {
+            let decoded = try WireCoder.decoder().decode(PeerFrame.self, from: data)
+            guard case let .stage(gotID, gotStage, gotSender) = decoded else {
                 return XCTFail("wrong case: \(decoded)")
             }
             XCTAssertEqual(gotID, id)

@@ -14,6 +14,7 @@ final class PeerWireTests: XCTestCase {
         let stage = Stage(version: 4, state: .four(game), ownerID: me)
         return [
             .message(message),
+            .ack(messageID: message.id),
             .typing(conversationID: conversation),
             .audioMuted(conversationID: conversation, muted: true),
             .stageAction(conversationID: conversation, action: .four(.drop(column: 3)), expectedVersion: 4),

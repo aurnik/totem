@@ -318,10 +318,10 @@ final class FourReducerTests: XCTestCase {
     func testFourActionFrameRoundTrips() throws {
         let id = UUID()
         for action in [FourAction.start, .join, .drop(column: 4), .expire] {
-            let frame = ClientFrame.stageAction(conversationID: id, action: .four(action),
-                                                expectedVersion: 3)
+            let frame = PeerFrame.stageAction(conversationID: id, action: .four(action),
+                                              expectedVersion: 3)
             let data = try WireCoder.encoder().encode(frame)
-            let decoded = try WireCoder.decoder().decode(ClientFrame.self, from: data)
+            let decoded = try WireCoder.decoder().decode(PeerFrame.self, from: data)
             guard case let .stageAction(gotID, .four(gotAction), gotVersion) = decoded else {
                 return XCTFail("wrong case: \(decoded)")
             }
@@ -342,11 +342,12 @@ final class FourReducerTests: XCTestCase {
         let finished = game(play([0, 1, 0, 1, 0, 1, 0], from: joined()))
 
         for state in [live, finished] {
-            let frame = ServerFrame.stage(conversationID: id, senderID: sender,
-                                          stage: Stage(version: 9, state: .four(state), ownerID: red))
+            let frame = PeerFrame.stage(conversationID: id,
+                                        stage: Stage(version: 9, state: .four(state), ownerID: red),
+                                        actorID: sender)
             let data = try WireCoder.encoder().encode(frame)
-            let decoded = try WireCoder.decoder().decode(ServerFrame.self, from: data)
-            guard case let .stage(gotID, gotSender, gotStage) = decoded else {
+            let decoded = try WireCoder.decoder().decode(PeerFrame.self, from: data)
+            guard case let .stage(gotID, gotStage, gotSender) = decoded else {
                 return XCTFail("wrong case: \(decoded)")
             }
             XCTAssertEqual(gotID, id)

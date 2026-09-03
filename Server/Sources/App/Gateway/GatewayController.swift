@@ -3,12 +3,12 @@ import Foundation
 import TotemKit
 import Vapor
 
-/// The stateful WebSocket gateway: presence transitions, heartbeats, message
-/// relay, and session auto-archive (spec §3, §4).
+/// The stateful WebSocket gateway: presence transitions, heartbeats, peer
+/// introductions, sittings and bots (spec §3, §4). Conversations themselves
+/// never pass through it — they travel peer to peer.
 struct GatewayController {
     let app: Application
     let connections: ConnectionManager
-    let stages: StageStore
     let pusher: Pusher
     let bots: BotRegistry
 
@@ -247,19 +247,6 @@ struct GatewayController {
             let buddyIDs = try await acceptedBuddyIDs(of: userID)
             Task { await pusher.refreshBadges(of: buddyIDs) }
             await endSittings(involving: userID)
-            // The peer clears its own copy off the offline presence frame, so
-            // this needs no fan-out of its own.
-            await stages.clearPairs(involving: userID)
-            // A group game does need one: nothing else tells the people still
-            // in the chat that a player just left. Unattributed, so it posts no
-            // notice — the sign-off notice already says what happened.
-            for (conversationID, participants) in await stages.clearGames(involving: userID) {
-                for participant in participants {
-                    await connections.send(
-                        .stage(conversationID: conversationID, senderID: nil, stage: nil),
-                        to: participant)
-                }
-            }
         } catch {
             app.logger.report(error: error)
         }
@@ -281,7 +268,6 @@ struct GatewayController {
             }
             guard online < 2 else { continue }
             try? await sittings.close(conversationID)
-            await stages.clear(conversationID)
             for participant in sitting.participants where participant != userID {
                 await connections.send(.sessionClosed(sessionID: conversationID), to: participant)
             }
@@ -314,13 +300,7 @@ struct GatewayController {
             case .signOff:
                 await goOffline(userID: userID)
 
-            case .send(let conversationID, let body, let clientMessageID, let dictated,
-                       let botContext):
-                try await relay(body, into: conversationID, from: userID,
-                                clientMessageID: clientMessageID, dictated: dictated,
-                                botContext: botContext)
-
-            // Live voice itself never comes through here: peers dial each
+            // Nothing in a conversation comes through here: peers dial each
             // other's endpoints directly. The server only introduces them, to
             // exactly the people who render this user.
             case .announceEndpoint(let ticket):
@@ -328,17 +308,6 @@ struct GatewayController {
                 await connections.setEndpoint(ticket, for: userID)
                 for id in await renderers(of: userID) {
                     await connections.send(.endpoint(userID: userID, ticket: ticket), to: id)
-                }
-
-            case .setMuted(let conversationID, let muted):
-                guard let conversation = try await usableConversation(conversationID, by: userID)
-                else { return }
-                await send(.audioMuted(conversationID: conversationID, userID: userID, muted: muted),
-                           toParticipantsOf: conversation, except: userID)
-
-            case .typing(let recipientID):
-                if try await areAcceptedBuddies(userID, recipientID) {
-                    await connections.send(.typing(userID: userID), to: recipientID)
                 }
 
             // Only a 1:1 has a peer to tell; a group on screen counts as
@@ -354,24 +323,6 @@ struct GatewayController {
                 }
                 let previous = await connections.setViewing(target, for: userID)
                 await announceViewing(of: userID, from: previous, to: target)
-
-            case .stageAction(let conversationID, let action, let expectedVersion):
-                try await applyStageAction(action, expectedVersion: expectedVersion,
-                                           in: conversationID, from: userID)
-
-            case .requestStage(let conversationID):
-                guard try await usableConversation(conversationID, by: userID) != nil
-                else { return }
-                await connections.send(
-                    .stage(conversationID: conversationID, senderID: nil,
-                           stage: await stages.get(conversationID)),
-                    to: userID)
-
-            case .closeStage(let conversationID):
-                guard let conversation = try await usableConversation(conversationID, by: userID)
-                else { return }
-                await stages.clear(conversationID)
-                await sendStage(nil, in: conversation, from: userID)
 
             // The humans already have the message, over their peer links;
             // the server only sees the copy that tagged a bot, and only so
@@ -414,47 +365,6 @@ struct GatewayController {
         }
     }
 
-    /// Messages are never stored server-side: pure relay, in one socket and
-    /// out the others. The shapes differ only in delivery promises — a 1:1
-    /// refuses rather than half-delivers, so its one recipient is
-    /// ping-verified and an unreachable one refuses the message (not
-    /// spooled); a group relays to whoever is connected and offline members
-    /// simply miss it, sitting-scoped ephemerality.
-    private func relay(_ body: String, into conversationID: UUID, from senderID: UUID,
-                       clientMessageID: UUID, dictated: Bool?,
-                       botContext: [BotContextMessage]?) async throws {
-        guard let conversation = try await usableConversation(conversationID, by: senderID) else {
-            await connections.send(.error("No such conversation."), to: senderID)
-            return
-        }
-        if !conversation.isGroup {
-            // Sending is the moment liveness matters: ping-verify the
-            // nominally connected recipient so a suspended app is discovered
-            // now rather than when the sweep catches it.
-            guard await connections.verifyAlive(conversation.peer(of: senderID)) else {
-                await markUnreachable(conversation.peer(of: senderID))
-                await connections.send(
-                    .error("Message not delivered — they're away."), to: senderID)
-                return
-            }
-            // Traffic opens the pair's sitting; its death on either party's
-            // sign-off is what tells the peer to drop the conversation's live
-            // ephemera. A group's sitting was opened by creating it.
-            try await sittings.open(
-                conversationID, participants: conversation.participants, at: Date())
-        }
-        let message = ChatMessage(
-            id: UUID(), sessionID: conversationID,
-            senderID: senderID, body: body, sentAt: Date(), dictated: dictated)
-        await send(.message(message), toParticipantsOf: conversation, except: senderID)
-        await connections.send(
-            .messageSent(clientMessageID: clientMessageID, message: message), to: senderID)
-        // A refused message never reaches a bot — the guards above mean this
-        // only runs for a message that was actually delivered.
-        botDispatcher.dispatch(body: body, from: senderID, sessionID: conversationID,
-                               context: botContext)
-    }
-
     /// A bot's answer, fanned out to everyone in the conversation — the person
     /// who tagged it included, unlike a relayed human message, since the bot's
     /// reply is new to them too.
@@ -481,47 +391,6 @@ struct GatewayController {
         }
     }
 
-    // MARK: - Stage
-
-    /// The server is authoritative: it orders actions, runs the shared reducer,
-    /// and echoes the result to everyone including whoever acted — that echo is
-    /// their confirmation, so no client applies anything optimistically.
-    private func applyStageAction(_ action: StageAction, expectedVersion: Int?,
-                                  in conversationID: UUID, from userID: UUID) async throws {
-        guard let conversation = try await usableConversation(conversationID, by: userID) else {
-            await connections.send(.error("No such conversation."), to: userID)
-            return
-        }
-        let applied = await stages.apply(
-            action, by: userID, expectedVersion: expectedVersion, to: conversationID,
-            participants: conversation.participants, at: Date())
-        switch applied {
-        case .updated(let stage):
-            await sendStage(stage, in: conversation, from: userID)
-        case .unchanged:
-            break
-        case .cleared:
-            // Unattributed: the video ran out, nobody closed it, so this posts
-            // no notice.
-            await sendStage(nil, in: conversation, from: nil)
-        case .rejected(let current):
-            // They acted on a stage that has since moved on. Re-sync them alone
-            // and quietly — nobody else's view was wrong.
-            await connections.send(
-                .stage(conversationID: conversationID, senderID: nil, stage: current), to: userID)
-        }
-    }
-
-    private func sendStage(_ stage: Stage?, in conversation: ConversationModel,
-                           from senderID: UUID?) async {
-        guard let conversationID = try? conversation.requireID() else { return }
-        for participant in conversation.participants {
-            await connections.send(
-                .stage(conversationID: conversationID, senderID: senderID, stage: stage),
-                to: participant)
-        }
-    }
-
     func sessionInfo(id: UUID, participants: [UUID], startedAt: Date,
                      on db: Database) async throws -> SessionInfo {
         let users = try await UserModel.query(on: db)
@@ -537,9 +406,8 @@ struct GatewayController {
     /// computable by anyone and is therefore not a capability. A group needs
     /// its sitting live — a dead group is over for everyone. A pair needs
     /// only the buddyship: its ephemera (audio, a stage) can precede any
-    /// message traffic, so there may be no sitting yet to check. Callers
-    /// disagree on whether a miss deserves an error frame — messages answer,
-    /// audio stays silent — so this only reports the miss.
+    /// message traffic, so there may be no sitting yet to check. A miss is
+    /// only reported, never answered with an error frame.
     private func usableConversation(_ id: UUID, by userID: UUID) async throws -> ConversationModel? {
         guard let conversation = try await ConversationModel.find(id, on: db),
               conversation.includes(userID)
@@ -574,13 +442,6 @@ struct GatewayController {
             await connections.send(
                 .viewing(conversationID: current.conversationID, userID: userID, viewing: true),
                 to: current.peerID)
-        }
-    }
-
-    private func send(_ frame: ServerFrame, toParticipantsOf conversation: ConversationModel,
-                      except senderID: UUID) async {
-        for participant in conversation.participants where participant != senderID {
-            await connections.send(frame, to: participant)
         }
     }
 

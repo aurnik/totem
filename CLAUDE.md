@@ -101,9 +101,7 @@ a quiet re-sync to its sender alone, and `stageRequest` is asked of everyone but
 owner — silence means nothing is on. Only the owner's broadcast of a stage counts, so a forged `stage`
 frame goes nowhere; when two people fill an empty stage at once the lower user ID keeps it, a rule
 every participant applies alone so all copies converge without another message. The stage dies with
-its owner (offline presence) — accepted for v1, hand-off is the follow-up. `Gateway/StageStore.swift`
-and the server's stage/relay frames are kept for one release so a straggler build still works, then
-go.
+its owner (offline presence), and a group is told who disconnected; there is no hand-off.
 
 **Four** (`TotemKit/Stage.swift`, `Apps/Sources/FourStage.swift`) is Connect 4 on that stage, and the
 first extension to use any of the above. Whoever starts is red, the next person to tap Join is
@@ -152,8 +150,10 @@ the whole access control: `PeerLink` refuses a connection from an endpoint the s
 stamps every inbound frame with the user it accepted the connection for (the frame's own `senderID`
 is overwritten), and `AppModel.canReceive` applies a frame only for a conversation that sender is in —
 the client's copy of the server's `usableConversation`. Links are dialled when a chat is opened
-(`keepWarm`) and redialled when they drop; a send with no link waits up to 5 s for one and then
-fails, which is what "Message not delivered" means. Measured on this network: phone on LTE ↔ Mac at
+(`keepWarm`) and redialled when they drop; a send with no link waits up to 5 s for one. **A completed
+write is not delivery** — QUIC accepts bytes into a send buffer whose far end may be in airplane mode
+(measured: the Mac "sent" to a phone with its radio off) — so every message is answered with
+`PeerFrame.ack` and one unanswered for 5 s is "Message not delivered". Measured on this network: phone on LTE ↔ Mac at
 home punched to a direct IPv6 path within seconds, 0.4% loss, 60 ms round trip; the n0 relay carries
 only the first seconds.
 
@@ -193,7 +193,7 @@ Things that were learned the hard way, all still true:
 
 1. Explicit sign-off / app-termination handlers → immediate offline fan-out.
 2. Liveness sweep every 30s: connected users whose Redis key expired get reaped and fanned out offline (a suspended iOS app never closes its socket).
-3. Ping-verify on an `unreachable` report (and on the server's own relay, while it lasts): WebSocket protocol ping with 3s timeout before believing a nominally-connected user is gone (skipped if inbound traffic in the last 5s).
+3. Ping-verify on an `unreachable` report: WebSocket protocol ping with 3s timeout before believing a nominally-connected user is gone (skipped if inbound traffic in the last 5s).
 
 Non-deliberate socket drops get a 90s grace period (generation counter in `ConnectionManager` guards against reconnect races) and clients show themselves as reconnecting, never offline.
 
@@ -204,7 +204,7 @@ Reachability and presence are deliberately separate questions. A failed ping is 
 
 ### Messages are never stored (product decision, overrides spec §5/§6)
 
-The server never sees a message: they travel peer-to-peer, minted by the sender (ID and `sentAt`) and appended to the sender's transcript at once, with no ack. Offline recipients are refused client-side (no "leave a message"), offline group members miss messages, and client transcripts are scoped to the local user's own online session: the `freshSignOn` flag on `welcome` clears them on any offline→online transition, including an unintended >90s drop with the app open. Do not reintroduce server-side message storage or restoration of prior-session history.
+The server never sees a message: they travel peer-to-peer, minted by the sender (ID and `sentAt`) and appended to the sender's transcript at once; the recipient's `ack` only decides whether a "not delivered" notice follows. Offline recipients are refused client-side (no "leave a message"), offline group members miss messages, and client transcripts are scoped to the local user's own online session: the `freshSignOn` flag on `welcome` clears them on any offline→online transition, including an unintended >90s drop with the app open. Do not reintroduce server-side message storage or restoration of prior-session history.
 
 ### Conversation identity and lifetime
 

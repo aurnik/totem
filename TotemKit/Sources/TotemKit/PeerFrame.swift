@@ -13,6 +13,11 @@ public enum PeerFrame: Codable, Hashable, Sendable {
     /// `sessionID` carries the conversation ID; `id` and `sentAt` are the
     /// sender's own, there being no server left to mint them.
     case message(ChatMessage)
+    /// The receiver got a message and accepted it. A QUIC write completes
+    /// when the bytes reach the local send buffer, not the peer, so this is
+    /// the only evidence of delivery there is: a message nobody acknowledges
+    /// in time was not delivered.
+    case ack(messageID: UUID)
     case typing(conversationID: UUID)
     /// The sender can't hear the conversation's live audio right now, or can
     /// again.

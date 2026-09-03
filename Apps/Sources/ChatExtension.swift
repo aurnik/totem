@@ -89,11 +89,25 @@ struct StageArea: View {
 
     #if os(iOS)
     /// The phone has no menu bar to fall back on, so the way out of a stage
-    /// sits under it.
+    /// sits under it. A video is anyone's to close; a game is only its
+    /// players' to end.
+    @ViewBuilder
     private var exit: some View {
-        StageExit(label: stage.state.extensionID == .youtube ? "Close Video" : "End Game",
-                  symbol: stage.state.extensionID == .youtube ? "stop.fill" : "xmark") {
-            model.closeStage(in: conversationID)
+        if canExit {
+            StageExit(label: stage.state.extensionID == .youtube ? "Close Video" : "End Game",
+                      symbol: stage.state.extensionID == .youtube ? "stop.fill" : "xmark") {
+                model.closeStage(in: conversationID)
+            }
+        }
+    }
+
+    private var canExit: Bool {
+        switch stage.state {
+        case .youtube:
+            return true
+        case .four(let game):
+            let me = model.currentUser?.id
+            return game.red == me || game.yellow == me
         }
     }
     #endif
@@ -125,7 +139,8 @@ struct StageArea: View {
 #if os(iOS)
 /// The red exit at the foot of whatever holds the stage — a video, a game, or
 /// live voice. One shape for all of them, so leaving is always in the same
-/// place and always looks like leaving.
+/// place and always looks like leaving: red text, no button chrome, so it
+/// reads as a way out rather than a call to action.
 struct StageExit: View {
     let label: String
     let symbol: String
@@ -137,9 +152,10 @@ struct StageExit: View {
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 30)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.bordered)
-        .tint(.red)
+        .buttonStyle(.plain)
+        .foregroundStyle(.red)
     }
 }
 #endif

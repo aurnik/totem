@@ -87,6 +87,17 @@ final class AppModel {
     /// a pair is talking only from whichever end says so; once is enough
     /// until the sitting ends.
     private var reportedActive: Set<UUID> = []
+    /// Messages written to a link and not yet acknowledged, by message and
+    /// recipient. A write completing says nothing about delivery — QUIC
+    /// accepts bytes into a buffer whose far end may be in airplane mode —
+    /// so only the recipient's `ack` counts, and silence past the window is
+    /// "not delivered".
+    private var awaitedAcks: [AckKey: CheckedContinuation<Bool, Never>] = [:]
+    private struct AckKey: Hashable {
+        let messageID: UUID
+        let recipientID: UUID
+    }
+    static let deliveryTimeout: Duration = .seconds(5)
     private var lastTypingSentAt: [UUID: Date] = [:]
     /// Live voice: the conversation the local mic streams into (one at a
     /// time) and who we currently hear, per conversation. Speakers are
@@ -493,6 +504,9 @@ final class AppModel {
         Task { await peers?.stop() }
         self.peers = nil
         links = [:]
+        for key in awaitedAcks.keys {
+            resolveAck(key, delivered: false)
+        }
         presences = [:]
         // Sign-off closes all conversation windows (spec §3); views observe
         // isSignedOn and dismiss themselves.
@@ -584,7 +598,7 @@ final class AppModel {
         }
         let recipients = participants(in: conversationID)
         Task { [weak self] in
-            let failed = await self?.deliver(.message(message), to: recipients) ?? []
+            let failed = await self?.deliverMessage(message, to: recipients) ?? []
             guard let self, !failed.isEmpty else { return }
             if let peerID {
                 append(.notice(id: UUID(), text: "Message not delivered", at: Date()),
@@ -629,6 +643,43 @@ final class AppModel {
             }
             return failed
         }
+    }
+
+    /// A message counts as delivered only once its recipient acknowledges
+    /// it; a write that lands but is never answered within the window is a
+    /// failure like any other.
+    private func deliverMessage(_ message: ChatMessage, to recipients: Set<UUID>) async -> Set<UUID> {
+        guard let peers else { return recipients }
+        return await withTaskGroup(of: UUID?.self) { group in
+            for userID in recipients {
+                group.addTask { [weak self] in
+                    guard (try? await peers.send(.message(message), to: userID)) != nil,
+                          await self?.awaitAck(for: message.id, from: userID) == true
+                    else { return userID }
+                    return nil
+                }
+            }
+            var failed = Set<UUID>()
+            for await userID in group {
+                if let userID { failed.insert(userID) }
+            }
+            return failed
+        }
+    }
+
+    private func awaitAck(for messageID: UUID, from userID: UUID) async -> Bool {
+        let key = AckKey(messageID: messageID, recipientID: userID)
+        return await withCheckedContinuation { continuation in
+            awaitedAcks[key] = continuation
+            Task { [weak self] in
+                try? await Task.sleep(for: Self.deliveryTimeout)
+                self?.resolveAck(key, delivered: false)
+            }
+        }
+    }
+
+    private func resolveAck(_ key: AckKey, delivered: Bool) {
+        awaitedAcks.removeValue(forKey: key)?.resume(returning: delivered)
     }
 
     /// Best-effort delivery for frames that carry no promise to the user.
@@ -1250,8 +1301,8 @@ final class AppModel {
 
     /// A stage lives on its owner's device, so it goes when they do — and a
     /// game needs both its players, so it goes when either does. A group
-    /// gets told why, since nothing else in a group announces a departure; a
-    /// pair's sign-off notice already has.
+    /// gets told who went, since nothing else in a group announces a
+    /// departure; a pair's sign-off notice already has.
     private func clearStages(dependingOn userID: UUID) {
         for (conversationID, stage) in stages {
             var doomed = stage.ownerID == userID
@@ -1261,11 +1312,7 @@ final class AppModel {
             guard doomed else { continue }
             stages[conversationID] = nil
             if peer(of: conversationID) == nil, let handle = handle(of: userID) {
-                let what = switch stage.state {
-                case .youtube: "the video"
-                case .four: "the game"
-                }
-                append(.notice(id: UUID(), text: "\(handle) disconnected — \(what) is gone", at: Date()),
+                append(.notice(id: UUID(), text: "\(handle) disconnected", at: Date()),
                        to: conversationID)
             }
         }
@@ -1573,22 +1620,12 @@ final class AppModel {
                     peerViewing.remove(pairID)
                 }
             }
-        // Messages arrive over the peer links now; this is the server
-        // relaying for a build that predates them, kept for one release.
-        case .message(let message):
-            receiveMessage(message)
         case .botMessage(let conversationID, let message):
             append(.message(message), to: conversationID)
             if !activeConversations.contains(conversationID) {
                 unreadPeers.insert(conversationID)
             }
             SoundPlayer.play(.messageReceived)
-        case .messageSent:
-            // Nothing waits on the server's ack any more: the sender's copy
-            // went into the transcript when it was sent.
-            break
-        case .typing(let userID):
-            noteTyping(userID)
         case .viewing(let conversationID, _, let viewing):
             if viewing {
                 peerViewing.insert(conversationID)
@@ -1597,8 +1634,6 @@ final class AppModel {
             }
         case .endpoint(let userID, let ticket):
             peers?.setPeer(userID, ticket: ticket)
-        case .audioMuted(let conversationID, let userID, let muted):
-            setMutedListener(userID, muted: muted, in: conversationID)
         case .sessionClosed(let sessionID):
             // The conversation's sitting ended — fewer than two participants
             // left. Our own transcript survives (it's scoped to our online
@@ -1615,8 +1650,6 @@ final class AppModel {
             reportedActive.remove(sessionID)
             stages[sessionID] = nil
             silenceConversation(sessionID)
-        case .stage(let conversationID, let senderID, let stage):
-            applyStage(stage, in: conversationID, from: senderID)
         case .buddyRequest:
             Task { try? await refreshBuddies() }
         case .error(let message):
@@ -1639,6 +1672,9 @@ final class AppModel {
             guard canReceive(from: senderID, in: message.sessionID) else { return }
             message.senderID = senderID
             receiveMessage(message)
+            sendToPeers(.ack(messageID: message.id), [senderID])
+        case .ack(let messageID):
+            resolveAck(AckKey(messageID: messageID, recipientID: senderID), delivered: true)
         case .typing(let conversationID):
             guard peer(of: conversationID) == senderID else { return }
             noteTyping(senderID)

@@ -51,7 +51,7 @@ func configure(_ app: Application) async throws {
     let bots = BotRegistry()
     await bots.load(db: app.db, client: app.client, logger: app.logger)
     let gateway = GatewayController(
-        app: app, connections: connections, stages: StageStore(), pusher: Pusher(app: app),
+        app: app, connections: connections, pusher: Pusher(app: app),
         bots: bots)
 
     let authed = app.grouped(TokenAuthenticator(), UserModel.guardMiddleware())

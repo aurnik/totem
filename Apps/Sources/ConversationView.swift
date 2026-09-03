@@ -270,10 +270,11 @@ struct ConversationView: View {
 
     /// Four's glyph is drawn rather than an SF Symbol, so while the game is up
     /// the row becomes the way out of it — a red ✗, the same convention as
-    /// YouTube's `stop.fill`.
+    /// YouTube's `stop.fill`. Only a player can end a game; a spectator's row
+    /// waits until the board is free again.
     @ViewBuilder
     private var fourButton: some View {
-        if isOnStage(.four) {
+        if isOnStage(.four), isFourPlayer {
             actionButton("xmark", FourExtension.name, tint: .red) {
                 model.closeStage(in: conversationID)
             }
@@ -285,8 +286,22 @@ struct ConversationView: View {
                     .fill(style: FillStyle(eoFill: true))
                     .frame(width: 19, height: 16)
             })
-            .disabled(stageIsProtected(against: .four))
+            .disabled(stageIsProtected(against: .four) || fourInProgress)
         }
+    }
+
+    private var currentGame: FourState? {
+        guard case .four(let game)? = model.stages[conversationID]?.state else { return nil }
+        return game
+    }
+
+    private var isFourPlayer: Bool {
+        guard let game = currentGame, let me = model.currentUser?.id else { return false }
+        return game.red == me || game.yellow == me
+    }
+
+    private var fourInProgress: Bool {
+        currentGame?.outcome == nil && currentGame != nil
     }
 
     private func actionButton(_ symbol: String, _ label: String, tint: Color? = nil,
