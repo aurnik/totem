@@ -74,10 +74,10 @@ struct LocalNetworkExplainerView: View {
                 .padding(.horizontal, 32)
             Spacer().frame(height: 40)
             VStack(spacing: 14) {
-                Text("Voice goes straight to your friends")
+                Text("Chats go straight to your friends")
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
-                Text("Live voice travels directly between your devices, not through a server.\n\nNext, \(system) will ask if Totem can find and connect to devices on your network. That's what it's for.")
+                Text("Totem sends your chat data directly between your devices, not through a server.\n\nConnecting devices directly can include ones on your own Wi-Fi, so \(system) will ask before Totem reaches them.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
