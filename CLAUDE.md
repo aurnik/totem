@@ -158,7 +158,7 @@ is fired best-effort and never awaited (`PeerLink.sendBestEffort`). **Delivery i
 (`AppModel.unackedRecipients` → `MessageRow.pending`) until its last recipient acks, then turns solid.
 QUIC delivers reliably across a brief outage, so a message to someone momentarily unreachable stays
 half-lit and lights when it finally lands, rather than lying that it failed. A 1:1 message unacked
-after 5 s still fires `unreachable` so the buddy list can catch up, but shows no notice. Measured on this network: phone on LTE ↔ Mac at
+after 5 s still fires `unreachable` so the buddy list can catch up (which posts the usual "is away"/"is back" notices), while the message bubble itself only ever goes half-lit, never "not delivered". Measured on this network: phone on LTE ↔ Mac at
 home punched to a direct IPv6 path within seconds, 0.4% loss, 60 ms round trip; the n0 relay carries
 only the first seconds.
 
@@ -217,7 +217,7 @@ A conversation *is* its participant set: its ID is the UUIDv5 of the sorted part
 
 Whether a conversation is *live* is a separate fact: a **sitting** in Redis (`SittingStore`, one hash) beside presence, never a database column. A pair's sitting opens when either end reports the first message (`conversationActive`, or a tagged message's `botQuery`); a group's opens when someone deliberately creates it. Either dies when fewer than two participants remain online — one rule that is both the old 1:1 auto-archive and the group lifetime, so **groups are single-sitting**: they end when everyone leaves, drop off the buddy list (`sessionClosed`; clients keep the roster renderable behind `endedGroups`), and revive under the same ID when the same combination is started again. Live group sittings ride the `welcome` frame; a welcome missing a known group means it died during a reconnect gap. Sittings live in Redis so several-times-a-day deploys don't end every group chat in the app.
 
-Client transcripts, unread state, and stages are all keyed by the conversation ID (`AppModel.transcripts`); `ChatMessage.sessionID` carries it — the JSON key survives from the session era and must not be renamed. Transcript items are messages plus centered system notices (sign on/off, and a user's own away message — not the server's message-less unreachable mark, which shows only as a half-lit bubble and a buddy-list dot).
+Client transcripts, unread state, and stages are all keyed by the conversation ID (`AppModel.transcripts`); `ChatMessage.sessionID` carries it — the JSON key survives from the session era and must not be renamed. Transcript items are messages plus centered system notices (sign on/off, away changes).
 
 ## Product decisions that override the spec
 

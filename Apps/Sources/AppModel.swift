@@ -1555,15 +1555,19 @@ final class AppModel {
                     append(.notice(id: UUID(), text: "\(handle) signed \(nowOffline ? "off" : "on")", at: Date()),
                            to: pairID)
                 }
-                // A message the user wrote is worth a notice. The server's
-                // own message-less unreachable mark is not — it's just "we
-                // couldn't reach them right now", which the half-lit message
-                // bubble already conveys — and neither is coming back from it.
-                let hadAwayMessage = previous?.awayMessage != nil
+                let wasAway = previous?.state == .away
                 if let away = presence.awayMessage, away != previous?.awayMessage {
                     append(.notice(id: UUID(), text: "\(handle) is away: \"\(away)\"", at: Date()),
                            to: pairID)
-                } else if hadAwayMessage, presence.state != .away, presence.state != .offline {
+                } else if presence.isUnreachableMark, !wasAway {
+                    // The server marked them away because it couldn't reach
+                    // them, so there's nothing of theirs to quote.
+                    append(.notice(id: UUID(), text: "\(handle) is away", at: Date()),
+                           to: pairID)
+                }
+                // Coming back from away — but not by signing off, which
+                // already got its own notice above.
+                if wasAway, presence.state != .away, presence.state != .offline {
                     append(.notice(id: UUID(), text: "\(handle) is back", at: Date()),
                            to: pairID)
                 }
