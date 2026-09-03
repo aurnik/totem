@@ -51,7 +51,7 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSMicrophoneUsageDescription: Totem streams your voice live to buddies in an open chat.
-        NSLocalNetworkUsageDescription: Live voice connects straight to buddies on the same network.
+        NSLocalNetworkUsageDescription: Live voice travels directly between your devices and your friends', not through a server.
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         TotemDefaultServerURL: $(TOTEM_SERVER_URL)

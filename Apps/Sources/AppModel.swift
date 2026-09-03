@@ -134,6 +134,8 @@ final class AppModel {
     /// Server-side setting: push "X signed on" to this account's devices
     /// while the app is closed.
     var signOnPushes = UserDefaults.standard.object(forKey: "signOnPushes") as? Bool ?? false
+    /// A sign-on is waiting behind the local-network explainer.
+    var needsNetworkExplainer = false
 
     // MARK: - Appearance
 
@@ -415,6 +417,12 @@ final class AppModel {
 
     func signOn() {
         guard let token = api.token, !isSignedOn else { return }
+        // Signing on binds the voice endpoint, and its first LAN probe is
+        // what makes the system ask about the local network. Say why first.
+        if LocalNetworkExplainer.isNeeded {
+            needsNetworkExplainer = true
+            return
+        }
         apply(machine.handle(.signOn))
         refreshPushSettings()
         let socket = SocketClient(url: api.socketURL, token: token)
@@ -439,6 +447,13 @@ final class AppModel {
                 await self?.handle(event)
             }
         }
+    }
+
+    func acknowledgeNetworkExplainer() {
+        LocalNetworkExplainer.markShown()
+        needsNetworkExplainer = false
+        LocalNetworkExplainer.triggerPrompt()
+        signOn()
     }
 
     /// Session-scoped ephemerality: none of this outlives the local user's own

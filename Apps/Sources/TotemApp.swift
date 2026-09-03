@@ -99,11 +99,29 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if model.currentUser == nil {
-            SignInView()
-        } else {
-            BuddyListView()
+        Group {
+            if model.currentUser == nil {
+                SignInView()
+            } else {
+                BuddyListView()
+            }
         }
+        .explainerCover(isPresented: model.needsNetworkExplainer) {
+            model.acknowledgeNetworkExplainer()
+        }
+    }
+}
+
+private extension View {
+    /// Nothing else is reachable until it's acknowledged; the sign-on it
+    /// gates is the reason the app is open.
+    func explainerCover(isPresented: Bool, onContinue: @escaping () -> Void) -> some View {
+        let binding = Binding(get: { isPresented }, set: { _ in })
+        #if os(iOS)
+        return fullScreenCover(isPresented: binding) { LocalNetworkExplainerView(onContinue: onContinue) }
+        #else
+        return sheet(isPresented: binding) { LocalNetworkExplainerView(onContinue: onContinue) }
+        #endif
     }
 }
 
