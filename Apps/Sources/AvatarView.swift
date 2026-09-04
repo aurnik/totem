@@ -134,7 +134,7 @@ struct AvatarHeadView: View {
             }
         }
 
-        for adornment in Adornment.allCases where adornment.isOn(avatar) {
+        for adornment in Adornment.drawOrder where adornment.isOn(avatar) {
             Self.draw(adornment, in: &context, g: g)
         }
     }
@@ -600,11 +600,16 @@ enum DoodleBrush {
     }
 }
 
-/// The things worn over the face, drawn above the doodle in this order.
+/// The things worn over the face, listed in the order the settings grid
+/// shows them.
 enum Adornment: CaseIterable, Identifiable {
     case glasses, cigarette, grills
 
     var id: Self { self }
+
+    /// Bottom to top above the doodle: the cigarette hangs in front of the
+    /// grills, since its mouth end lands on the last tooth.
+    static let drawOrder: [Adornment] = [.glasses, .grills, .cigarette]
 
     var label: String {
         switch self {

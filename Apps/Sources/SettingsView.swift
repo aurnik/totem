@@ -81,7 +81,7 @@ struct SettingsSheet: View {
                             .background(long ? Color.accentColor : .clear,
                                         in: RoundedRectangle(cornerRadius: 6))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.instant)
                 }
                 GradientSlider(value: $model.avatarSetting.hair, stops: AvatarPalette.hair) {
                     model.commitAvatar()
@@ -205,6 +205,21 @@ struct AdornmentCell: View {
             .background(isOn ? Color.accentColor : Color.accentColor.opacity(0.08),
                         in: RoundedRectangle(cornerRadius: 10))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.instant)
     }
+}
+
+/// No press dimming and no implicit animation: the label flips to its new
+/// state on the same frame as the tap, which is what makes a toggle feel
+/// snappy rather than acknowledged.
+struct InstantButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .transaction { $0.animation = nil }
+    }
+}
+
+extension ButtonStyle where Self == InstantButtonStyle {
+    static var instant: InstantButtonStyle { InstantButtonStyle() }
 }
