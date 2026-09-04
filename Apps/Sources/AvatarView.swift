@@ -44,15 +44,15 @@ enum AvatarPalette {
 
 /// Flat, angular character head — the design's SVG geometry (viewBox
 /// "20 0 80 85") rendered natively. Adapted from the original web component:
-/// everything static (face, hair, glasses, cigarette, doodle) draws once into a
-/// cached Canvas, and only the smoke — present only while `cigarette` is on —
-/// animates, in its own 30fps TimelineView so a lit cigarette never forces
-/// the head itself to redraw.
+/// everything static (face, hair, glasses, cigarette, grills, doodle) draws
+/// once into a cached Canvas, and only the smoke and the sparkles on the
+/// grills — present only while those are on — animate, in their own 30fps
+/// TimelineView so a lit cigarette never forces the head itself to redraw.
 struct AvatarHeadView: View {
     var avatar: Avatar
     var size: CGFloat
-    /// Small list/badge renders skip the smoke entirely — no TimelineView,
-    /// no per-frame work; the cigarette itself still shows.
+    /// Small list/badge renders skip the smoke and sparkles entirely — no
+    /// TimelineView, no per-frame work; the cigarette and grills still show.
     var animated: Bool = true
 
     @Environment(\.colorScheme) private var colorScheme
@@ -61,6 +61,7 @@ struct AvatarHeadView: View {
     private var hairColor: Color { AvatarPalette.color(AvatarPalette.hair, at: avatar.hair) }
     private var glasses: Bool { avatar.glasses }
     private var cigarette: Bool { avatar.cigarette }
+    private var grills: Bool { avatar.grills }
 
     var body: some View {
         ZStack {
@@ -68,16 +69,20 @@ struct AvatarHeadView: View {
                 let g = AvatarGeometry(canvasSize)
                 drawHead(in: &context, g: g)
             }
-            if cigarette && animated {
+            if animated && (cigarette || grills) {
                 let smoke: Color = colorScheme == .dark
                     ? .white.opacity(0.7)
                     : Color(red: 35 / 255, green: 35 / 255, blue: 35 / 255).opacity(0.7)
                 TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
                     Canvas { context, canvasSize in
                         let g = AvatarGeometry(canvasSize)
-                        drawSmoke(
-                            in: &context, g: g, color: smoke,
-                            time: timeline.date.timeIntervalSinceReferenceDate)
+                        let time = timeline.date.timeIntervalSinceReferenceDate
+                        if cigarette {
+                            drawSmoke(in: &context, g: g, color: smoke, time: time)
+                        }
+                        if grills {
+                            drawSparkles(in: &context, g: g, time: time)
+                        }
                     }
                 }
             }
@@ -140,6 +145,10 @@ struct AvatarHeadView: View {
             context.stroke(bridge, with: .color(frame), lineWidth: width)
         }
 
+        if grills {
+            drawGrills(in: &context, g: g)
+        }
+
         if cigarette {
             var tilted = context
             let pivot = g.p(75, 70)
@@ -151,6 +160,106 @@ struct AvatarHeadView: View {
             tilted.fill(Path(g.rect(92, 66, 5, 7)),
                         with: .color(Color(red: 0.88, green: 0.44, blue: 0.13)))
         }
+    }
+
+    // MARK: - Grills
+
+    /// The row of teeth, in viewBox units. The cigarette's mouth end (x=75)
+    /// lands on the last tooth and is drawn over it, so both can be worn at once.
+    private static let grillsFrame = (x: 42.0, y: 64.0, width: 36.0, height: 9.5)
+
+    /// Silver lit from above: a bright lip, a dark band across the middle and
+    /// a second, softer highlight below it, which is what makes a flat fill
+    /// read as polished metal rather than grey paint.
+    private static let silver = Gradient(stops: [
+        .init(color: Color(red: 0.99, green: 0.99, blue: 1.00), location: 0),
+        .init(color: Color(red: 0.86, green: 0.88, blue: 0.91), location: 0.30),
+        .init(color: Color(red: 0.52, green: 0.55, blue: 0.60), location: 0.50),
+        .init(color: Color(red: 0.84, green: 0.86, blue: 0.90), location: 0.72),
+        .init(color: Color(red: 0.42, green: 0.45, blue: 0.50), location: 1),
+    ])
+
+    private func drawGrills(in context: inout GraphicsContext, g: AvatarGeometry) {
+        let f = Self.grillsFrame
+        let seam = Color(red: 0.20, green: 0.22, blue: 0.26)
+        context.fill(Path(roundedRect: g.rect(f.x, f.y, f.width, f.height),
+                          cornerRadius: 2.2 * g.s),
+                     with: .color(seam))
+
+        let count = 6
+        let gap = 0.8
+        let toothWidth = (f.width - gap * Double(count + 1)) / Double(count)
+        for i in 0..<count {
+            let x = f.x + gap + Double(i) * (toothWidth + gap)
+            let outer = i == 0 || i == count - 1
+            let rect = g.rect(x, f.y + gap, toothWidth, f.height - gap * 2 - (outer ? 1.2 : 0))
+            context.fill(
+                Path(roundedRect: rect, cornerRadius: 1.4 * g.s),
+                with: .linearGradient(
+                    Self.silver,
+                    startPoint: CGPoint(x: rect.minX, y: rect.minY),
+                    endPoint: CGPoint(x: rect.minX, y: rect.maxY)))
+        }
+    }
+
+    /// Each slot is one sparkle that fires once per period; the offsets stagger
+    /// the slots so they never pop in unison.
+    private static let sparkleSlots: [(period: Double, offset: Double)] = [
+        (1.3, 0.0), (1.7, 0.45), (1.1, 0.9), (2.1, 0.2), (1.5, 1.15),
+    ]
+    private static let sparkleLife = 0.55
+
+    private func drawSparkles(in context: inout GraphicsContext, g: AvatarGeometry, time: Double) {
+        let f = Self.grillsFrame
+        for (index, slot) in Self.sparkleSlots.enumerated() {
+            let clock = time + slot.offset
+            let cycle = Int(clock / slot.period)
+            let phase = clock - Double(cycle) * slot.period
+            guard phase < Self.sparkleLife else { continue }
+            let t = phase / Self.sparkleLife
+            // A new spot every cycle, the same spot on every device for a
+            // given cycle, and no state kept between frames.
+            let (u, v) = Self.sparkleSpot(index, cycle)
+            let center = g.p(f.x + 3 + u * (f.width - 6), f.y + 1.5 + v * (f.height - 3))
+            let envelope = sin(t * .pi)
+            let radius = 3.4 * envelope * g.s
+
+            var layer = context
+            layer.opacity = envelope
+            layer.fill(
+                Path(ellipseIn: CGRect(
+                    x: center.x - radius * 0.45, y: center.y - radius * 0.45,
+                    width: radius * 0.9, height: radius * 0.9)),
+                with: .color(.white.opacity(0.35)))
+            var spun = layer
+            spun.translateBy(x: center.x, y: center.y)
+            spun.rotate(by: .degrees(t * 40))
+            spun.translateBy(x: -center.x, y: -center.y)
+            spun.fill(sparkle(at: center, radius: radius), with: .color(.white))
+        }
+    }
+
+    /// Splits a slot and cycle number into two independent 0…1 coordinates.
+    private static func sparkleSpot(_ index: Int, _ cycle: Int) -> (Double, Double) {
+        var h = UInt64(bitPattern: Int64(cycle)) &* 0x9E37_79B9_7F4A_7C15
+        h &+= UInt64(index) &* 0xBF58_476D_1CE4_E5B9
+        h ^= h >> 31
+        h &*= 0x94D0_49BB_1331_11EB
+        h ^= h >> 29
+        return (Double(h & 0xFFFF) / 65535, Double((h >> 16) & 0xFFFF) / 65535)
+    }
+
+    /// Four-point star with concave sides.
+    private func sparkle(at c: CGPoint, radius r: CGFloat) -> Path {
+        let waist = r * 0.18
+        var path = Path()
+        path.move(to: CGPoint(x: c.x, y: c.y - r))
+        path.addQuadCurve(to: CGPoint(x: c.x + r, y: c.y), control: CGPoint(x: c.x + waist, y: c.y - waist))
+        path.addQuadCurve(to: CGPoint(x: c.x, y: c.y + r), control: CGPoint(x: c.x + waist, y: c.y + waist))
+        path.addQuadCurve(to: CGPoint(x: c.x - r, y: c.y), control: CGPoint(x: c.x - waist, y: c.y + waist))
+        path.addQuadCurve(to: CGPoint(x: c.x, y: c.y - r), control: CGPoint(x: c.x - waist, y: c.y - waist))
+        path.closeSubpath()
+        return path
     }
 
     // MARK: - Smoke (the web version's SMIL keyframes, interpolated per frame)

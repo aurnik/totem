@@ -21,6 +21,8 @@ public struct Avatar: Codable, Hashable, Sendable {
     public var hair: Double
     public var glasses: Bool
     public var cigarette: Bool
+    /// A row of silver teeth over the mouth.
+    public var grills: Bool
     /// Parted in the middle and falling past the jaw, instead of the short crop.
     public var longHair: Bool
     /// Freehand drawing over the head; nil until its owner draws something.
@@ -28,11 +30,12 @@ public struct Avatar: Codable, Hashable, Sendable {
 
     public init(skinTone: Double = 0.25, hair: Double = 0.36,
                 glasses: Bool = false, cigarette: Bool = false,
-                longHair: Bool = false, doodle: Doodle? = nil) {
+                grills: Bool = false, longHair: Bool = false, doodle: Doodle? = nil) {
         self.skinTone = skinTone
         self.hair = hair
         self.glasses = glasses
         self.cigarette = cigarette
+        self.grills = grills
         self.longHair = longHair
         self.doodle = doodle
     }
@@ -45,6 +48,7 @@ public struct Avatar: Codable, Hashable, Sendable {
         hair = try c.decodeIfPresent(Double.self, forKey: .hair) ?? 0.36
         glasses = try c.decodeIfPresent(Bool.self, forKey: .glasses) ?? false
         cigarette = try c.decodeIfPresent(Bool.self, forKey: .cigarette) ?? false
+        grills = try c.decodeIfPresent(Bool.self, forKey: .grills) ?? false
         longHair = try c.decodeIfPresent(Bool.self, forKey: .longHair) ?? false
         doodle = try c.decodeIfPresent(Doodle.self, forKey: .doodle)
     }

@@ -108,6 +108,13 @@ struct SettingsSheet: View {
                     model.commitAvatar()
                 }
             ))
+            Toggle("Grills", isOn: Binding(
+                get: { model.avatarSetting.grills },
+                set: {
+                    model.avatarSetting.grills = $0
+                    model.commitAvatar()
+                }
+            ))
         } header: {
             HStack {
                 Text("Avatar")
