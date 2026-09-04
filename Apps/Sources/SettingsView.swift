@@ -71,19 +71,21 @@ struct SettingsSheet: View {
             }
             .padding(.vertical, 4)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Hair")
+                HStack {
+                    Text("Hair")
+                    Spacer()
+                    Button(model.avatarSetting.longHair ? "Short" : "Long") {
+                        model.avatarSetting.longHair.toggle()
+                        model.commitAvatar()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.subheadline)
+                }
                 GradientSlider(value: $model.avatarSetting.hair, stops: AvatarPalette.hair) {
                     model.commitAvatar()
                 }
             }
             .padding(.vertical, 4)
-            Toggle("Long hair", isOn: Binding(
-                get: { model.avatarSetting.longHair },
-                set: {
-                    model.avatarSetting.longHair = $0
-                    model.commitAvatar()
-                }
-            ))
             Toggle("Glasses", isOn: Binding(
                 get: { model.avatarSetting.glasses },
                 set: {
