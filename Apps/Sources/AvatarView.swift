@@ -93,13 +93,25 @@ struct AvatarHeadView: View {
             (60, 5), (90, 20), (95, 55), (85, 80), (35, 80), (25, 55), (30, 20),
         ]), with: .color(skin))
 
-        // Bottom corners sit exactly on the face side edges
-        // (x = 90 + 20/7 and 30 - 20/7 at y=40) so the hair seams with
-        // the face silhouette — not rounded to integers on purpose.
-        context.fill(g.polygon([
-            (60, 2), (95, 18), (90 + 20.0 / 7, 40), (75, 35),
-            (60, 38), (45, 35), (30 - 20.0 / 7, 40), (25, 18),
-        ]), with: .color(hairColor))
+        if avatar.longHair {
+            // Parted in the middle: the crown dips to the part, the hairline
+            // rises to meet it so a triangle of forehead shows, and the sides
+            // fall outside the face all the way to the bottom of the box.
+            context.fill(g.polygon([
+                (60, 6), (78, 2), (96, 16), (100, 48), (99, 85), (85, 85),
+                (90, 58), (92, 40), (79, 27), (60, 16),
+                (41, 27), (28, 40), (30, 58), (35, 85), (21, 85), (20, 48),
+                (24, 16), (42, 2),
+            ]), with: .color(hairColor))
+        } else {
+            // Bottom corners sit exactly on the face side edges
+            // (x = 90 + 20/7 and 30 - 20/7 at y=40) so the hair seams with
+            // the face silhouette — not rounded to integers on purpose.
+            context.fill(g.polygon([
+                (60, 2), (95, 18), (90 + 20.0 / 7, 40), (75, 35),
+                (60, 38), (45, 35), (30 - 20.0 / 7, 40), (25, 18),
+            ]), with: .color(hairColor))
+        }
 
         // The doodle sits on the face and hair; glasses and the cigarette stay
         // on top of it, since they are things worn over a face, not drawn on it.

@@ -77,6 +77,13 @@ struct SettingsSheet: View {
                 }
             }
             .padding(.vertical, 4)
+            Toggle("Long hair", isOn: Binding(
+                get: { model.avatarSetting.longHair },
+                set: {
+                    model.avatarSetting.longHair = $0
+                    model.commitAvatar()
+                }
+            ))
             Toggle("Glasses", isOn: Binding(
                 get: { model.avatarSetting.glasses },
                 set: {
