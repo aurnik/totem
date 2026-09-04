@@ -64,13 +64,6 @@ struct SettingsSheet: View {
             }
             .padding(.vertical, 4)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Skin tone")
-                GradientSlider(value: $model.avatarSetting.skinTone, stops: AvatarPalette.skin) {
-                    model.commitAvatar()
-                }
-            }
-            .padding(.vertical, 4)
-            VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Hair")
                     Spacer()
@@ -90,6 +83,13 @@ struct SettingsSheet: View {
                     .buttonStyle(.plain)
                 }
                 GradientSlider(value: $model.avatarSetting.hair, stops: AvatarPalette.hair) {
+                    model.commitAvatar()
+                }
+            }
+            .padding(.vertical, 4)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Skin")
+                GradientSlider(value: $model.avatarSetting.skinTone, stops: AvatarPalette.skin) {
                     model.commitAvatar()
                 }
             }
