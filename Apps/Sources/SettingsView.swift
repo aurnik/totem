@@ -197,7 +197,7 @@ struct AdornmentCell: View {
                 }
                 .frame(width: 84, height: 30)
                 Text(adornment.label)
-                    .font(.subheadline)
+                    .font(.body)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
