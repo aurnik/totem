@@ -95,13 +95,15 @@ struct AvatarHeadView: View {
 
         if avatar.longHair {
             // Parted in the middle: the crown dips to the part, the fringe is
-            // the crop's exactly, and the sides fall outside the face all the
-            // way to the bottom of the box.
+            // the crop's exactly, and the sides fall past the face to the
+            // bottom of the box as strands of even width, bending twice and
+            // leaning slightly outward. The bottom corners sit just outside
+            // the viewBox, in the margin the square frame leaves beside it.
             context.fill(g.polygon([
-                (60, 6), (78, 2), (96, 16), (100, 48), (99, 85), (85, 85),
-                (90, 58), (90 + 20.0 / 7, 40), (75, 35), (60, 38), (45, 35),
-                (30 - 20.0 / 7, 40), (30, 58), (35, 85), (21, 85), (20, 48),
-                (24, 16), (42, 2),
+                (60, 6), (78, 2), (96, 16), (100, 34), (97.5, 56), (102, 85),
+                (94, 85), (89.5, 56), (90 + 20.0 / 7, 40), (75, 35), (60, 38),
+                (45, 35), (30 - 20.0 / 7, 40), (30.5, 56), (26, 85), (18, 85),
+                (22.5, 56), (20, 34), (24, 16), (42, 2),
             ]), with: .color(hairColor))
         } else {
             // Bottom corners sit exactly on the face side edges
