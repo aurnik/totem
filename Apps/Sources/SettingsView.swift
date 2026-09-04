@@ -123,7 +123,7 @@ struct SettingsSheet: View {
                 .textCase(nil)
             }
         } footer: {
-            Text("Draw on your avatar with a finger. Friends see your latest look in every chat.")
+            Text("This is shown in chats and friend lists")
         }
     }
 
