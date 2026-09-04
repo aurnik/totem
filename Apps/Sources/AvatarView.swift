@@ -101,6 +101,19 @@ struct AvatarHeadView: View {
             (60, 38), (45, 35), (30 - 20.0 / 7, 40), (25, 18),
         ]), with: .color(hairColor))
 
+        // The doodle sits on the face and hair; glasses and the cigarette stay
+        // on top of it, since they are things worn over a face, not drawn on it.
+        if let doodle = avatar.doodle {
+            for stroke in doodle.strokes {
+                let points = stride(from: 0, to: stroke.points.count - 1, by: 2).map {
+                    g.point(gridX: stroke.points[$0], gridY: stroke.points[$0 + 1])
+                }
+                context.stroke(DoodleBrush.path(through: points),
+                               with: .color(DoodlePalette.color(stroke.color)),
+                               style: DoodleBrush.style(g))
+            }
+        }
+
         if glasses {
             let frame = Color(red: 26 / 255, green: 26 / 255, blue: 26 / 255)
             let width = 4 * g.s
@@ -122,17 +135,6 @@ struct AvatarHeadView: View {
                         with: .color(Color(red: 0.96, green: 0.96, blue: 0.94)))
             tilted.fill(Path(g.rect(92, 66, 5, 7)),
                         with: .color(Color(red: 0.88, green: 0.44, blue: 0.13)))
-        }
-
-        if let doodle = avatar.doodle {
-            for stroke in doodle.strokes {
-                let points = stride(from: 0, to: stroke.points.count - 1, by: 2).map {
-                    g.point(gridX: stroke.points[$0], gridY: stroke.points[$0 + 1])
-                }
-                context.stroke(DoodleBrush.path(through: points),
-                               with: .color(DoodlePalette.color(stroke.color)),
-                               style: DoodleBrush.style(g))
-            }
         }
     }
 
