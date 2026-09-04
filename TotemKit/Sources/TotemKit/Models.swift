@@ -4,11 +4,16 @@ public struct User: Codable, Identifiable, Hashable, Sendable {
     public let id: UUID
     public var handle: String
     public var avatar: Avatar?
+    /// The last moment the server had evidence this user was signed on: a
+    /// sign-on, a heartbeat, or a deliberate sign-off. Rendered only beside
+    /// offline buddies; nil for accounts that have never signed on.
+    public var lastSeenAt: Date?
 
-    public init(id: UUID, handle: String, avatar: Avatar? = nil) {
+    public init(id: UUID, handle: String, avatar: Avatar? = nil, lastSeenAt: Date? = nil) {
         self.id = id
         self.handle = handle
         self.avatar = avatar
+        self.lastSeenAt = lastSeenAt
     }
 }
 

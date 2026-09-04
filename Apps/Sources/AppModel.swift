@@ -1537,6 +1537,11 @@ final class AppModel {
             if presence.state == .offline {
                 peers?.removePeer(userID)
                 clearStages(dependingOn: userID)
+                // The buddy list is a fetched snapshot; the server's own stamp
+                // replaces this on the next refresh.
+                for index in buddies.indices where buddies[index].user.id == userID {
+                    buddies[index].user.lastSeenAt = Date()
+                }
             }
             // Where this buddy's conversation lives — notices about a person
             // land in the chat with that person.

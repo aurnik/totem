@@ -17,6 +17,10 @@ final class UserModel: Model, Content, @unchecked Sendable {
     /// carries who's online without interrupting anyone.
     @Field(key: "sign_on_pushes") var signOnPushes: Bool
     @Timestamp(key: "created_at", on: .create) var createdAt: Date?
+    /// Stamped on sign-on, every heartbeat and a deliberate sign-off, so an
+    /// offline user's row says when they were last here even if the server
+    /// never saw them leave (a deploy between their last heartbeat and expiry).
+    @OptionalField(key: "last_seen_at") var lastSeenAt: Date?
 
     init() {}
 
@@ -32,7 +36,8 @@ final class UserModel: Model, Content, @unchecked Sendable {
             handle: handle,
             avatar: avatarJSON.flatMap {
                 try? JSONDecoder().decode(Avatar.self, from: Data($0.utf8))
-            }
+            },
+            lastSeenAt: lastSeenAt
         )
     }
 }
@@ -354,6 +359,16 @@ struct AddAvatar: AsyncMigration {
 
     func revert(on db: Database) async throws {
         try await db.schema(UserModel.schema).deleteField("avatar").update()
+    }
+}
+
+struct AddLastSeen: AsyncMigration {
+    func prepare(on db: Database) async throws {
+        try await db.schema(UserModel.schema).field("last_seen_at", .datetime).update()
+    }
+
+    func revert(on db: Database) async throws {
+        try await db.schema(UserModel.schema).deleteField("last_seen_at").update()
     }
 }
 

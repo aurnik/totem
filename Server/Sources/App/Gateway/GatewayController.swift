@@ -130,6 +130,7 @@ struct GatewayController {
             let current = wasOffline || existing.isUnreachableMark
                 ? Presence(state: .online) : existing
             try await presence.set(current, for: userID)
+            try? await touchLastSeen(userID)
 
             let buddyIDs = try await acceptedBuddyIDs(of: userID)
             var snapshot: [String: Presence] = [:]
@@ -239,6 +240,14 @@ struct GatewayController {
         }
     }
 
+    /// Evidence the user is here right now. Deliberately not called from
+    /// `goOffline`: the grace and sweep paths reach it up to two minutes after
+    /// the last real sign of life, and a stamp then would claim otherwise.
+    private func touchLastSeen(_ userID: UUID) async throws {
+        try await UserModel.query(on: db).filter(\.$id == userID)
+            .set(\.$lastSeenAt, to: Date()).update()
+    }
+
     private func goOffline(userID: UUID) async {
         do {
             try await presence.markOffline(for: userID)
@@ -286,9 +295,11 @@ struct GatewayController {
             switch frame {
             case .heartbeat:
                 try await presence.refresh(for: userID)
+                try await touchLastSeen(userID)
 
             case .setPresence(let state, let awayMessage):
                 guard state != .offline else {
+                    try? await touchLastSeen(userID)
                     await goOffline(userID: userID)
                     return
                 }
@@ -298,6 +309,7 @@ struct GatewayController {
                 await fanOut(.presence(userID: userID, presence: updated), toBuddiesOf: userID)
 
             case .signOff:
+                try? await touchLastSeen(userID)
                 await goOffline(userID: userID)
 
             // Nothing in a conversation comes through here: peers dial each

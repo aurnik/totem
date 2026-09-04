@@ -288,6 +288,38 @@ struct BuddyRow: View {
                         .lineLimit(1)
                 }
             }
+            if presence.state == .offline, let lastSeen = buddy.user.lastSeenAt {
+                Spacer()
+                LastSeenLabel(date: lastSeen)
+            }
+        }
+    }
+}
+
+/// How long ago an offline buddy was last here, at a glance: "Just now" for
+/// the first hour, then "3hr", "2d", "1wk", "4mo", "1y". Re-rendered each
+/// minute so a row doesn't sit on a stale value.
+struct LastSeenLabel: View {
+    let date: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            Text(Self.label(from: date, to: context.date))
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    static func label(from date: Date, to now: Date) -> String {
+        let hours = Int(max(0, now.timeIntervalSince(date)) / 3600)
+        let days = hours / 24
+        switch hours {
+        case ..<1: return "Just now"
+        case ..<24: return "\(hours)hr"
+        case ..<(24 * 7): return "\(days)d"
+        case ..<(24 * 30): return "\(days / 7)wk"
+        case ..<(24 * 365): return "\(days / 30)mo"
+        default: return "\(days / 365)y"
         }
     }
 }
