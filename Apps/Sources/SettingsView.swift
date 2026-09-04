@@ -39,7 +39,6 @@ struct SettingsSheet: View {
                 }
 
                 avatarSection
-                adornmentSection
                 soundboardSection
             }
             .navigationTitle("Settings")
@@ -95,6 +94,18 @@ struct SettingsSheet: View {
                 }
             }
             .padding(.vertical, 4)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Extras")
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    ForEach(Adornment.allCases) { adornment in
+                        AdornmentCell(adornment: adornment, isOn: adornment.isOn(model.avatarSetting)) {
+                            adornment.toggle(&model.avatarSetting)
+                            model.commitAvatar()
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 4)
         } header: {
             HStack {
                 Text("Avatar")
@@ -113,20 +124,6 @@ struct SettingsSheet: View {
             }
         } footer: {
             Text("Draw on your avatar with a finger. Friends see your latest look in every chat.")
-        }
-    }
-
-    private var adornmentSection: some View {
-        Section("Adornments") {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                ForEach(Adornment.allCases) { adornment in
-                    AdornmentCell(adornment: adornment, isOn: adornment.isOn(model.avatarSetting)) {
-                        adornment.toggle(&model.avatarSetting)
-                        model.commitAvatar()
-                    }
-                }
-            }
-            .padding(.vertical, 4)
         }
     }
 
