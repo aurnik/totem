@@ -58,7 +58,7 @@ struct SettingsSheet: View {
         return Section {
             HStack {
                 Spacer()
-                AvatarHeadView(avatar: model.avatarSetting, size: 150)
+                DoodleEditor(size: 280)
                 Spacer()
             }
             .padding(.vertical, 4)
@@ -93,7 +93,7 @@ struct SettingsSheet: View {
         } header: {
             Text("Avatar")
         } footer: {
-            Text("Friends see your latest avatar in every chat.")
+            Text("Draw on your avatar with a finger. Friends see your latest look in every chat.")
         }
     }
 

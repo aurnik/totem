@@ -21,13 +21,17 @@ public struct Avatar: Codable, Hashable, Sendable {
     public var hair: Double
     public var glasses: Bool
     public var cigarette: Bool
+    /// Freehand drawing over the head; nil until its owner draws something.
+    public var doodle: Doodle?
 
     public init(skinTone: Double = 0.25, hair: Double = 0.36,
-                glasses: Bool = false, cigarette: Bool = false) {
+                glasses: Bool = false, cigarette: Bool = false,
+                doodle: Doodle? = nil) {
         self.skinTone = skinTone
         self.hair = hair
         self.glasses = glasses
         self.cigarette = cigarette
+        self.doodle = doodle
     }
 
     /// Every field defaults, so avatars encoded before a field existed still
@@ -38,6 +42,55 @@ public struct Avatar: Codable, Hashable, Sendable {
         hair = try c.decodeIfPresent(Double.self, forKey: .hair) ?? 0.36
         glasses = try c.decodeIfPresent(Bool.self, forKey: .glasses) ?? false
         cigarette = try c.decodeIfPresent(Bool.self, forKey: .cigarette) ?? false
+        doodle = try c.decodeIfPresent(Doodle.self, forKey: .doodle)
+    }
+}
+
+/// A drawing over the head: fixed-width freehand strokes, each in one colour
+/// of a client-defined palette. Points are quantised to a square grid laid
+/// over the head's box, so a point costs a few bytes and the wire never
+/// depends on how a client lays the head out. It is a stroke list rather than
+/// SVG because no platform here renders SVG text natively and a typed list
+/// needs no sanitising: `Codable` refuses anything that isn't a stroke, and
+/// `isValid` bounds what a stroke may contain.
+public struct Doodle: Codable, Hashable, Sendable {
+    public struct Stroke: Codable, Hashable, Sendable {
+        /// Index into the palette.
+        public var color: Int
+        /// Flat x0, y0, x1, y1… on the grid.
+        public var points: [Int]
+
+        public init(color: Int, points: [Int]) {
+            self.color = color
+            self.points = points
+        }
+    }
+
+    public var strokes: [Stroke]
+
+    public init(strokes: [Stroke] = []) {
+        self.strokes = strokes
+    }
+
+    /// Coordinates run 0..<gridSize on both axes.
+    public static let gridSize = 256
+    public static let paletteSize = 8
+    public static let maxStrokes = 64
+    /// Total across all strokes. Sized so a maximal doodle stays well inside
+    /// Vapor's default 16 KB request body.
+    public static let maxPoints = 1024
+
+    public var pointCount: Int { strokes.reduce(0) { $0 + $1.points.count / 2 } }
+
+    /// The bounds the server enforces; clients keep themselves inside them.
+    public var isValid: Bool {
+        guard strokes.count <= Self.maxStrokes, pointCount <= Self.maxPoints else { return false }
+        return strokes.allSatisfy { stroke in
+            (0..<Self.paletteSize).contains(stroke.color)
+                && !stroke.points.isEmpty
+                && stroke.points.count.isMultiple(of: 2)
+                && stroke.points.allSatisfy { (0..<Self.gridSize).contains($0) }
+        }
     }
 }
 

@@ -44,7 +44,7 @@ enum AvatarPalette {
 
 /// Flat, angular character head — the design's SVG geometry (viewBox
 /// "20 0 80 85") rendered natively. Adapted from the original web component:
-/// everything static (face, hair, glasses, cigarette) draws once into a
+/// everything static (face, hair, glasses, cigarette, doodle) draws once into a
 /// cached Canvas, and only the smoke — present only while `cigarette` is on —
 /// animates, in its own 30fps TimelineView so a lit cigarette never forces
 /// the head itself to redraw.
@@ -122,6 +122,17 @@ struct AvatarHeadView: View {
                         with: .color(Color(red: 0.96, green: 0.96, blue: 0.94)))
             tilted.fill(Path(g.rect(92, 66, 5, 7)),
                         with: .color(Color(red: 0.88, green: 0.44, blue: 0.13)))
+        }
+
+        if let doodle = avatar.doodle {
+            for stroke in doodle.strokes {
+                let points = stride(from: 0, to: stroke.points.count - 1, by: 2).map {
+                    g.point(gridX: stroke.points[$0], gridY: stroke.points[$0 + 1])
+                }
+                context.stroke(DoodleBrush.path(through: points),
+                               with: .color(DoodlePalette.color(stroke.color)),
+                               style: DoodleBrush.style(g))
+            }
         }
     }
 
@@ -353,7 +364,7 @@ struct MonogramCircle: View {
 
 /// Maps the design's viewBox ("20 0 80 85", aspect-fit centered) into canvas
 /// points.
-private struct AvatarGeometry {
+struct AvatarGeometry {
     let s: CGFloat
     private let xOffset: CGFloat
     private let yOffset: CGFloat
@@ -368,6 +379,22 @@ private struct AvatarGeometry {
         CGPoint(x: x * s + xOffset, y: y * s + yOffset)
     }
 
+    // The doodle grid spans the head's box, x 20…100 and y 0…85 in viewBox
+    // units, so a drawing made at one size lands identically at every other.
+
+    func point(gridX: Int, gridY: Int) -> CGPoint {
+        let last = Double(Doodle.gridSize - 1)
+        return p(20 + Double(gridX) / last * 80, Double(gridY) / last * 85)
+    }
+
+    func grid(_ point: CGPoint) -> (x: Int, y: Int) {
+        let ux = ((point.x - xOffset) / s - 20) / 80
+        let uy = (point.y - yOffset) / s / 85
+        let last = Double(Doodle.gridSize - 1)
+        return (Int((min(max(ux, 0), 1) * last).rounded()),
+                Int((min(max(uy, 0), 1) * last).rounded()))
+    }
+
     func rect(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> CGRect {
         CGRect(origin: p(x, y), size: CGSize(width: w * s, height: h * s))
     }
@@ -379,6 +406,56 @@ private struct AvatarGeometry {
             path.addLine(to: p(point.0, point.1))
         }
         path.closeSubpath()
+        return path
+    }
+}
+
+/// Monokai, in swatch order. Indexes are what the wire carries, so this
+/// order is part of the protocol: append, never reorder.
+enum DoodlePalette {
+    static let colors: [Color] = [
+        Color(red: 0xF9 / 255, green: 0x26 / 255, blue: 0x72 / 255),
+        Color(red: 0xFD / 255, green: 0x97 / 255, blue: 0x1F / 255),
+        Color(red: 0xE6 / 255, green: 0xDB / 255, blue: 0x74 / 255),
+        Color(red: 0xA6 / 255, green: 0xE2 / 255, blue: 0x2E / 255),
+        Color(red: 0x66 / 255, green: 0xD9 / 255, blue: 0xEF / 255),
+        Color(red: 0xAE / 255, green: 0x81 / 255, blue: 0xFF / 255),
+        Color(red: 0xF8 / 255, green: 0xF8 / 255, blue: 0xF2 / 255),
+        Color(red: 0x27 / 255, green: 0x28 / 255, blue: 0x22 / 255),
+    ]
+
+    static func color(_ index: Int) -> Color {
+        colors[min(max(index, 0), colors.count - 1)]
+    }
+}
+
+enum DoodleBrush {
+    /// In viewBox units, so a stroke scales with the head it sits on; the
+    /// floor keeps a doodle legible on the smallest list avatars.
+    static let width: Double = 2.5
+
+    static func style(_ g: AvatarGeometry) -> StrokeStyle {
+        StrokeStyle(lineWidth: max(width * g.s, 1), lineCap: .round, lineJoin: .round)
+    }
+
+    /// Midpoint quadratics: every sample is a control point and the joints
+    /// sit halfway between samples, so the tangent is continuous through each
+    /// one and a finger-drawn line has no corners. A lone sample is a dot,
+    /// which the round cap draws from a zero-length segment.
+    static func path(through points: [CGPoint]) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        guard points.count > 2 else {
+            path.addLine(to: points.last!)
+            return path
+        }
+        for i in 1..<(points.count - 1) {
+            let mid = CGPoint(x: (points[i].x + points[i + 1].x) / 2,
+                              y: (points[i].y + points[i + 1].y) / 2)
+            path.addQuadCurve(to: mid, control: points[i])
+        }
+        path.addLine(to: points[points.count - 1])
         return path
     }
 }
