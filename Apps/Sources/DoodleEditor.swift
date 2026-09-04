@@ -1,15 +1,20 @@
 import SwiftUI
 import TotemKit
 
-/// Draw on the settings preview with a finger. Committed strokes live on the
-/// avatar itself and are drawn by `AvatarHeadView` exactly as friends will
-/// see them; this view only draws the stroke in progress on top, then
-/// simplifies and quantises it into the avatar on release and commits once
-/// per stroke, the way the sliders commit once per drag.
+/// The settings preview, with a Draw mode. Idle, it is just the head at the
+/// list's size and the list scrolls over it; Draw grows it into a finger
+/// canvas with swatches. Committed strokes live on the avatar itself and are
+/// drawn by `AvatarHeadView` exactly as friends will see them; this view only
+/// draws the stroke in progress on top, then simplifies and quantises it into
+/// the avatar on release and commits once per stroke, the way the sliders
+/// commit once per drag.
 struct DoodleEditor: View {
     @Environment(AppModel.self) private var model
+    /// Side of the canvas while drawing.
     let size: CGFloat
+    var idleSize: CGFloat = 150
 
+    @State private var isDrawing = false
     @State private var color = 0
     @State private var live: [CGPoint] = []
     /// What Clear removed, so one Undo brings it all back.
@@ -17,6 +22,7 @@ struct DoodleEditor: View {
     @State private var edits = 0
 
     private var strokes: [Doodle.Stroke] { model.avatarSetting.doodle?.strokes ?? [] }
+    private var side: CGFloat { isDrawing ? size : idleSize }
 
     private var isFull: Bool {
         guard let doodle = model.avatarSetting.doodle else { return false }
@@ -26,7 +32,7 @@ struct DoodleEditor: View {
     var body: some View {
         VStack(spacing: 14) {
             ZStack {
-                AvatarHeadView(avatar: model.avatarSetting, size: size)
+                AvatarHeadView(avatar: model.avatarSetting, size: side)
                 Canvas { context, canvasSize in
                     guard !live.isEmpty else { return }
                     context.stroke(DoodleBrush.path(through: live),
@@ -35,33 +41,44 @@ struct DoodleEditor: View {
                 }
                 .allowsHitTesting(false)
             }
-            .frame(width: size, height: size)
+            .frame(width: side, height: side)
             .contentShape(Rectangle())
-            .highPriorityGesture(drawing)
+            .highPriorityGesture(drawing, including: isDrawing ? .all : .none)
 
-            HStack(spacing: 10) {
-                ForEach(DoodlePalette.colors.indices, id: \.self) { index in
-                    swatch(index)
+            if isDrawing {
+                HStack(spacing: 10) {
+                    ForEach(DoodlePalette.colors.indices, id: \.self) { index in
+                        swatch(index)
+                    }
                 }
-            }
-
-            HStack {
-                Button("Undo") { undo() }
-                    .disabled(strokes.isEmpty && cleared == nil)
-                Spacer()
                 if isFull {
                     Text("Doodle is full")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Spacer()
                 }
-                Button("Clear") { clear() }
-                    .disabled(strokes.isEmpty)
+                HStack {
+                    Button("Undo") { undo() }
+                        .disabled(strokes.isEmpty && cleared == nil)
+                    Spacer()
+                    Button("Done") { toggleDrawing() }
+                        .buttonStyle(.borderedProminent)
+                    Spacer()
+                    Button("Clear") { clear() }
+                        .disabled(strokes.isEmpty)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Button("Draw") { toggleDrawing() }
+                    .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderless)
         }
         .sensoryFeedback(.selection, trigger: color)
         .sensoryFeedback(.impact(weight: .light), trigger: edits)
+    }
+
+    private func toggleDrawing() {
+        live = []
+        withAnimation(.snappy) { isDrawing.toggle() }
     }
 
     private func swatch(_ index: Int) -> some View {
@@ -100,10 +117,10 @@ struct DoodleEditor: View {
         let room = Doodle.maxPoints - doodle.pointCount
         guard doodle.strokes.count < Doodle.maxStrokes, room > 0 else { return }
 
-        let g = AvatarGeometry(CGSize(width: size, height: size))
+        let g = AvatarGeometry(CGSize(width: side, height: side))
         var grid: [Int] = []
         var last: (x: Int, y: Int)?
-        for point in Polyline.simplified(points, tolerance: 1) {
+        for point in Polyline.simplified(points, tolerance: 3) {
             let cell = g.grid(point)
             if let last, last == cell { continue }
             grid.append(cell.x)
@@ -139,9 +156,10 @@ struct DoodleEditor: View {
 }
 
 enum Polyline {
-    /// Ramer-Douglas-Peucker: keeps the points that bend the line by more
-    /// than `tolerance`, which is what makes a stroke cheap on the wire
-    /// without changing its shape.
+    /// Ramer-Douglas-Peucker: keeps only the points that bend the line by
+    /// more than `tolerance`. A loose tolerance is deliberate — it drops hand
+    /// jitter along with the bytes, and the midpoint curves through what's
+    /// left are what make a stroke look smooth.
     static func simplified(_ points: [CGPoint], tolerance: CGFloat) -> [CGPoint] {
         guard points.count > 2 else { return points }
         let a = points[0], b = points[points.count - 1]
