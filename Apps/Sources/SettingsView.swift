@@ -7,6 +7,7 @@ import TotemKit
 struct SettingsSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @State private var isDrawing = false
 
     var body: some View {
         let pushBinding = Binding(
@@ -58,7 +59,7 @@ struct SettingsSheet: View {
         return Section {
             HStack {
                 Spacer()
-                DoodleEditor(size: 280)
+                DoodleEditor(size: 280, isDrawing: $isDrawing)
                 Spacer()
             }
             .padding(.vertical, 4)
@@ -91,7 +92,21 @@ struct SettingsSheet: View {
                 }
             ))
         } header: {
-            Text("Avatar")
+            HStack {
+                Text("Avatar")
+                Spacer()
+                Button {
+                    withAnimation(.snappy) { isDrawing.toggle() }
+                } label: {
+                    if isDrawing {
+                        Text("Done")
+                    } else {
+                        Label("Draw", systemImage: "paintbrush.pointed")
+                    }
+                }
+                .font(.subheadline)
+                .textCase(nil)
+            }
         } footer: {
             Text("Draw on your avatar with a finger. Friends see your latest look in every chat.")
         }

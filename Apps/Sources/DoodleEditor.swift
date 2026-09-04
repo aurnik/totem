@@ -1,9 +1,9 @@
 import SwiftUI
 import TotemKit
 
-/// The settings preview, with a Draw mode. Idle, it is just the head at the
-/// list's size and the list scrolls over it; Draw grows it into a finger
-/// canvas with swatches. Committed strokes live on the avatar itself and are
+/// The settings preview, with a Draw mode its owner toggles from the section
+/// header. Idle, it is just the head at the list's size and the list scrolls
+/// over it; drawing grows it into a finger canvas with swatches. Committed strokes live on the avatar itself and are
 /// drawn by `AvatarHeadView` exactly as friends will see them; this view only
 /// draws the stroke in progress on top, then simplifies and quantises it into
 /// the avatar on release and commits once per stroke, the way the sliders
@@ -12,9 +12,9 @@ struct DoodleEditor: View {
     @Environment(AppModel.self) private var model
     /// Side of the canvas while drawing.
     let size: CGFloat
+    @Binding var isDrawing: Bool
     var idleSize: CGFloat = 150
 
-    @State private var isDrawing = false
     @State private var color = 0
     @State private var live: [CGPoint] = []
     /// What Clear removed, so one Undo brings it all back.
@@ -60,25 +60,15 @@ struct DoodleEditor: View {
                     Button("Undo") { undo() }
                         .disabled(strokes.isEmpty && cleared == nil)
                     Spacer()
-                    Button("Done") { toggleDrawing() }
-                        .buttonStyle(.borderedProminent)
-                    Spacer()
                     Button("Clear") { clear() }
                         .disabled(strokes.isEmpty)
                 }
                 .buttonStyle(.borderless)
-            } else {
-                Button("Draw") { toggleDrawing() }
-                    .buttonStyle(.bordered)
             }
         }
+        .onChange(of: isDrawing) { live = [] }
         .sensoryFeedback(.selection, trigger: color)
         .sensoryFeedback(.impact(weight: .light), trigger: edits)
-    }
-
-    private func toggleDrawing() {
-        live = []
-        withAnimation(.snappy) { isDrawing.toggle() }
     }
 
     private func swatch(_ index: Int) -> some View {
