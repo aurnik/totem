@@ -100,7 +100,7 @@ struct AvatarHeadView: View {
             // and leaning slightly outward. The outer corners sit just outside
             // the viewBox, in the margin the square frame leaves beside it.
             context.fill(g.polygon([
-                (60, 6), (78, 2), (96, 16), (100, 32), (97, 50), (102, 68),
+                (60, 5), (78, 2), (96, 16), (100, 32), (97, 50), (102, 68),
                 (99, 85), (88, 78), (91, 68), (86, 50), (84, 26),
                 (75, 28), (60, 24), (45, 28), (36, 26), (34, 50),
                 (29, 68), (32, 78), (21, 85), (18, 68), (23, 50), (20, 32),
