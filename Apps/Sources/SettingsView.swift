@@ -39,6 +39,7 @@ struct SettingsSheet: View {
                 }
 
                 avatarSection
+                adornmentSection
                 soundboardSection
             }
             .navigationTitle("Settings")
@@ -94,27 +95,6 @@ struct SettingsSheet: View {
                 }
             }
             .padding(.vertical, 4)
-            Toggle("Glasses", isOn: Binding(
-                get: { model.avatarSetting.glasses },
-                set: {
-                    model.avatarSetting.glasses = $0
-                    model.commitAvatar()
-                }
-            ))
-            Toggle("Cigarette", isOn: Binding(
-                get: { model.avatarSetting.cigarette },
-                set: {
-                    model.avatarSetting.cigarette = $0
-                    model.commitAvatar()
-                }
-            ))
-            Toggle("Grills", isOn: Binding(
-                get: { model.avatarSetting.grills },
-                set: {
-                    model.avatarSetting.grills = $0
-                    model.commitAvatar()
-                }
-            ))
         } header: {
             HStack {
                 Text("Avatar")
@@ -133,6 +113,20 @@ struct SettingsSheet: View {
             }
         } footer: {
             Text("Draw on your avatar with a finger. Friends see your latest look in every chat.")
+        }
+    }
+
+    private var adornmentSection: some View {
+        Section("Adornments") {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                ForEach(Adornment.allCases) { adornment in
+                    AdornmentCell(adornment: adornment, isOn: adornment.isOn(model.avatarSetting)) {
+                        adornment.toggle(&model.avatarSetting)
+                        model.commitAvatar()
+                    }
+                }
+            }
+            .padding(.vertical, 4)
         }
     }
 
@@ -183,5 +177,34 @@ struct GradientSlider: View {
             )
         }
         .frame(height: 28)
+    }
+}
+
+/// One adornment drawn by itself, fitted into the cell, with its name below.
+/// Lit like the Long hair button when it is worn.
+struct AdornmentCell: View {
+    let adornment: Adornment
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Canvas { context, canvasSize in
+                    AvatarHeadView.draw(
+                        adornment, in: &context,
+                        g: AvatarGeometry(fitting: adornment.bounds, in: canvasSize))
+                }
+                .frame(width: 84, height: 30)
+                Text(adornment.label)
+                    .font(.subheadline)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .foregroundStyle(isOn ? .white : Color.accentColor)
+            .background(isOn ? Color.accentColor : Color.accentColor.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 }

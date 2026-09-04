@@ -134,7 +134,18 @@ struct AvatarHeadView: View {
             }
         }
 
-        if glasses {
+        for adornment in Adornment.allCases where adornment.isOn(avatar) {
+            Self.draw(adornment, in: &context, g: g)
+        }
+    }
+
+    // MARK: - Adornments
+
+    /// One adornment by itself, in the head's coordinates. The settings grid
+    /// draws these alone through a geometry fitted to their own bounds.
+    static func draw(_ adornment: Adornment, in context: inout GraphicsContext, g: AvatarGeometry) {
+        switch adornment {
+        case .glasses:
             let frame = Color(red: 26 / 255, green: 26 / 255, blue: 26 / 255)
             let width = 4 * g.s
             context.stroke(Path(g.rect(32, 47, 22, 12)), with: .color(frame), lineWidth: width)
@@ -143,13 +154,9 @@ struct AvatarHeadView: View {
             bridge.move(to: g.p(54, 53))
             bridge.addLine(to: g.p(66, 53))
             context.stroke(bridge, with: .color(frame), lineWidth: width)
-        }
-
-        if grills {
+        case .grills:
             drawGrills(in: &context, g: g)
-        }
-
-        if cigarette {
+        case .cigarette:
             var tilted = context
             let pivot = g.p(75, 70)
             tilted.translateBy(x: pivot.x, y: pivot.y)
@@ -179,7 +186,7 @@ struct AvatarHeadView: View {
         .init(color: Color(red: 0.42, green: 0.45, blue: 0.50), location: 1),
     ])
 
-    private func drawGrills(in context: inout GraphicsContext, g: AvatarGeometry) {
+    private static func drawGrills(in context: inout GraphicsContext, g: AvatarGeometry) {
         let f = Self.grillsFrame
         let seam = Color(red: 0.20, green: 0.22, blue: 0.26)
         context.fill(Path(roundedRect: g.rect(f.x, f.y, f.width, f.height),
@@ -496,9 +503,16 @@ struct AvatarGeometry {
     private let yOffset: CGFloat
 
     init(_ canvasSize: CGSize) {
-        s = min(canvasSize.width / 80, canvasSize.height / 85)
-        xOffset = (canvasSize.width - 80 * s) / 2 - 20 * s
-        yOffset = (canvasSize.height - 85 * s) / 2
+        self.init(fitting: CGRect(x: 20, y: 0, width: 80, height: 85), in: canvasSize)
+    }
+
+    /// Aspect-fits a rect of viewBox units into the canvas, so a single
+    /// adornment can fill a settings cell in the same coordinates it is drawn
+    /// with on the head.
+    init(fitting box: CGRect, in canvasSize: CGSize) {
+        s = min(canvasSize.width / box.width, canvasSize.height / box.height)
+        xOffset = (canvasSize.width - box.width * s) / 2 - box.minX * s
+        yOffset = (canvasSize.height - box.height * s) / 2 - box.minY * s
     }
 
     func p(_ x: Double, _ y: Double) -> CGPoint {
@@ -583,5 +597,45 @@ enum DoodleBrush {
         }
         path.addLine(to: points[points.count - 1])
         return path
+    }
+}
+
+/// The things worn over the face, drawn above the doodle in this order.
+enum Adornment: CaseIterable, Identifiable {
+    case glasses, cigarette, grills
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .glasses: "Glasses"
+        case .cigarette: "Cigarette"
+        case .grills: "Grills"
+        }
+    }
+
+    /// Where it sits on the head, in viewBox units, with room for strokes.
+    var bounds: CGRect {
+        switch self {
+        case .glasses: CGRect(x: 29, y: 44, width: 62, height: 18)
+        case .cigarette: CGRect(x: 73, y: 65, width: 28, height: 16)
+        case .grills: CGRect(x: 40, y: 62, width: 40, height: 14)
+        }
+    }
+
+    func isOn(_ avatar: Avatar) -> Bool {
+        switch self {
+        case .glasses: avatar.glasses
+        case .cigarette: avatar.cigarette
+        case .grills: avatar.grills
+        }
+    }
+
+    func toggle(_ avatar: inout Avatar) {
+        switch self {
+        case .glasses: avatar.glasses.toggle()
+        case .cigarette: avatar.cigarette.toggle()
+        case .grills: avatar.grills.toggle()
+        }
     }
 }
