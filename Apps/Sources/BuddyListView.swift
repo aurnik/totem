@@ -297,13 +297,13 @@ struct BuddyRow: View {
 }
 
 /// How long ago an offline buddy was last here, at a glance: "Just now" for
-/// the first hour, then "3hr", "2d", "1wk", "4mo", "1y". Re-rendered each
-/// minute so a row doesn't sit on a stale value.
+/// the first hour, then "3hr", "2d", "1wk", "4mo", "1y". Hours are the finest
+/// unit, so re-rendering hourly is as often as the text can change.
 struct LastSeenLabel: View {
     let date: Date
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
+        TimelineView(.periodic(from: .now, by: 3600)) { context in
             Text(Self.label(from: date, to: context.date))
                 .font(.footnote.monospacedDigit())
                 .foregroundStyle(.tertiary)
