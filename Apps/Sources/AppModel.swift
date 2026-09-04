@@ -117,7 +117,7 @@ final class AppModel {
     /// speaker is skipped. Scoped to the chat being open, like voice itself.
     private var mutedConversations: Set<UUID> = []
     /// How each peer's link is reaching them, from `PeerLink`.
-    private var links: [UUID: PeerLink.LinkState] = [:]
+    var links: [UUID: PeerLink.LinkState] = [:]
     /// Conversations we've told peers *we* can't hear — cleared when hearing
     /// comes back (with a follow-up frame) or the chat goes silent.
     private var reportedMutedConversations: Set<UUID> = []

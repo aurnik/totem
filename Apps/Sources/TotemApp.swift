@@ -60,6 +60,7 @@ struct TotemApp: App {
 
     init() {
         let model = AppModel()
+        ScreenshotFixture.apply(to: model)
         _model = State(initialValue: model)
         #if os(macOS)
         MacAppDelegate.model = model

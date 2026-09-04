@@ -81,6 +81,11 @@ struct BuddyListView: View {
             .navigationDestination(for: UUID.self) { conversationID in
                 ConversationView(conversationID: conversationID)
             }
+            .onAppear {
+                if let conversationID = ScreenshotFixture.openConversation {
+                    path.append(conversationID)
+                }
+            }
             #endif
         }
     }
