@@ -74,12 +74,20 @@ struct SettingsSheet: View {
                 HStack {
                     Text("Hair")
                     Spacer()
-                    Button(model.avatarSetting.longHair ? "Short" : "Long") {
+                    let long = model.avatarSetting.longHair
+                    Button {
                         model.avatarSetting.longHair.toggle()
                         model.commitAvatar()
+                    } label: {
+                        Text("Long")
+                            .font(.subheadline)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .foregroundStyle(long ? .white : Color.accentColor)
+                            .background(long ? Color.accentColor : .clear,
+                                        in: RoundedRectangle(cornerRadius: 6))
                     }
-                    .buttonStyle(.borderless)
-                    .font(.subheadline)
+                    .buttonStyle(.plain)
                 }
                 GradientSlider(value: $model.avatarSetting.hair, stops: AvatarPalette.hair) {
                     model.commitAvatar()
