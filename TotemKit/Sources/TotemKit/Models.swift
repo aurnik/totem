@@ -217,6 +217,8 @@ public enum Limits {
     /// local alerts reach a user already watching the buddy list and are never
     /// throttled.
     public static let signOnPushThrottle: TimeInterval = 15 * 60
+    /// At most one knock push per sender to a given buddy per rolling window.
+    public static let knockPushThrottle: TimeInterval = 15 * 60
     public static let botPromptMaxLength = 2000
     public static let botReplyMaxLength = 1500
     /// Ceilings on the transcript a context tag sends; the newest messages are kept.

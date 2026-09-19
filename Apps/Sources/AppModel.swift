@@ -13,6 +13,8 @@ final class AppModel {
     var currentUser: User?
     var buddies: [Buddy] = []
     var presences: [UUID: Presence] = [:]
+    /// When each offline buddy was last knocked on; the button reads "Sent" for the throttle window.
+    var knockedBuddies: [UUID: Date] = [:]
     var machine = PresenceStateMachine()
 
     enum TranscriptItem: Identifiable, Hashable {
@@ -245,6 +247,18 @@ final class AppModel {
         acceptedBuddies.filter { presence(of: $0).state != .offline }.count
     }
 
+    /// Asks the server to push "is knocking" to an offline buddy.
+    func knock(_ buddy: Buddy) {
+        knockedBuddies[buddy.user.id] = .now
+        fire(.knock(userID: buddy.user.id))
+    }
+
+    /// Same window as the server's throttle, so the button re-enables when a knock would land again.
+    func hasKnocked(_ buddy: Buddy, at now: Date = .now) -> Bool {
+        guard let sent = knockedBuddies[buddy.user.id] else { return false }
+        return now.timeIntervalSince(sent) < Limits.knockPushThrottle
+    }
+
     // MARK: - Auth
 
     func signIn(handle: String, serverURL: String) async throws {
@@ -275,6 +289,7 @@ final class AppModel {
         buddies = []
         rebuildPairIndex()
         presences = [:]
+        knockedBuddies = [:]
         groupSessions = [:]
         clearSessionScopedState()
         UserDefaults.standard.removeObject(forKey: "authToken")

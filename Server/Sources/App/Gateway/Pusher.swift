@@ -34,7 +34,8 @@ actor Pusher {
                 let tokens = try await PushTokenModel.query(on: app.db)
                     .filter(\.$user.$id == buddyID).all()
                 guard !tokens.isEmpty,
-                      await claimPushWindow(recipient: buddyID, subject: userID)
+                      await claimPushWindow(kind: "signon", recipient: buddyID, subject: userID,
+                                            window: Limits.signOnPushThrottle)
                 else { continue }
                 for row in tokens {
                     await send("signed on", about: userID, handle: handle,
@@ -75,20 +76,42 @@ actor Pusher {
         }
     }
 
-    /// One sign-on push per buddy per `Limits.signOnPushThrottle`, claimed in
-    /// Redis with `SET NX` so a repeat sign-on cannot extend the window.
-    private func claimPushWindow(recipient: UUID, subject: UUID) async -> Bool {
-        let key: RedisKey = "signon-push:\(recipient.uuidString):\(subject.uuidString)"
+    /// One push of a kind per subject to a recipient per `window`, claimed in
+    /// Redis with `SET NX` so a repeat cannot extend the window it is refused by.
+    func claimPushWindow(kind: String, recipient: UUID, subject: UUID,
+                         window: TimeInterval) async -> Bool {
+        let key: RedisKey = "\(kind)-push:\(recipient.uuidString):\(subject.uuidString)"
         do {
             let result = try await app.redis.set(
                 key, to: "1", onCondition: .keyDoesNotExist,
-                expiration: .seconds(Int(Limits.signOnPushThrottle))
+                expiration: .seconds(Int(window))
             ).get()
             if case .ok = result { return true }
             return false
         } catch {
-            app.logger.warning("sign-on push throttle unavailable: \(error)")
+            app.logger.warning("\(kind) push throttle unavailable: \(error)")
             return false
+        }
+    }
+
+    /// A deliberate nudge at an offline buddy, so it is not gated on the
+    /// sign-on opt-in; the gateway has already checked they are offline.
+    func knock(from senderID: UUID, to recipientID: UUID) async {
+        guard isConfigured else { return }
+        do {
+            guard let handle = try await UserModel.find(senderID, on: app.db)?.handle else { return }
+            let tokens = try await PushTokenModel.query(on: app.db)
+                .filter(\.$user.$id == recipientID).all()
+            guard !tokens.isEmpty,
+                  await claimPushWindow(kind: "knock", recipient: recipientID, subject: senderID,
+                                        window: Limits.knockPushThrottle)
+            else { return }
+            for row in tokens {
+                await send("is knocking", about: senderID, handle: handle,
+                           kind: "knock", expiresIn: 60 * 60, to: row)
+            }
+        } catch {
+            app.logger.report(error: error)
         }
     }
 

@@ -326,6 +326,13 @@ struct GatewayController {
                 else { return }
                 await markUnreachable(peerID)
 
+            // A push only for someone actually gone; the throttle lives in the pusher.
+            case .knock(let peerID):
+                guard try await areAcceptedBuddies(userID, peerID),
+                      try await presence.get(for: peerID).state == .offline
+                else { return }
+                Task { await pusher.knock(from: userID, to: peerID) }
+
             // Traffic opens a pair's sitting. A group's was opened by creating it.
             case .conversationActive(let conversationID):
                 guard let conversation = try await usableConversation(conversationID, by: userID),

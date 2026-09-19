@@ -82,6 +82,7 @@ final class PeerWireTests: XCTestCase {
                       context: [BotContextMessage(speaker: "a", body: "b")]),
             .botQuery(conversationID: conversation, body: "@g hi", context: nil),
             .unreachable(userID: user),
+            .knock(userID: user),
             .conversationActive(conversationID: conversation),
         ]
         for frame in frames {
@@ -93,6 +94,8 @@ final class PeerWireTests: XCTestCase {
                 XCTAssertEqual(body, gotBody)
                 XCTAssertEqual(context, gotContext)
             case let (.unreachable(id), .unreachable(gotID)):
+                XCTAssertEqual(id, gotID)
+            case let (.knock(id), .knock(gotID)):
                 XCTAssertEqual(id, gotID)
             case let (.conversationActive(id), .conversationActive(gotID)):
                 XCTAssertEqual(id, gotID)

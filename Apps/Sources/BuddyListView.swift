@@ -255,7 +255,16 @@ struct BuddyRow: View {
     var body: some View {
         if model.presence(of: buddy).state == .offline || conversationID == nil {
             // Offline friends are listed but not openable.
+            #if os(iOS)
+            HStack {
+                label
+                if model.presence(of: buddy).state == .offline {
+                    knockButton
+                }
+            }
+            #else
             label
+            #endif
         } else if let conversationID {
             #if os(iOS)
             // Custom chevron: the NavigationLink accessory color isn't
@@ -296,12 +305,26 @@ struct BuddyRow: View {
                         .lineLimit(1)
                 }
             }
+            Spacer()
             if presence.state == .offline, let lastSeen = buddy.user.lastSeenAt {
-                Spacer()
                 LastSeenLabel(date: lastSeen)
             }
         }
     }
+
+    #if os(iOS)
+    /// The minute timeline lets "Sent" revert on its own once the window passes.
+    private var knockButton: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let sent = model.hasKnocked(buddy, at: context.date)
+            Button(sent ? "Sent" : "Knock") { model.knock(buddy) }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .disabled(sent)
+        }
+    }
+    #endif
 }
 
 /// How long ago an offline buddy was last here: "Just now", "3hr", "2d",

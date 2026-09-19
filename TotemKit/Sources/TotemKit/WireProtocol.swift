@@ -14,6 +14,8 @@ public enum ClientFrame: Codable, Sendable {
     case botQuery(conversationID: UUID, body: String, context: [BotContextMessage]?)
     /// Evidence only: the server ping-verifies before marking anyone away.
     case unreachable(userID: UUID)
+    /// Asks the server to push a nudge to an offline buddy; throttled server-side.
+    case knock(userID: UUID)
     /// Opens the pair's sitting, which the server cannot see traffic for.
     case conversationActive(conversationID: UUID)
 }
