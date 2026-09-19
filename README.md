@@ -36,7 +36,7 @@ the server only knows who is online and who is friends with whom.
 TotemKit/   Shared Swift package: DTOs, wire frames, pure state machines, tests
 Server/     Vapor server: auth, buddies, presence gateway, bots, pushes
 Apps/       SwiftUI multiplatform client (iOS 17.5+, macOS 14.5+), xcodegen project
-docs/       Architecture notes, deployment, original product spec
+docs/       Architecture notes and deployment
 ```
 
 See [docs/architecture.md](docs/architecture.md) for how the pieces fit and the
