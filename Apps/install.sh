@@ -1,14 +1,16 @@
 #!/bin/sh
 # Build the iOS app and install it on a connected device.
 #
+# Reads these from the environment or a .env file at the repo root:
 #   TOTEM_DEVICE          device UDID (xcrun devicectl list devices)
-#   TOTEM_TEAM_ID         Apple developer team for automatic signing
+#   TOTEM_DEV_TEAM_ID     Apple developer team for automatic signing
 #   TOTEM_DEV_SERVER_URL  server the phone should reach, e.g. http://my-mac.local:9047
 set -e
 cd "$(dirname "$0")"
+if [ -f ../.env ]; then set -a; . ../.env; set +a; fi
 
 DEVICE="${TOTEM_DEVICE:?set TOTEM_DEVICE to the device UDID}"
-TEAM="${TOTEM_TEAM_ID:?set TOTEM_TEAM_ID to your Apple team ID}"
+TEAM="${TOTEM_DEV_TEAM_ID:?set TOTEM_DEV_TEAM_ID to your Apple team ID}"
 DEST="generic/platform=iOS"
 SETTINGS="TOTEM_TEAM_ID=$TEAM TOTEM_DEV_SERVER_URL=${TOTEM_DEV_SERVER_URL:-}"
 

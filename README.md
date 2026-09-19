@@ -51,7 +51,7 @@ Requirements: Xcode 16+, [xcodegen](https://github.com/yonaskolb/XcodeGen), and
 # Shared package tests
 cd TotemKit && swift test
 
-# Server on 0.0.0.0:9047 (see Server/onboard/.env.example for optional variables)
+# Server on 0.0.0.0:9047 (see .env.example for optional variables)
 Server/run.sh
 
 # Apps
@@ -61,7 +61,8 @@ xcodebuild -project Totem.xcodeproj -scheme Totem-iOS -destination "generic/plat
     -configuration Debug TOTEM_TEAM_ID=<your team> build
 ```
 
-Sign in with any handle; auth is a development handle login and Sign in with
+The scripts read optional settings from a `.env` file at the repo root; see
+`.env.example`. Sign in with any handle; auth is a development handle login and Sign in with
 Apple is not implemented yet. The simulator and the macOS app reach the server
 on loopback. For a physical phone, pass `TOTEM_DEV_SERVER_URL` (for example
 `http://your-mac.local:9047`) to the build, or type the URL on the sign-in

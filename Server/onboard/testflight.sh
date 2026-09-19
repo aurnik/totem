@@ -1,6 +1,7 @@
 #!/bin/bash
 # Archive and upload a TestFlight build with API-driven manual signing
-# (provision.py) and xcodebuild's built-in upload.
+# (provision.py) and xcodebuild's built-in upload. Reads these from the
+# environment or a .env file at the repo root:
 #
 #   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH   App Store Connect API key
 #   TOTEM_TEAM_ID                             Apple developer team
@@ -9,6 +10,7 @@
 #   TOTEM_TESTFLIGHT_JOIN_CODE                public TestFlight link code (optional)
 set -euo pipefail
 cd "$(dirname "$0")"
+if [ -f ../../.env ]; then set -a; . ../../.env; set +a; fi
 
 : "${ASC_KEY_ID:?ASC_KEY_ID is not set}"
 : "${ASC_ISSUER_ID:?ASC_ISSUER_ID is not set}"
