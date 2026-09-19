@@ -1,26 +1,18 @@
 import Foundation
 import TotemKit
 
-/// Stateless HTTP: auth and buddy management (spec §4). The live channel is SocketClient.
+/// Stateless HTTP client for auth, buddies, sessions, and settings. The live
+/// channel is `SocketClient`.
 struct APIClient {
-    /// Simulator and macOS reach the dev server on loopback; a physical phone
-    /// needs the Mac's Bonjour hostname (stable across DHCP renewals).
-    /// 127.0.0.1 rather than localhost: the server binds IPv4 only, and
-    /// localhost resolves to ::1 first. Port 9047 rather than 8080: local
-    /// proxy/filter software inspects the well-known http-alt port and
-    /// corrupts inbound WebSocket frames.
+    /// Distributed builds carry their server in `TotemDefaultServerURL`;
+    /// development builds may set `TotemDevServerURL` (a LAN hostname for a
+    /// physical device) and otherwise use loopback.
     static var defaultServerURL: String {
-        // Distributed builds carry their server baked in (set by
-        // Server/onboard/testflight.sh) so a friend signs in with just a handle.
-        if let baked = Bundle.main.object(forInfoDictionaryKey: "TotemDefaultServerURL") as? String,
-           !baked.isEmpty {
-            return baked
+        let info = Bundle.main.infoDictionary ?? [:]
+        for key in ["TotemDefaultServerURL", "TotemDevServerURL"] {
+            if let url = info[key] as? String, !url.isEmpty { return url }
         }
-        #if os(iOS) && !targetEnvironment(simulator)
-        return "http://Aurniks-MacBook-Pro.local:9047"
-        #else
         return "http://127.0.0.1:9047"
-        #endif
     }
 
     var baseURL = URL(string: APIClient.defaultServerURL)!
@@ -46,14 +38,13 @@ struct APIClient {
         try await post("sessions", body: ["participantIDs": participantIDs.map(\.uuidString)])
     }
 
-    /// Throws `URLError.resourceUnavailable` (404) when the server has no
-    /// YouTube key configured — the picker falls back to pasted links.
+    /// Throws `URLError.resourceUnavailable` when the server has no YouTube key.
     func searchYouTube(_ query: String) async throws -> [YouTubeVideo] {
         try await get("youtube/search", query: [.init(name: "q", value: query)])
     }
 
-    /// The stage's player page, which must be served from a real HTTP origin —
-    /// YouTube refuses to embed into a web view fed raw HTML.
+    /// The stage's player page. YouTube refuses to embed into a web view fed
+    /// raw HTML, so the server hosts the page at a real origin.
     func playerURL(videoID: String, start: Double, playing: Bool) -> URL {
         baseURL.appending(path: "player")
             .appending(queryItems: [
@@ -90,8 +81,6 @@ struct APIClient {
 
     private struct EmptyResponse: Codable {}
 
-    /// Query items go through `appending(queryItems:)`, never into `path` —
-    /// `appending(path:)` escapes the "?" and the whole thing lands in the path.
     private func request(_ path: String, query: [URLQueryItem] = [],
                          method: String, body: (some Encodable)?) throws -> URLRequest {
         var url = baseURL.appending(path: path)

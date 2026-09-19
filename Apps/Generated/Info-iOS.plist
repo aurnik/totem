@@ -33,6 +33,12 @@
 	<string>Totem streams your voice live to buddies in an open chat.</string>
 	<key>TotemDefaultServerURL</key>
 	<string>$(TOTEM_SERVER_URL)</string>
+	<key>TotemDevServerURL</key>
+	<string>$(TOTEM_DEV_SERVER_URL)</string>
+	<key>TotemTestFlightAppID</key>
+	<string>$(TOTEM_TESTFLIGHT_APP_ID)</string>
+	<key>TotemTestFlightJoinCode</key>
+	<string>$(TOTEM_TESTFLIGHT_JOIN_CODE)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

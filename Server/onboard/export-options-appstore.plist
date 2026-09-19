@@ -9,7 +9,7 @@
     <key>signingStyle</key>
     <string>manual</string>
     <key>teamID</key>
-    <string>BUQNMSY5Q2</string>
+    <string>TEAM_ID</string>
     <key>signingCertificate</key>
     <string>Apple Distribution</string>
     <key>provisioningProfiles</key>

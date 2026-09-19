@@ -132,7 +132,7 @@ final class PeerLink: @unchecked Sendable {
                 }
             }
         } catch {
-            print("peer endpoint failed to start: \(error)")
+            Log.peer.error("endpoint failed to start: \(error)")
         }
     }
 
@@ -302,7 +302,7 @@ final class PeerLink: @unchecked Sendable {
                 if state != last {
                     last = state
                     self.onLink(userID, state)
-                    print("peer: \(userID) \(state) \(selected?.remoteAddr ?? "")")
+                    Log.peer.info("\(userID) \(String(describing: state)) \(selected?.remoteAddr ?? "")")
                 }
                 try? await Task.sleep(for: .milliseconds(500))
             }
@@ -322,7 +322,7 @@ final class PeerLink: @unchecked Sendable {
         }
         guard wasCurrent else { return }
         onLink(userID, nil)
-        print("peer: \(userID) link lost\(redial ? ", redialling" : "")")
+        Log.peer.info("\(userID) link lost\(redial ? ", redialling" : "")")
         if redial {
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(1))

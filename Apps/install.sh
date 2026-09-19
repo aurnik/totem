@@ -1,38 +1,36 @@
 #!/bin/sh
-# Build the iOS app and install it on the phone.
+# Build the iOS app and install it on a connected device.
 #
-# The path matters more than it looks: this machine has more than one
-# DerivedData directory for this project, so globbing DerivedData/Totem-*
-# can resolve to a stale build from hours ago and install it without
-# complaint. Ask xcodebuild where it actually writes instead — that answer
-# is always the one `build` just produced.
+#   TOTEM_DEVICE          device UDID (xcrun devicectl list devices)
+#   TOTEM_TEAM_ID         Apple developer team for automatic signing
+#   TOTEM_DEV_SERVER_URL  server the phone should reach, e.g. http://my-mac.local:9047
 set -e
 cd "$(dirname "$0")"
 
-DEVICE="${TOTEM_DEVICE:-4FABDBEF-E20F-5818-9026-83C0F0502A78}"
+DEVICE="${TOTEM_DEVICE:?set TOTEM_DEVICE to the device UDID}"
+TEAM="${TOTEM_TEAM_ID:?set TOTEM_TEAM_ID to your Apple team ID}"
 DEST="generic/platform=iOS"
+SETTINGS="TOTEM_TEAM_ID=$TEAM TOTEM_DEV_SERVER_URL=${TOTEM_DEV_SERVER_URL:-}"
 
 xcodebuild -project Totem.xcodeproj -scheme Totem-iOS -destination "$DEST" \
-    -configuration Debug -allowProvisioningUpdates build
+    -configuration Debug -allowProvisioningUpdates $SETTINGS build
 
+# Ask xcodebuild for the product path rather than globbing DerivedData, which
+# can hold more than one build of this project.
 APP_DIR=$(xcodebuild -project Totem.xcodeproj -scheme Totem-iOS -destination "$DEST" \
-    -configuration Debug -showBuildSettings 2>/dev/null \
+    -configuration Debug $SETTINGS -showBuildSettings 2>/dev/null \
     | awk '/ BUILT_PRODUCTS_DIR = /{print $3; exit}')
 APP="$APP_DIR/Totem-iOS.app"
 [ -d "$APP" ] || { echo "No app at $APP" >&2; exit 1; }
-
-# Debug builds keep the real code in a side dylib; the launcher stub's
-# timestamp says nothing about whether your edit made it in.
 echo "installing $APP"
-echo "  built $(stat -f '%Sm' "$APP/Totem-iOS.debug.dylib" 2>/dev/null || stat -f '%Sm' "$APP/Totem-iOS")"
 
-# The CoreDevice tunnel drops often enough that one retry isn't sniffing glue.
+# The CoreDevice tunnel drops often enough to be worth a retry.
 attempt=1
 while [ "$attempt" -le 3 ]; do
     if xcrun devicectl device install app --device "$DEVICE" "$APP"; then
         exit 0
     fi
-    echo "install attempt $attempt failed (device locked? tunnel reset?) — retrying" >&2
+    echo "install attempt $attempt failed, retrying" >&2
     attempt=$((attempt + 1))
     sleep 5
 done

@@ -8,25 +8,20 @@ import Vapor
 import VaporAPNS
 
 func configure(_ app: Application) async throws {
-    // Boot-stage markers on print (not the logger): a crash between two
-    // stages is findable in container logs even when the logger's output
-    // is rate-limited away by the host.
-    print("configure: db")
     app.databases.use(
         .sqlite(.file(Environment.get("DB_PATH") ?? "db.sqlite")), as: .sqlite)
-    print("configure: redis")
-    app.redis.configuration = try await resolveRedis()
+    app.redis.configuration = try await resolveRedis(logger: app.logger)
 
-    print("configure: apns")
-    // Sign-on pushes; disabled unless the APNs auth key is in the env.
+    // Pushes are disabled unless the APNs key is in the environment.
     if let keyPEM = Environment.get("APNS_KEY_PEM"),
-       let keyID = Environment.get("APNS_KEY_ID") {
+       let keyID = Environment.get("APNS_KEY_ID"),
+       let teamID = Environment.get("APNS_TEAM_ID") {
         app.apns.containers.use(
             APNSClientConfiguration(
                 authenticationMethod: .jwt(
                     privateKey: try .init(pemRepresentation: keyPEM),
                     keyIdentifier: keyID,
-                    teamIdentifier: Environment.get("APNS_TEAM_ID") ?? "BUQNMSY5Q2"),
+                    teamIdentifier: teamID),
                 environment: .production),
             eventLoopGroupProvider: .shared(app.eventLoopGroup),
             responseDecoder: JSONDecoder(),
@@ -34,7 +29,6 @@ func configure(_ app: Application) async throws {
             as: .default)
     }
 
-    print("configure: migrate")
     app.migrations.add(CreateSchema())
     app.migrations.add(DropMessageStorage())
     app.migrations.add(AddPushSupport())
@@ -46,7 +40,6 @@ func configure(_ app: Application) async throws {
     app.migrations.add(SignOnAlertsOptIn())
     app.migrations.add(AddLastSeen())
     try await app.autoMigrate()
-    print("configure: routes")
 
     let connections = ConnectionManager()
     let bots = BotRegistry()
@@ -61,9 +54,8 @@ func configure(_ app: Application) async throws {
     try authed.register(collection: PushController())
     try authed.register(collection: ProfileController(gateway: gateway))
     try authed.register(collection: YouTubeController())
-    // The stage's YouTube player must load from a real HTTP origin — YouTube
-    // refuses embeds without one — so it can't be authenticated: a WKWebView
-    // carries no bearer token. It's a static page keyed only by video ID.
+    // The YouTube player page must load from a real origin and a WKWebView
+    // sends no bearer token, so it is unauthenticated and keyed only by video ID.
     try app.register(collection: PlayerPageController())
     authed.webSocket("ws") { req, ws in
         await gateway.handleUpgrade(req: req, ws: ws)
@@ -71,13 +63,12 @@ func configure(_ app: Application) async throws {
     try app.register(collection: AuthController())
 
     gateway.startLivenessSweep()
-    print("configure: done")
 }
 
-/// `RedisConfiguration(url:)` resolves the hostname eagerly, and Railway's
-/// private DNS (`*.railway.internal`) isn't up for the first moments after
-/// container start — retry it, then fall back to the public proxy URL.
-private func resolveRedis() async throws -> RedisConfiguration {
+/// `RedisConfiguration(url:)` resolves the hostname eagerly, and a container
+/// host's private DNS can lag container start, so this retries before falling
+/// back to `REDIS_PUBLIC_URL`.
+private func resolveRedis(logger: Logger) async throws -> RedisConfiguration {
     guard let redisURL = Environment.get("REDIS_URL") else {
         return try RedisConfiguration(hostname: Environment.get("REDIS_HOST") ?? "localhost")
     }
@@ -87,12 +78,12 @@ private func resolveRedis() async throws -> RedisConfiguration {
             return try RedisConfiguration(url: redisURL)
         } catch {
             lastError = error
-            print("configure: redis resolve attempt \(attempt) failed: \(error)")
+            logger.warning("redis resolve attempt \(attempt) failed: \(error)")
             try? await Task.sleep(for: .seconds(1))
         }
     }
     if let publicURL = Environment.get("REDIS_PUBLIC_URL") {
-        print("configure: falling back to public redis URL")
+        logger.warning("falling back to REDIS_PUBLIC_URL")
         return try RedisConfiguration(url: publicURL)
     }
     throw lastError!

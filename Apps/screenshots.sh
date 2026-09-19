@@ -4,9 +4,8 @@
 #
 #   Apps/screenshots.sh [output-dir]
 #
-# Builds a Debug copy into its own DerivedData (never the shared one — see
-# CLAUDE.md on stale builds), seeds each scene through the `--screenshot`
-# launch argument, and shuts the simulator down again when done.
+# Builds a Debug copy into its own DerivedData, seeds each scene through the
+# `--screenshot` launch argument, and shuts the simulator down when done.
 set -euo pipefail
 
 cd "$(dirname "$0")"

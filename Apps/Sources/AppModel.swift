@@ -816,7 +816,7 @@ final class AppModel {
                 at: samplesDir, withIntermediateDirectories: true)
             try OpusPacketFile.encode(sampleRecordingPackets).write(to: sampleURL(sample.id))
         } catch {
-            print("sample save failed: \(error)")
+            Log.model.error("sample save failed: \(error)")
             return
         }
         soundSamples.append(sample)
@@ -1047,7 +1047,7 @@ final class AppModel {
             dictationSink = try await transcriber.start()
             dictationTranscriber = transcriber
         } catch {
-            print("dictation failed to start: \(error)")
+            Log.model.error("dictation failed to start: \(error)")
             dictationConversation = nil
             append(.notice(id: UUID(), text: "Dictation unavailable", at: Date()),
                    to: conversationID)
@@ -1631,7 +1631,7 @@ final class AppModel {
         case .buddyRequest:
             Task { try? await refreshBuddies() }
         case .error(let message):
-            print("server error: \(message)")
+            Log.model.error("server error: \(message)")
             if let conversationID = lastSentConversation {
                 append(.notice(id: UUID(), text: message, at: Date()), to: conversationID)
             }

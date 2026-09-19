@@ -885,7 +885,7 @@ struct MessageRow: View {
 
     /// A tagged bot's name is read off the bubble body, so it's bolded in
     /// everyone's copy of the message — not just the sender's.
-    private var body_: AttributedString {
+    private var attributedBody: AttributedString {
         var text = AttributedString(message.body)
         guard bot == nil,
               let match = BotTag.match(message.body, aliases: botAliases),
@@ -945,7 +945,7 @@ struct MessageRow: View {
                 // centered on the bubble whatever else the row carries.
                 HStack(alignment: .center, spacing: 6) {
                     if isMine, message.dictated == true { dictationGlyph }
-                    Text(body_)
+                    Text(attributedBody)
                         .font(.body)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)

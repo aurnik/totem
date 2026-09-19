@@ -69,7 +69,7 @@ final class VoiceTranscriber {
                     self?.receive(result)
                 }
             } catch {
-                print("transcription stopped: \(error)")
+                Log.audio.error("transcription stopped: \(error)")
             }
         }
         try await analyzer.start(inputSequence: stream)

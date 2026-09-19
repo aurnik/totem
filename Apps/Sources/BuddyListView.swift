@@ -90,21 +90,18 @@ struct BuddyListView: View {
         }
     }
 
-    /// Testers aren't emailed about new builds, so this is how they find out.
-    /// One tap to the update, per the fewest-taps rule. TestFlight's own
-    /// scheme opens Totem's page with the Update button; the public join
-    /// link is the become-a-tester flow, which tells someone who already is
-    /// one that the beta "isn't accepting new testers", so it's only the
-    /// fallback for a phone without TestFlight installed.
+    /// Testers are not emailed about new builds, so the app says so itself.
+    /// The TestFlight scheme opens the app's page with its Update button; the
+    /// public join link is the fallback for a phone without TestFlight.
     @ViewBuilder
     private var updateBanner: some View {
-        if model.updateAvailable {
+        if model.updateAvailable, let appID = Self.testFlightAppID {
             Section {
                 HStack {
                     Button {
-                        openURL(URL(string: "itms-beta://beta.itunes.apple.com/v1/app/6796788149")!) { opened in
-                            if !opened {
-                                openURL(URL(string: "https://testflight.apple.com/join/7QCwQhqT")!)
+                        openURL(URL(string: "itms-beta://beta.itunes.apple.com/v1/app/\(appID)")!) { opened in
+                            if !opened, let code = Self.testFlightJoinCode {
+                                openURL(URL(string: "https://testflight.apple.com/join/\(code)")!)
                             }
                         }
                     } label: {
@@ -122,6 +119,15 @@ struct BuddyListView: View {
                 }
             }
         }
+    }
+
+    private static let testFlightAppID = infoString("TotemTestFlightAppID")
+    private static let testFlightJoinCode = infoString("TotemTestFlightJoinCode")
+
+    private static func infoString(_ key: String) -> String? {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+              !value.isEmpty else { return nil }
+        return value
     }
 
     @ViewBuilder
