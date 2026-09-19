@@ -55,9 +55,8 @@ struct SignInView: View {
         do {
             try await model.signIn(handle: handle, serverURL: serverURL)
         } catch {
-            // Name the failure. A generic "is the server running?" sends you
-            // chasing the network when the server answered fine and the
-            // response simply didn't decode.
+            // Name the failure: a generic network message is misleading when
+            // the server answered fine and the response didn't decode.
             errorMessage = "Couldn't sign in: \(error)"
         }
     }

@@ -1,9 +1,8 @@
 import SwiftUI
 import TotemKit
 
-/// A session-scoped conversation — 1:1 with a buddy, or a group session.
-/// Live only while parties are on; messages are never stored server-side, so
-/// an offline 1:1 peer means sending is disabled. Dismisses when we sign off.
+/// A 1:1 or group conversation. Sending is disabled while the 1:1 peer is
+/// offline, since messages are never stored server-side.
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -19,13 +18,11 @@ struct ConversationView: View {
     @State private var showingYouTube = false
     @State private var showingMembers = false
     @State private var showingActions = false
-    /// Measured, not assumed: this is what shrinks when the keyboard opens,
-    /// and the stage shrinking with it is the point.
+    /// Shrinks when the keyboard opens, and the stage shrinks with it.
     @State private var conversationSize: CGSize = .zero
 
-    /// Rather less than half the conversation, so a stage never leaves the
-    /// chat a sliver. Only bites when space is tight — with the keyboard down
-    /// it's larger than any stage asks for, and is then not applied at all.
+    /// An upper bound on the stage, so it never leaves the chat a sliver.
+    /// Only bites when space is tight.
     private var stageBox: CGSize {
         CGSize(width: conversationSize.width, height: conversationSize.height * 0.45)
     }
@@ -34,7 +31,6 @@ struct ConversationView: View {
         model.groupSessions[conversationID]
     }
 
-    /// The buddy behind a 1:1 conversation; nil for groups.
     private var peerID: UUID? {
         model.peer(of: conversationID)
     }
@@ -49,9 +45,8 @@ struct ConversationView: View {
         return (model.presences[peerID]?.state ?? .offline) == .offline
     }
 
-    /// Whether someone looking at their screen would see this chat: the app
-    /// in front on iOS, this window key on macOS. Gone while the app is in
-    /// the switcher or another app is in front.
+    /// Whether this chat is actually on screen: the app in front on iOS,
+    /// this window key on macOS.
     private var isFrontmost: Bool {
         #if os(iOS)
         scenePhase == .active
@@ -64,9 +59,8 @@ struct ConversationView: View {
         group == nil && model.peerViewing.contains(conversationID)
     }
 
-    /// The group's sitting ended — fewer than two people left. The transcript
-    /// and roster stay readable; sending is over until someone starts the
-    /// same combination again.
+    /// The group's sitting ended. The transcript and roster stay readable;
+    /// sending resumes only if the same combination is started again.
     private var groupEnded: Bool {
         model.endedGroups.contains(conversationID)
     }
@@ -79,9 +73,8 @@ struct ConversationView: View {
         model.dictationConversation == conversationID
     }
 
-    /// Everyone audible in this chat. We only count while our own mic is
-    /// live: the monitor exists to show our voice going out, and once the mic
-    /// is off there's nothing to show.
+    /// Everyone audible in this chat. The self monitor counts only while the
+    /// local mic is live.
     private var speakers: [(id: UUID, handle: String)] {
         (model.speakingUsers[conversationID] ?? [])
             .filter { micIsLive || $0 != model.currentUser?.id }
@@ -99,8 +92,8 @@ struct ConversationView: View {
             .sorted()
     }
 
-    /// Another extension holds the stage and would lose real state if this one
-    /// took it — the stage's owner refuses that anyway, so don't offer it.
+    /// Another extension holds the stage and would lose state if this one
+    /// took it. The owner would refuse anyway, so don't offer it.
     private func stageIsProtected(against id: ChatExtensionID) -> Bool {
         guard let stage = model.stages[conversationID] else { return false }
         return stage.state.extensionID != id && stage.state.preservesState
@@ -110,9 +103,8 @@ struct ConversationView: View {
         model.stages[conversationID]?.state.extensionID == id
     }
 
-    /// Who to picture in a group header: up to three participants (matching
-    /// the title's handle order). Participants without a published avatar
-    /// are simply left out.
+    /// Up to three participants in the title's handle order. Anyone without
+    /// a published avatar is left out.
     private var groupHeaderAvatars: [Avatar] {
         (group?.participants ?? [])
             .filter { $0.id != model.currentUser?.id }
@@ -125,8 +117,7 @@ struct ConversationView: View {
         peerID.flatMap { model.presences[$0]?.state } ?? .offline
     }
 
-    /// Online but not looking at this chat reads at half strength: present,
-    /// just not here.
+    /// Online but not looking at this chat reads at half strength.
     private var peerAttention: Double {
         peerState == .online && !peerViewing ? 0.5 : 1
     }
@@ -144,9 +135,7 @@ struct ConversationView: View {
                 memberList(group)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            // Voice holds the top while anyone is audible or our own mic is
-            // open — the speaker is exactly who needs to know a listener
-            // can't hear, and the way off the mic lives here.
+            // Voice holds the top while anyone is audible or the mic is open.
             if !speakers.isEmpty || micIsLive {
                 speakersSection
             }
@@ -179,8 +168,7 @@ struct ConversationView: View {
         .toolbar {
             #if os(iOS)
             ToolbarItem(placement: .principal) {
-                // For groups the title is a button: tapping drops down the
-                // member list (handles, quick-add for non-friends).
+                // For groups the title drops down the member list.
                 if group != nil {
                     Button(action: toggleMembers) {
                         headerLabel
@@ -233,13 +221,11 @@ struct ConversationView: View {
         }
     }
 
-    /// The chat's actions, collapsed behind the header's overflow button so the bar
-    /// carries one control instead of three.
+    /// The chat's actions, collapsed behind the header's overflow button.
     private var actionMenu: some View {
         VStack(alignment: .leading, spacing: 2) {
             actionButton("waveform", "Sounds") { showingSoundboard = true }
-            // Lit red while something is on the stage, the way the mic is while
-            // it's open — and the glyph says what tapping it now does: stop.
+            // Lit red while on the stage, and the glyph says what a tap does.
             actionButton(isOnStage(.youtube) ? "stop.fill" : YouTubeExtension.symbol,
                          "YouTube", tint: isOnStage(.youtube) ? .red : nil) {
                 if isOnStage(.youtube) {
@@ -255,8 +241,7 @@ struct ConversationView: View {
                 model.toggleMic(in: conversationID)
             }
         }
-        // Sizes the sheet to its widest label, then stretches the rest to match
-        // so every row is one full-width tap target.
+        // Sizes to the widest label; rows then stretch to match it.
         .fixedSize(horizontal: true, vertical: false)
         .padding(5)
         .background(.regularMaterial, in: .rect(cornerRadius: 18))
@@ -268,10 +253,8 @@ struct ConversationView: View {
         .disabled(peerOffline || groupEnded)
     }
 
-    /// Four's glyph is drawn rather than an SF Symbol, so while the game is up
-    /// the row becomes the way out of it — a red ✗, the same convention as
-    /// YouTube's `stop.fill`. Only a player can end a game; a spectator's row
-    /// waits until the board is free again.
+    /// Four's glyph is drawn rather than an SF Symbol, so a live game swaps
+    /// the row for a red ✗. Only a player can end a game.
     @ViewBuilder
     private var fourButton: some View {
         if isOnStage(.four), isFourPlayer {
@@ -369,7 +352,6 @@ struct ConversationView: View {
     }
 
     #if os(macOS)
-    /// The peer has this chat on screen right now.
     private struct ViewingDot: View {
         var body: some View {
             Circle()
@@ -387,8 +369,7 @@ struct ConversationView: View {
         }
     }
 
-    /// Dropped down from the header title: every other participant, with
-    /// their avatar — or, for non-friends, a one-tap add-friend button.
+    /// Every other participant, with an add-friend button for non-friends.
     private func memberList(_ group: SessionInfo) -> some View {
         let members = group.participants
             .filter { $0.id != model.currentUser?.id }
@@ -418,12 +399,11 @@ struct ConversationView: View {
                 state: model.presences[member.id]?.state ?? .offline,
                 size: 28)
         } else if let relationship, !relationship.incoming {
-            // Request already sent — nothing more to do here.
+            // Request already sent.
             Image(systemName: "clock")
                 .foregroundStyle(.secondary)
         } else {
-            // One tap makes friends: accepts their pending request if there
-            // is one, otherwise sends ours.
+            // Accepts their pending request if there is one, else sends ours.
             Button {
                 Task {
                     if let relationship {
@@ -440,9 +420,8 @@ struct ConversationView: View {
         }
     }
 
-    /// Fixed to the top while anyone is audible: two-column grid of speaking
-    /// users, each an initial-letter circle beside their live EQ, plus a
-    /// crossed-out speaker row for participants whose device can't play audio.
+    /// Speaking users beside their live EQ, plus a row naming participants
+    /// whose device can't play audio.
     private var speakersSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !speakers.isEmpty {
@@ -478,9 +457,8 @@ struct ConversationView: View {
         .background(Color.accentColor.opacity(0.12))
     }
 
-    /// Where the voice link stands, in plain words: it opens through a relay
-    /// and moves to a direct path once hole punching lands, and the
-    /// difference is audible — but nobody needs the mechanism to read it.
+    /// The link state in plain words: a call opens through a relay and moves
+    /// to a direct path once hole punching lands.
     private func voiceStatusLine(_ status: AppModel.VoiceStatus) -> some View {
         HStack(spacing: 5) {
             switch status {
@@ -501,8 +479,7 @@ struct ConversationView: View {
     }
 
     #if os(iOS)
-    /// Whoever is talking gets off the mic here; whoever is only listening
-    /// decides whether to keep hearing it.
+    /// Ends the mic for a speaker, or mutes for a listener.
     @ViewBuilder
     private var voiceExit: some View {
         if micIsLive {
@@ -561,8 +538,7 @@ struct ConversationView: View {
                     }
                     .id(item.id)
                     .modifier(PopInEffect(
-                        // Only genuinely-new messages pop; notices appear
-                        // immediately and older items render statically.
+                        // Only genuinely new messages pop.
                         enabled: popInEnabled(item),
                         anchor: anchor(for: item)
                     ))
@@ -578,22 +554,16 @@ struct ConversationView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
-            // Breathing room under the newest bubble at rest.
             .padding(.bottom, 10)
         }
-        // Keeps the newest message in view, on open and as messages
-        // arrive, without a scrollTo. `scrollTo(_:anchor: .bottom)` aligns
-        // the target with the scroll view's *bounds*, which is below the
-        // composer — it scrolls a bar's height too far and drags the tail
-        // of the transcript into the blur. Resting here instead leaves the
-        // newest message crisp, since the edge effect only blurs content
-        // actually underneath a bar.
+        // Not `scrollTo(_:anchor: .bottom)`: that aligns the target with the
+        // scroll view's bounds, which sit below the composer, so it overshoots
+        // by a bar's height and drags the newest bubble into the edge blur.
         .defaultScrollAnchor(.bottom)
-        // Both the stage and the composer hang off the transcript rather
-        // than stacking around it, so messages scroll under them and blur
-        // out at each edge. The stage also keeps its place in the view tree
-        // whatever else comes and goes, so the player is never rebuilt
-        // mid-video.
+        // The stage and composer hang off the transcript rather than stacking
+        // around it, so messages scroll under them and blur at each edge, and
+        // the stage keeps its place in the view tree so the player is never
+        // rebuilt mid-video.
         .modifier(ScrollEdgeBar(edge: .top) {
             if let stage = model.stages[conversationID] {
                 StageArea(conversationID: conversationID, stage: stage)
@@ -601,15 +571,12 @@ struct ConversationView: View {
             }
         })
         .modifier(ScrollEdgeBar(edge: .bottom) { composer })
-        // A swipe down the transcript puts the keyboard away, which is the
-        // only thing that reclaims the screen when a stage and the keyboard
-        // are up at once. Interactively rather than immediately so the
-        // keyboard tracks the finger and a short scroll doesn't lose it.
+        // Interactively, so the keyboard tracks the finger and a short scroll
+        // doesn't dismiss it.
         .scrollDismissesKeyboard(.interactively)
     }
 
-    /// 1 for the newest message, easing toward 0 over the last 25 — drives the
-    /// history fade on outgoing bubbles.
+    /// 1 for the newest message, easing to 0 over the last 25.
     private static func recencyFraction(index: Int, count: Int) -> Double {
         let distanceFromEnd = Double(count - 1 - index)
         return max(0, 1 - distanceFromEnd / 25)
@@ -633,13 +600,8 @@ struct ConversationView: View {
         !draft.trimmingCharacters(in: .whitespaces).isEmpty && !peerOffline && !groupEnded
     }
 
-    /// Only the one-time model download — live words go in the draft bubble,
-    /// where the message itself will land. A silent multi-second wait
-    /// otherwise reads as a hang.
-    /// The strip above the composer that says what the field is about to do.
-    /// Dictation uses it while it warms up; a bot tag uses it to name where the
-    /// message is headed, since a bolded tag says something is different but
-    /// not what.
+    /// The strip above the composer saying what the field is about to do:
+    /// dictation warming up, or the bot a tag will send to.
     private func composerHint(_ title: String, detail: String? = nil,
                               systemImage: String, pulsing: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 6) {
@@ -666,8 +628,7 @@ struct ConversationView: View {
                      systemImage: "waveform", pulsing: true)
     }
 
-    /// Names the bot the draft is tagging, and whether the conversation rides
-    /// along. Derived from the draft as it's typed — nothing is sent yet.
+    /// Names the bot the draft tags and whether the conversation rides along.
     private var botHint: String? {
         guard let tagged = model.taggedBot(in: draft) else { return nil }
         return tagged.wantsContext
@@ -675,11 +636,9 @@ struct ConversationView: View {
             : "Send to \(tagged.bot.displayName)"
     }
 
-    /// Off, it's an empty outgoing bubble offering the mode; on, it fills in
-    /// like a sent one — inverted against the transcript so it still reads as
-    /// a control rather than something already said. Fill and border are both
-    /// always present and cross-fade through their colors: swapping one shape
-    /// for the other gives SwiftUI nothing to interpolate, and it cuts.
+    /// An outgoing bubble that fills in when dictation is on. Fill and border
+    /// are both always present and cross-fade through their colors; swapping
+    /// one shape for the other gives SwiftUI nothing to interpolate.
     private var dictationToggle: some View {
         Button {
             model.toggleDictation(in: conversationID)
@@ -700,8 +659,7 @@ struct ConversationView: View {
                         }
                 }
                 .animation(.easeInOut(duration: 0.25), value: dictating)
-                // Outside the color cross-fade so the two don't drive each
-                // other: a slow breath while the mic is being transcribed.
+                // Outside the color cross-fade so the two don't drive each other.
                 .scaleEffect(pulsing ? 1.035 : 1)
                 .opacity(pulsing ? 0.88 : 1)
         }
@@ -718,7 +676,6 @@ struct ConversationView: View {
         }
     }
 
-    /// Reads against `Color.primary`, so it flips with the color scheme.
     private var dictationLabelColor: Color {
         #if os(iOS)
         Color(.systemBackground)
@@ -734,8 +691,7 @@ struct ConversationView: View {
             } else if let botHint {
                 composerHint(botHint, systemImage: "sparkles")
             }
-            // Dictation rides on the open mic, so it's only offered once the
-            // mic is on — and turning the mic off takes it down with it.
+            // Dictation rides on the open mic, so it needs the mic on.
             if model.dictationSupported, micIsLive {
                 HStack {
                     Spacer(minLength: 0)
@@ -745,8 +701,7 @@ struct ConversationView: View {
             }
             #if os(iOS)
             HStack(alignment: .bottom, spacing: 0) {
-                // Return still inserts a newline here, as the vertical-axis
-                // TextField this replaced did; the button is how you send.
+                // Return inserts a newline; the button is how you send.
                 ComposerField(text: $draft, placeholder: "Message",
                               aliases: model.botAliases, onSubmit: {})
                     .padding(.leading, 14)
@@ -797,8 +752,8 @@ struct ConversationView: View {
             .padding(12)
             #endif
         }
-        // The hint appears and disappears mid-keystroke as a tag is typed or
-        // backspaced, so it fades rather than snapping the composer up a line.
+        // The hint comes and goes mid-keystroke, so it fades rather than
+        // snapping the composer up a line.
         .animation(.easeInOut(duration: 0.18), value: botHint)
     }
 
@@ -809,8 +764,9 @@ struct ConversationView: View {
     }
 }
 
-/// Fade-and-grow entrance for newly inserted transcript content, anchored
-/// where the bubble sprouts from (sender's side; center for notices).
+/// Fade-and-grow entrance for new transcript content, anchored where the
+/// bubble sprouts from. Animates from `onAppear` so SwiftUI renders the
+/// pre-animation state first instead of coalescing both into one frame.
 struct PopInEffect: ViewModifier {
     let enabled: Bool
     var anchor: UnitPoint = .bottomLeading
@@ -829,8 +785,7 @@ struct PopInEffect: ViewModifier {
     }
 }
 
-/// iMessage-style typing indicator: an incoming-gray bubble with three
-/// staggered pulsing dots.
+/// An incoming-gray bubble with three staggered pulsing dots.
 struct TypingIndicatorBubble: View {
     var body: some View {
         HStack(spacing: 5) {
@@ -863,28 +818,21 @@ private struct TypingDot: View {
 struct MessageRow: View {
     let message: ChatMessage
     let isMine: Bool
-    /// One of my messages that no recipient has acknowledged yet. Shown at
-    /// half strength until a peer's ack lands, so a message in flight — or to
-    /// someone briefly unreachable — reads as not-yet-delivered without a
-    /// notice of its own.
+    /// Unacknowledged by at least one recipient, drawn at half strength.
     var pending: Bool = false
     var senderName: String?
-    /// Group chats only: the sender's avatar beside their bubble.
     var senderAvatar: Avatar?
-    /// Set when a bot sent this — styles the bubble as the bot's.
+    /// Set when a bot sent this, which styles the bubble as the bot's.
     var bot: Bot?
-    /// Groups label every speaker, so a bot names itself there too. A 1:1
-    /// labels nobody, so neither does the bot.
+    /// Groups label every speaker, bots included; a 1:1 labels nobody.
     var botIsLabelled = false
-    /// Every registered bot tag, for bolding one at the head of a human
-    /// message. Empty when the server runs no bots.
+    /// Every registered bot tag, for bolding one in a human message.
     var botAliases: [String] = []
     var recencyFraction: Double = 1
 
     private var incomingBackground: Color { .incomingBubble }
 
-    /// A tagged bot's name is read off the bubble body, so it's bolded in
-    /// everyone's copy of the message — not just the sender's.
+    /// Derived from the body, so the tag is bolded in everyone's copy.
     private var attributedBody: AttributedString {
         var text = AttributedString(message.body)
         guard bot == nil,
@@ -895,10 +843,9 @@ struct MessageRow: View {
         return text
     }
 
-    /// iMessage blue (#007AFF) for the newest messages, washing out toward a
-    /// pale sky blue deeper into history. Each bubble spans a small slice of
-    /// the ramp top-to-bottom so consecutive bubbles read as one continuous
-    /// gradient over the transcript.
+    /// iMessage blue for the newest messages, washing out into history. Each
+    /// bubble spans a slice of the ramp so the transcript reads as one
+    /// continuous gradient.
     private static func historyBlue(_ fraction: Double) -> Color {
         let f = min(max(fraction, 0), 1)
         return Color(
@@ -908,8 +855,7 @@ struct MessageRow: View {
         )
     }
 
-    /// Marks a spoken message, on the bubble's inward side so it reads as an
-    /// annotation of that bubble rather than of the row.
+    /// Marks a spoken message, on the bubble's inward side.
     private var dictationGlyph: some View {
         Image(systemName: "mic.fill")
             .font(.caption2)
@@ -919,11 +865,8 @@ struct MessageRow: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if isMine { Spacer(minLength: 48) }
-            // A bot has no avatar to show — and a placeholder head would read
-            // as a person's. Its own glyph instead, and only where the rest of
-            // the messages carry one: in a 1:1 nothing else is labelled, so a
-            // labelled bot bubble sits oddly proud of the conversation. The
-            // bubble's colour already says who is speaking.
+            // A bot gets a glyph rather than an avatar, and only where other
+            // messages carry one. In a 1:1 the bubble color says enough.
             if bot != nil {
                 if botIsLabelled {
                     Image(systemName: "sparkles")
@@ -941,8 +884,7 @@ struct MessageRow: View {
                         .foregroundStyle(.secondary)
                         .padding(.leading, 6)
                 }
-                // The glyph rides beside the bubble, not the row, so it stays
-                // centered on the bubble whatever else the row carries.
+                // Beside the bubble, not the row, so it stays centered on it.
                 HStack(alignment: .center, spacing: 6) {
                     if isMine, message.dictated == true { dictationGlyph }
                     Text(attributedBody)

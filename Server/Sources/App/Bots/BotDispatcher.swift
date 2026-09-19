@@ -4,23 +4,20 @@ import Redis
 import TotemKit
 import Vapor
 
-/// Turns a tagged message into exactly one bot reply.
-///
-/// The contract, and the reason this type exists rather than a call inlined
-/// into the gateway: **an invocation always ends in a message.** Success,
-/// upstream failure, timeout, and rate-limiting all produce a bubble in the
-/// conversation. Nothing here may return early once a tag has matched, because
-/// the sender is watching a thinking indicator that only a message clears.
+/// Turns a tagged message into exactly one bot reply. Success, upstream
+/// failure, timeout and rate-limiting all produce a bubble: once a tag has
+/// matched, no path here may return without relaying something, since only a
+/// message clears the sender's thinking indicator.
 struct BotDispatcher: Sendable {
     let registry: BotRegistry
     let app: Application
-    /// How the reply gets to everyone — the gateway owns fan-out and keying.
+    /// How the reply gets to everyone; the gateway owns fan-out and keying.
     let relay: @Sendable (_ botID: UUID, _ sessionID: UUID, _ text: String) async -> Void
 
     private var redis: RedisClient { app.redis }
 
-    /// Called off the relay path. A slow bot must never delay the human
-    /// message that tagged it, so this returns immediately and answers later.
+    /// Returns immediately and answers later, so a slow bot never delays the
+    /// message that tagged it.
     func dispatch(body: String, from senderID: UUID, sessionID: UUID,
                   context: [BotContextMessage]?) {
         Task { await run(body: body, from: senderID, sessionID: sessionID, context: context) }
@@ -41,8 +38,7 @@ struct BotDispatcher: Sendable {
             return
         }
 
-        // Cap what the client sent rather than trusting it: the transcript
-        // arrives over the wire, so its size is not ours until we bound it.
+        // The transcript arrives over the wire, so bound its size here.
         let history = wantsContext
             ? Array((context ?? []).suffix(Limits.botContextMaxMessages))
             : []
@@ -66,9 +62,8 @@ struct BotDispatcher: Sendable {
     }
 
     /// A rolling per-minute cap, counted in Redis so it holds across the whole
-    /// deployment rather than per process. A failure to reach Redis lets the
-    /// call through — the cap is there to stop runaway spend, not to be a gate
-    /// that breaks chat when Redis hiccups.
+    /// deployment. An unreachable Redis lets the call through: the cap exists
+    /// to stop runaway spend, not to break chat.
     private func withinRateLimit(_ userID: UUID) async -> Bool {
         let key = RedisKey("botrate:\(userID.uuidString)")
         do {
@@ -84,12 +79,9 @@ struct BotDispatcher: Sendable {
     }
 }
 
-/// A chat bubble renders one run of plain text, so markdown arrives as literal
-/// asterisks and hashes. Instructing a model not to emit any is unreliable —
-/// open-ended "explain X" prompts come back as numbered lists however firmly
-/// the system prompt forbids it — and a webhook bot is under no obligation to
-/// try. Flattening here makes the guarantee structural, and applies to every
-/// backend rather than to whichever one remembered.
+/// Flattens markdown, which a chat bubble would render as literal asterisks
+/// and hashes. Done here so every backend inherits the guarantee rather than
+/// relying on a model or a webhook to honor it.
 func plainText(_ text: String) -> String {
     var out = ""
     for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -106,17 +98,15 @@ func plainText(_ text: String) -> String {
         guard !trimmed.isEmpty else { continue }
         out += out.isEmpty ? trimmed : " " + trimmed
     }
-    // Emphasis markers, once lines are joined. Backticks go too — code spans
-    // have nothing to render against here either.
+    // Emphasis markers and backticks, once the lines are joined.
     for marker in ["**", "__", "`"] {
         out = out.replacingOccurrences(of: marker, with: "")
     }
     return out.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
-/// Races the work against a deadline. `Limits.botResponseTimeout` is the
-/// promise the thinking indicator is making to the sender, so it's enforced
-/// here rather than left to whatever the backend's own client does.
+/// Races the work against a deadline, enforced here rather than left to
+/// whatever a backend's own client does.
 func withTimeout<T: Sendable>(_ seconds: TimeInterval,
                               _ work: @escaping @Sendable () async throws -> T) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in

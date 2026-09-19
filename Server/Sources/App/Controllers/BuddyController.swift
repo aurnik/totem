@@ -12,7 +12,7 @@ struct BuddyController: RouteCollection {
         buddies.post("requests", ":id", "accept", use: accept)
     }
 
-    /// Own rows plus incoming pending requests, as TotemKit.Buddy DTOs.
+    /// Own rows plus incoming pending requests.
     func list(req: Request) async throws -> [Buddy] {
         let userID = try req.auth.require(UserModel.self).requireID()
         let own = try await BuddyModel.query(on: req.db)
@@ -43,7 +43,7 @@ struct BuddyController: RouteCollection {
         let handle: String
     }
 
-    /// Discovery is by handle only (spec §8). Creates one pending row, me → them.
+    /// Discovery is by handle. Creates one pending row from the caller to the target.
     func request(req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(UserModel.self)
         let userID = try user.requireID()
@@ -67,8 +67,7 @@ struct BuddyController: RouteCollection {
             .first()
         guard existing == nil else { throw Abort(.conflict, reason: "Request already exists.") }
 
-        // They already invited me — mutual interest auto-accepts instead of
-        // leaving a crossed pair of pending requests.
+        // Crossed requests auto-accept rather than leaving both pending.
         if let reverse = try await BuddyModel.query(on: req.db)
             .filter(\.$user.$id == targetID)
             .filter(\.$buddy.$id == userID)
@@ -87,8 +86,8 @@ struct BuddyController: RouteCollection {
         return .created
     }
 
-    /// Accepting marks the original row accepted and creates the reciprocal
-    /// accepted row. Only then does either side see the other's presence.
+    /// Marks the original row accepted and creates the reciprocal row. Only
+    /// then does either side see the other's presence.
     func accept(req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(UserModel.self)
         let userID = try user.requireID()
@@ -100,8 +99,7 @@ struct BuddyController: RouteCollection {
 
         row.status = .accepted
         try await row.save(on: req.db)
-        // The reciprocal row can already exist (crossed requests from before
-        // mutual invites auto-accepted) — update it rather than duplicating.
+        // The reciprocal row may already exist; update it rather than duplicating.
         if let reciprocal = try await BuddyModel.query(on: req.db)
             .filter(\.$user.$id == userID)
             .filter(\.$buddy.$id == row.$user.id)

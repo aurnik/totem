@@ -1,10 +1,8 @@
 import Foundation
 
-/// Client-side presence state machine. The server is authoritative; this machine
-/// decides what the client should propose and what it should display for itself.
-///
-/// Pure value type that never reads a clock: every transition is driven by an
-/// event, so reconnect races are testable directly.
+/// Client-side presence state machine: what the client proposes to the
+/// authoritative server, and what it displays for itself. A pure value type
+/// that never reads a clock, so reconnect races are directly testable.
 public struct PresenceStateMachine: Equatable, Sendable {
 
     public enum Event: Equatable, Sendable {
@@ -18,21 +16,23 @@ public struct PresenceStateMachine: Equatable, Sendable {
     }
 
     public enum Effect: Equatable, Sendable {
-        /// Propose this presence to the server (only emitted while signed on and connected).
+        /// Propose this presence to the server.
         case sendPresence(PresenceState, awayMessage: String?)
         case playSignOnSound
         case playSignOffSound
     }
 
     public private(set) var isSignedOn = false
-    /// True between a non-deliberate socket drop and reconnection. While reconnecting
-    /// the client does not show itself as offline (spec §10).
+    /// True between a non-deliberate drop and reconnection; the client shows
+    /// itself as reconnecting rather than offline.
     public private(set) var isReconnecting = false
     public private(set) var awayMessage: String?
 
     public init() {}
 
-    /// What the buddy list shows for self, and what we propose to the server.
+    /// What the buddy list shows for self, and what is proposed to the server.
+    /// Away requires a message, so a message-less away can only be the server's
+    /// unreachable mark.
     public var displayState: PresenceState {
         guard isSignedOn else { return .offline }
         return awayMessage != nil ? .away : .online
@@ -71,15 +71,13 @@ public struct PresenceStateMachine: Equatable, Sendable {
         case .reconnected:
             guard isSignedOn, isReconnecting else { break }
             isReconnecting = false
-            // Re-propose current state; away message survives a reconnect
-            // within the same sign-on (spec §6).
+            // An away message survives a reconnect within the same sign-on.
             effects.append(.sendPresence(displayState, awayMessage: awayMessage))
         }
 
         let after = displayState
         if after != before, isSignedOn || before != .offline, !isReconnecting {
-            // Sign-off is communicated too (as .offline) so the server need not
-            // wait for the heartbeat TTL in the common case (spec §3).
+            // Sign-off is sent as .offline so the server need not wait for the TTL.
             effects.append(.sendPresence(after, awayMessage: awayMessage))
         }
         return effects

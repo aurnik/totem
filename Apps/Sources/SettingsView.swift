@@ -1,9 +1,7 @@
 import SwiftUI
 import TotemKit
 
-/// Settings: notifications, appearance, avatar, and soundboard management.
-/// The recorder pushes within this sheet's NavigationStack, same pattern as
-/// the in-chat soundboard.
+/// Notifications, appearance, avatar, and soundboard management.
 struct SettingsSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -139,8 +137,7 @@ struct SettingsSheet: View {
 }
 
 /// A slider whose track is the palette gradient and whose knob previews the
-/// selected color. `onCommit` fires on release so the owner can persist once
-/// per gesture instead of per pixel.
+/// selected color. `onCommit` fires on release, once per gesture.
 struct GradientSlider: View {
     @Binding var value: Double
     let stops: [(Double, Double, Double)]
@@ -177,8 +174,7 @@ struct GradientSlider: View {
     }
 }
 
-/// One adornment drawn by itself, fitted into the cell, with its name below.
-/// Lit like the Long hair button when it is worn.
+/// One adornment drawn by itself, with its name below, lit when worn.
 struct AdornmentCell: View {
     let adornment: Adornment
     let isOn: Bool
@@ -206,9 +202,8 @@ struct AdornmentCell: View {
     }
 }
 
-/// No press dimming and no implicit animation: the label flips to its new
-/// state on the same frame as the tap, which is what makes a toggle feel
-/// snappy rather than acknowledged.
+/// No press dimming and no implicit animation, so the label flips to its new
+/// state on the same frame as the tap.
 struct InstantButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

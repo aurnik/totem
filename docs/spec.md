@@ -1,4 +1,4 @@
-# Buddy List — Project Spec (v1)
+# Buddy List - Project Spec (v1)
 
 Native Swift app for iOS and macOS. Recreates the AIM buddy-list experience: deliberate presence, away messages, ephemeral conversations with a defined beginning and end.
 
@@ -14,7 +14,7 @@ Before writing client code, validate that people will deliberately sign on. Run 
 
 **In scope (v1):** buddy list with presence, away messages, in-app 1:1 chat, sign-on/sign-off push notifications, sound design, macOS menu bar presence.
 
-**Out of scope (v1):** group chat, media/attachments, message search, Android, web, iMessage export, widgets, Live Activities. (iMessage export and widgets are v1.1 — see §11.)
+**Out of scope (v1):** group chat, media/attachments, message search, Android, web, iMessage export, widgets, Live Activities. (iMessage export and widgets are v1.1 - see §11.)
 
 ---
 
@@ -58,7 +58,7 @@ macOS app ┘                                  ├─ Presence Service
                                                       └─ APNs
 ```
 
-**Client:** single SwiftUI multiplatform target, `#if os(iOS)` / `#if os(macOS)` for platform divergence (§7). Minimum: iOS 17, macOS 14 — required for SwiftData and current Observation.
+**Client:** single SwiftUI multiplatform target, `#if os(iOS)` / `#if os(macOS)` for platform divergence (§7). Minimum: iOS 17, macOS 14 - required for SwiftData and current Observation.
 
 **Transport:** `URLSessionWebSocketTask` for the live channel. No third-party networking dependency. Reconnect with exponential backoff (1s → 30s cap) plus immediate retry on `NWPathMonitor` reporting network return.
 
@@ -78,19 +78,19 @@ Session     id, participantIDs[2], startedAt, endedAt
 Message     id, sessionID, senderID, body, sentAt
 ```
 
-**Retention:** messages persist server-side for 24h to cover reconnects and offline delivery, then hard-delete. Client keeps its own local archive in SwiftData indefinitely, reachable only from a separate History view. The ephemerality is in the UI, not enforced deletion — do not market it as private messaging.
+**Retention:** messages persist server-side for 24h to cover reconnects and offline delivery, then hard-delete. Client keeps its own local archive in SwiftData indefinitely, reachable only from a separate History view. The ephemerality is in the UI, not enforced deletion - do not market it as private messaging.
 
 ---
 
 ## 6. Client feature requirements
 
-**Buddy list (primary screen).** Grouped by state: online, away, idle, then offline collapsed by default. Row shows handle, state dot, and away message inline when set. Sorted alphabetically within group — no algorithmic ordering.
+**Buddy list (primary screen).** Grouped by state: online, away, idle, then offline collapsed by default. Row shows handle, state dot, and away message inline when set. Sorted alphabetically within group - no algorithmic ordering.
 
 **Sign on / sign off.** Prominent, one tap. Sign-on plays the door-open sound; sign-off plays door-slam. Signing off is available from the buddy list and the macOS menu bar without opening the app.
 
 **Away message.** Set from a sheet on the buddy list. Free text, 140 char cap. Persists across sessions within the same sign-on. Clearing returns to `online`.
 
-**Conversation.** Opens on tapping a buddy. Requires the buddy to be non-`offline` — tapping an offline buddy offers "leave a message" which delivers on their next sign-on, but does not open a live window. Typing indicator sent over the socket (throttled to one event per 3s). Read state is not tracked or displayed — deliberate omission; it reintroduces obligation debt.
+**Conversation.** Opens on tapping a buddy. Requires the buddy to be non-`offline` - tapping an offline buddy offers "leave a message" which delivers on their next sign-on, but does not open a live window. Typing indicator sent over the socket (throttled to one event per 3s). Read state is not tracked or displayed - deliberate omission; it reintroduces obligation debt.
 
 **Auto-archive.** When either party transitions to `offline`, the conversation window closes with a visible transition and the transcript moves to History.
 
@@ -107,7 +107,7 @@ Message     id, sessionID, senderID, body, sentAt
 
 **macOS**
 - Menu bar extra showing online buddy count; click for the list, sign-on/off, and away message without focusing the app.
-- **One window per conversation.** This is the AIM interaction model and macOS supports it natively — do not force a unified inbox on desktop.
+- **One window per conversation.** This is the AIM interaction model and macOS supports it natively - do not force a unified inbox on desktop.
 - Presence remains bound to explicit sign-on, but layer system idle detection (`CGEventSourceSecondsSinceLastEventType`) to auto-transition `online` → `idle` at 5 min.
 - App stays signed on when all windows are closed; quitting signs off.
 
@@ -115,7 +115,7 @@ Message     id, sessionID, senderID, body, sentAt
 
 ## 8. Auth and onboarding
 
-Sign in with Apple, handle chosen at signup (unique, 3–16 chars, immutable in v1). Buddy discovery by handle only — no contact upload in v1. Invite flow generates a universal link that opens the app to a pre-filled buddy request, falling back to the App Store.
+Sign in with Apple, handle chosen at signup (unique, 3–16 chars, immutable in v1). Buddy discovery by handle only - no contact upload in v1. Invite flow generates a universal link that opens the app to a pre-filled buddy request, falling back to the App Store.
 
 Both parties must accept before either sees the other's presence. There is no one-way follow.
 
@@ -125,11 +125,11 @@ Both parties must accept before either sees the other's presence. There is no on
 
 1. Server: auth, buddy CRUD, WebSocket gateway, Redis presence with TTL.
 2. Shared Swift package: models, socket client, presence state machine, reconnect logic. Unit-test the state machine against clock skew and reconnect races before any UI.
-3. iOS: buddy list, sign on/off, away message. No chat yet — dogfood presence alone for one week.
+3. iOS: buddy list, sign on/off, away message. No chat yet - dogfood presence alone for one week.
 4. Chat: live session, typing indicator, auto-archive.
 5. APNs: sign-on alerts with throttling; offline message delivery.
 6. macOS: menu bar, multi-window conversations, idle detection.
-7. Sound design pass and transition polish. This is not optional finish work — the felt quality of sign-on/sign-off is a substantial part of the product.
+7. Sound design pass and transition polish. This is not optional finish work - the felt quality of sign-on/sign-off is a substantial part of the product.
 
 ---
 
@@ -143,6 +143,6 @@ Both parties must accept before either sees the other's presence. There is no on
 
 ## 11. v1.1 candidates
 
-- iMessage export: `MSMessagesAppViewController` extension, or simpler, a share-sheet handoff that opens a transcript in Messages. Its role is an escape hatch for conversations that need to outlive the session — never the primary channel.
+- iMessage export: `MSMessagesAppViewController` extension, or simpler, a share-sheet handoff that opens a transcript in Messages. Its role is an escape hatch for conversations that need to outlive the session - never the primary channel.
 - WidgetKit widget showing who is on. Treat as a glance surface only; refresh budget is coarse and it will lag actual presence.
 - Group conversations, per-buddy sounds, buddy list custom groups.

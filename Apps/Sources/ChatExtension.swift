@@ -1,13 +1,9 @@
 import SwiftUI
 import TotemKit
 
-/// An extension that can take over a conversation's stage. Compiled in and
-/// closed — iOS can't load native code at runtime, so a "marketplace" is a
-/// catalogue of what shipped, not a download mechanism.
-///
-/// Deliberately metadata-only: stage views come from the exhaustive switch in
-/// `StageArea` rather than from the protocol, which keeps the seam explicit
-/// without any `AnyView` erasure.
+/// An extension that can take over a conversation's stage. Metadata only:
+/// stage views come from the exhaustive switch in `StageArea` rather than from
+/// the protocol, which avoids `AnyView` erasure.
 @MainActor
 protocol ChatExtension {
     static var id: ChatExtensionID { get }
@@ -18,15 +14,10 @@ enum ChatExtensions {
     static let all: [any ChatExtension.Type] = [YouTubeExtension.self, FourExtension.self]
 }
 
-/// Hangs a bar off one edge of a scroll view with the same progressive blur the
-/// navigation bar has: content softens as it slides under the bar and feathers
-/// out, rather than meeting a hard edge.
-///
-/// It has to be `safeAreaBar`, not `safeAreaInset`. Both inset the scroll
-/// content identically, but only a bar takes part in the scroll edge effect —
-/// a plain inset just floats there and the content passes under it untouched.
-/// Before 26 neither the bar nor the effect exists, so it falls back to the
-/// inset and whatever's in the bar supplies its own backing.
+/// Hangs a bar off one edge of a scroll view with the navigation bar's
+/// progressive blur. It must be `safeAreaBar`, not `safeAreaInset`: both inset
+/// the content identically, but only a bar takes part in the scroll edge
+/// effect. Before 26 neither exists, so the inset is used instead.
 struct ScrollEdgeBar<BarContent: View>: ViewModifier {
     let edge: VerticalEdge
     let bar: BarContent
@@ -52,30 +43,25 @@ private struct StageBoxKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    /// What the conversation can spare for the stage: its full width, and the
-    /// height past which the stage would crowd out the chat. Stages fit
-    /// themselves into it rather than being handed a frame, since only they
-    /// know their own aspect ratio and what chrome sits below the picture.
-    ///
-    /// The height is a cap, and a cap only ever shrinks: applied when it is
-    /// *larger* than the stage needs, `maxHeight` claims the difference as an
-    /// empty band, which is what put grey bars above and below the video.
+    /// What the conversation can spare for the stage; stages fit themselves into
+    /// it rather than being handed a frame. The height is a cap that must only
+    /// shrink: applied when it exceeds what the stage needs, `maxHeight` claims
+    /// the difference as empty bands.
     var stageBox: CGSize {
         get { self[StageBoxKey.self] }
         set { self[StageBoxKey.self] = newValue }
     }
 }
 
-/// Renders whatever is on the stage. Adding an extension adds a case here and
-/// the compiler finds this spot.
+/// Renders whatever is on the stage.
 struct StageArea: View {
     @Environment(AppModel.self) private var model
     let conversationID: UUID
     let stage: Stage
 
     var body: some View {
-        // One structural branch whatever the OS: the backing varies, never the
-        // stage itself, whose identity owns a web view that must not be rebuilt.
+        // One structural branch whatever the OS, since the stage's identity owns
+        // a web view that must not be rebuilt.
         VStack(spacing: 0) {
             stageView
             #if os(iOS)
@@ -88,9 +74,8 @@ struct StageArea: View {
     }
 
     #if os(iOS)
-    /// The phone has no menu bar to fall back on, so the way out of a stage
-    /// sits under it. A video is anyone's to close; a game is only its
-    /// players' to end.
+    /// The phone has no menu bar, so the way out of a stage sits under it. A
+    /// video is anyone's to close; a game is only its players' to end.
     @ViewBuilder
     private var exit: some View {
         if canExit {
@@ -112,10 +97,8 @@ struct StageArea: View {
     }
     #endif
 
-    /// From 26 the scroll edge effect blurs the transcript as it slides under
-    /// the stage and feathers out below it, so a pane of its own would only put
-    /// back the hard edge that effect exists to remove. Before 26 there is no
-    /// such effect, and the stage needs something to be legible against.
+    /// From 26 the scroll edge effect blurs the transcript under the stage, so an
+    /// opaque pane would put back the hard edge it removes.
     @ViewBuilder
     private var backing: some View {
         if #available(iOS 26.0, macOS 26.0, *) {
@@ -137,10 +120,8 @@ struct StageArea: View {
 }
 
 #if os(iOS)
-/// The red exit at the foot of whatever holds the stage — a video, a game, or
-/// live voice. One shape for all of them, so leaving is always in the same
-/// place and always looks like leaving: red text, no button chrome, so it
-/// reads as a way out rather than a call to action.
+/// The red exit at the foot of whatever holds the stage: one shape for videos,
+/// games, and live voice, so leaving is always in the same place.
 struct StageExit: View {
     let label: String
     let symbol: String

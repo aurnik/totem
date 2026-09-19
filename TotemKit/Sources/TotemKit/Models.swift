@@ -4,9 +4,8 @@ public struct User: Codable, Identifiable, Hashable, Sendable {
     public let id: UUID
     public var handle: String
     public var avatar: Avatar?
-    /// The last moment the server had evidence this user was signed on: a
-    /// sign-on, a heartbeat, or a deliberate sign-off. Rendered only beside
-    /// offline buddies; nil for accounts that have never signed on.
+    /// Last evidence the server had that this user was signed on. Nil for
+    /// accounts that have never signed on.
     public var lastSeenAt: Date?
 
     public init(id: UUID, handle: String, avatar: Avatar? = nil, lastSeenAt: Date? = nil) {
@@ -17,10 +16,9 @@ public struct User: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-/// Cartoon-avatar settings: positions (0…1) into the client-defined skin and
-/// hair palettes plus accessory toggles. Rides on the User DTO so buddy lists
-/// and session participants always carry everyone's latest look; rendering is
-/// a client concern.
+/// Cartoon-avatar settings: positions into the client-defined skin and hair
+/// palettes, plus accessory toggles. Carried on `User` so buddy lists and
+/// participants always have everyone's current look.
 public struct Avatar: Codable, Hashable, Sendable {
     public var skinTone: Double
     public var hair: Double
@@ -28,9 +26,9 @@ public struct Avatar: Codable, Hashable, Sendable {
     public var cigarette: Bool
     /// A row of silver teeth over the mouth.
     public var grills: Bool
-    /// Parted in the middle and falling past the jaw, instead of the short crop.
+    /// Parted in the middle and past the jaw, instead of the short crop.
     public var longHair: Bool
-    /// Freehand drawing over the head; nil until its owner draws something.
+    /// Freehand drawing over the head.
     public var doodle: Doodle?
 
     public init(skinTone: Double = 0.25, hair: Double = 0.36,
@@ -45,8 +43,7 @@ public struct Avatar: Codable, Hashable, Sendable {
         self.doodle = doodle
     }
 
-    /// Every field defaults, so avatars encoded before a field existed still
-    /// decode; retired fields decode as unknown keys and are dropped.
+    /// Every field defaults, so avatars encoded before a field existed still decode.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         skinTone = try c.decodeIfPresent(Double.self, forKey: .skinTone) ?? 0.25
@@ -59,12 +56,10 @@ public struct Avatar: Codable, Hashable, Sendable {
     }
 }
 
-/// A drawing over the head: fixed-width freehand strokes, each in one colour
-/// of a client-defined palette. Points are quantised to a square grid laid
-/// over the head's box, so a point costs a few bytes and the wire never
-/// depends on how a client lays the head out. It is a stroke list rather than
-/// SVG because no platform here renders SVG text natively and a typed list
-/// needs no sanitising: `Codable` refuses anything that isn't a stroke, and
+/// A drawing over the head: fixed-width freehand strokes, each in one color of
+/// a client-defined palette. Points are quantized to a grid over the head's
+/// box, so the wire does not depend on how a client lays the head out. A typed
+/// stroke list needs no sanitizing: `Codable` rejects anything else and
 /// `isValid` bounds what a stroke may contain.
 public struct Doodle: Codable, Hashable, Sendable {
     public struct Stroke: Codable, Hashable, Sendable {
@@ -89,13 +84,13 @@ public struct Doodle: Codable, Hashable, Sendable {
     public static let gridSize = 256
     public static let paletteSize = 8
     public static let maxStrokes = 64
-    /// Total across all strokes. Sized so a maximal doodle stays well inside
-    /// Vapor's default 16 KB request body.
+    /// Total across all strokes, sized so a maximal doodle fits inside Vapor's
+    /// default 16 KB request body.
     public static let maxPoints = 1024
 
     public var pointCount: Int { strokes.reduce(0) { $0 + $1.points.count / 2 } }
 
-    /// The bounds the server enforces; clients keep themselves inside them.
+    /// The bounds the server enforces.
     public var isValid: Bool {
         guard strokes.count <= Self.maxStrokes, pointCount <= Self.maxPoints else { return false }
         return strokes.allSatisfy { stroke in
@@ -116,10 +111,10 @@ public struct Buddy: Codable, Identifiable, Hashable, Sendable {
     public let id: UUID
     public var user: User
     public var status: BuddyStatus
-    /// True when the other user initiated the request and we have not accepted yet.
+    /// The other user sent the request and it has not been accepted yet.
     public var incoming: Bool
-    /// For incoming pending requests: how many open (unaccepted) requests the
-    /// requester has outstanding. Drives pending-list ordering.
+    /// For incoming pending requests: how many unaccepted requests the
+    /// requester has outstanding. Orders the pending list.
     public var openRequestCount: Int?
 
     public init(id: UUID, user: User, status: BuddyStatus, incoming: Bool, openRequestCount: Int? = nil) {
@@ -150,16 +145,13 @@ public struct Presence: Codable, Hashable, Sendable {
 
     public static let offline = Presence(state: .offline)
 
-    /// What the server writes for a user it has just found unreachable: away,
-    /// but with nothing to say. Reusing `away` rather than adding a state keeps
-    /// this legible to builds that predate it — an unknown `PresenceState` case
-    /// would fail to decode and take the whole frame with it.
+    /// What the server writes for a user it has found unreachable: away with
+    /// no message. `away` is reused rather than adding a state, since an
+    /// unknown `PresenceState` case fails to decode and takes the frame with it.
     public static let unreachable = Presence(state: .away)
 
-    /// True for the shape above. A user can only go away by writing a message
-    /// (`PresenceStateMachine` derives `away` from the message's existence, and
-    /// rejects an empty one), so a message-less away is always the server's
-    /// mark and never the user's own.
+    /// A message-less away is always the server's mark: clients derive `away`
+    /// from having a message and reject an empty one.
     public var isUnreachableMark: Bool { state == .away && awayMessage == nil }
 }
 
@@ -181,7 +173,7 @@ public struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     public var senderID: UUID
     public var body: String
     public var sentAt: Date
-    /// Spoken rather than typed. Absent from clients that predate dictation.
+    /// Spoken rather than typed.
     public var dictated: Bool?
 
     public init(id: UUID, sessionID: UUID, senderID: UUID, body: String, sentAt: Date,
@@ -218,23 +210,19 @@ public struct PushSettings: Codable, Sendable {
 public enum Limits {
     public static let maxBuddies = 100
     public static let awayMessageMaxLength = 140
-    /// An iroh endpoint ticket is a couple of hundred characters; anything
-    /// past this is not one.
+    /// An iroh endpoint ticket runs a few hundred characters.
     public static let endpointTicketMaxLength = 1024
     public static let handleLength = 3...16
-    /// At most one sign-on *push* per buddy per rolling 15 minutes (spec §7
-    /// asked for 30). Pushes alone, because they interrupt someone who isn't
-    /// using the app; a local alert only reaches a user already watching the
-    /// buddy list, and is raised on every sign-on.
+    /// At most one sign-on push per buddy per rolling window. Pushes only:
+    /// local alerts reach a user already watching the buddy list and are never
+    /// throttled.
     public static let signOnPushThrottle: TimeInterval = 15 * 60
     public static let botPromptMaxLength = 2000
     public static let botReplyMaxLength = 1500
-    /// Ceilings on the transcript a context tag sends. The newest messages are
-    /// kept: a conversation long enough to hit these is one where the recent
-    /// turns are what the prompt is about.
+    /// Ceilings on the transcript a context tag sends; the newest messages are kept.
     public static let botContextMaxMessages = 60
     public static let botContextMaxCharacters = 8000
-    /// A bot answers within this or it says so instead.
+    /// A bot answers within this or the dispatcher says so instead.
     public static let botResponseTimeout: TimeInterval = 20
     /// Bot invocations one user may start per rolling minute.
     public static let botInvocationsPerMinute = 6

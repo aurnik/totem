@@ -7,33 +7,27 @@ enum YouTubeExtension: ChatExtension {
     static let symbol = "play.fill"
 }
 
-/// A video everyone in the chat watches together. There's no chrome of our
-/// own: the picture is the whole control surface — tap to toggle playback,
-/// double-tap either edge to skip — and every action moves the shared stage,
-/// so it lands for everyone at once. Each device plays locally; nothing
-/// streams through Totem.
+/// A video everyone in the chat watches together. The picture is the whole
+/// control surface: tap to toggle playback, double-tap either edge to skip.
+/// Every action moves the shared stage, and each device plays locally.
 struct YouTubeStageView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.stageBox) private var stageBox
     let conversationID: UUID
     let youtube: YouTubeState
 
-    /// Fraction of the width at each side that counts as an edge. The gap in
-    /// the middle keeps a double-tap aimed at the picture from being read as a
-    /// skip in whichever direction happens to be nearer.
+    /// Fraction of the width at each side that counts as an edge; the gap in the
+    /// middle is neither, so a centered double-tap does not skip.
     private static let edgeFraction: CGFloat = 0.35
 
-    /// Last position the player reported, so seeking and pausing work from
-    /// where playback really is rather than where the shared clock estimated.
-    /// Held in a reference box because it changes every couple of seconds and
-    /// is only read on demand — as `@State` it would re-render the
-    /// conversation continuously for the whole time a video is playing.
+    /// Last position the player reported, so seeking and pausing work from where
+    /// playback really is. A reference box rather than `@State`: it changes every
+    /// couple of seconds and would otherwise re-render the whole conversation.
     @MainActor final class PositionBox { var value: Double? }
     @State private var position = PositionBox()
     @State private var unplayable = false
     @State private var width: CGFloat = 0
-    /// Briefly shown after a skip, since a jump with no feedback reads as a
-    /// glitch. Nil when nothing happened recently.
+    /// Briefly shown after a skip, nil otherwise.
     @State private var skipped: Skip?
     /// Fixed at first render: the page URL carries the starting position, and
     /// re-deriving it on every update would reload the web view mid-video.
@@ -51,9 +45,8 @@ struct YouTubeStageView: View {
                     onTime: { position.value = $0 },
                     onEnded: { send(.ended) },
                     onUnplayable: { unplayable = true })
-                    // The web view never takes a tap: YouTube's own controls
-                    // would change playback for one person and desync the
-                    // rest, so the gestures below are the only way in.
+                    // YouTube's own controls would desync one viewer, so the
+                    // gestures below are the only way in.
                     .allowsHitTesting(false)
             }
             skipIndicator
@@ -75,8 +68,7 @@ struct YouTubeStageView: View {
             }
         }
         .contentShape(Rectangle())
-        // Declared before the single tap so a second tap is given the chance
-        // to arrive before the first is treated as a play/pause.
+        // Declared before the single tap so a second tap can arrive first.
         .onTapGesture(count: 2) { location in skip(at: location) }
         .onTapGesture { togglePlayback() }
         .onAppear {
@@ -105,8 +97,8 @@ struct YouTubeStageView: View {
         }
     }
 
-    /// Nil unless the conversation is too short to give the video its full
-    /// width — a cap bigger than the picture would be claimed as empty bands.
+    /// Nil unless the conversation is too short for the video's full width; a cap
+    /// bigger than the picture would be claimed as empty bands.
     private var heightCap: CGFloat? {
         guard stageBox.width > 0 else { return nil }
         let natural = stageBox.width * 9 / 16
@@ -130,8 +122,6 @@ struct YouTubeStageView: View {
         } else if location.x >= width - edge {
             direction = .forward
         } else {
-            // The middle is neither edge; leave the playhead alone rather than
-            // guessing which way was meant.
             return
         }
         let delta = direction == .back ? -YouTubeAction.skipInterval : YouTubeAction.skipInterval

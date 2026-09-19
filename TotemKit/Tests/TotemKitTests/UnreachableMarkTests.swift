@@ -1,9 +1,8 @@
 import XCTest
 @testable import TotemKit
 
-/// The server marks a user it can't reach as away with no message. That shape
-/// is only meaningful because clients can't produce it themselves — these pin
-/// down the invariant the whole scheme rests on.
+/// The server marks an unreachable user as away with no message, a shape
+/// clients cannot produce. These pin that invariant down.
 final class UnreachableMarkTests: XCTestCase {
     func testAwayWithNoMessageIsRecognizedAsTheServersMark() {
         XCTAssertTrue(Presence.unreachable.isUnreachableMark)
@@ -12,9 +11,7 @@ final class UnreachableMarkTests: XCTestCase {
         XCTAssertFalse(Presence.offline.isUnreachableMark)
     }
 
-    /// The client derives `away` from having a message, so no sequence of user
-    /// actions produces the server's mark — otherwise a reconnect would clear
-    /// an away the user had set on purpose.
+    /// No sequence of user actions produces a message-less away.
     func testAClientCanNeverPutItselfAwayWithoutAMessage() {
         var machine = PresenceStateMachine()
         machine.handle(.signOn)
@@ -33,10 +30,7 @@ final class UnreachableMarkTests: XCTestCase {
                 .isUnreachableMark)
     }
 
-    /// Reusing `away` rather than adding a `PresenceState` case is what lets
-    /// this ship without breaking installed builds: the mark is an ordinary
-    /// presence frame, and a new enum case would fail to decode and take the
-    /// whole frame with it.
+    /// The mark is an ordinary presence frame; a new enum case would fail to decode.
     func testTheMarkIsAnOrdinaryPresenceFrameOnTheWire() throws {
         let encoded = try WireCoder.encoder().encode(
             ServerFrame.presence(userID: UUID(), presence: .unreachable))

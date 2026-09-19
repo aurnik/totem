@@ -4,8 +4,7 @@ import UserNotifications
 import UIKit
 #endif
 
-/// The icon badge, and local sign-on banners for users who asked for them.
-/// Permission is requested contextually once buddies exist, never at launch.
+/// The icon badge, and local sign-on banners for users who opted in.
 @MainActor
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
@@ -24,17 +23,15 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// How many buddies are online, on the app icon. The server pushes the
-    /// same number while the app is closed; this keeps the two agreeing
-    /// while it's open.
+    /// same number while the app is closed.
     func showOnlineCount(_ count: Int) {
         #if os(iOS)
         UNUserNotificationCenter.current().setBadgeCount(count)
         #endif
     }
 
-    /// APNs registration for server-side sign-on pushes. Harmless on builds
-    /// without the push entitlement (dev builds) — registration just fails
-    /// via the delegate and no token is ever sent.
+    /// APNs registration for server-side sign-on pushes. On a build without
+    /// the push entitlement this fails via the delegate and sends no token.
     private func registerForRemotePushes() {
         #if os(iOS)
         UIApplication.shared.registerForRemoteNotifications()
@@ -47,16 +44,15 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.body = "signed on"
         content.sound = .default
         content.threadIdentifier = userID.uuidString
-        // A fresh identifier per alert: reusing one replaces the buddy's
-        // previous notice instead of stacking a new one beside it.
+        // A fresh identifier per alert; reusing one replaces the previous.
         let request = UNNotificationRequest(
             identifier: "signon-\(userID.uuidString)-\(UUID().uuidString)",
             content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 
-    /// Show banners even while the app is frontmost — presence updates only
-    /// arrive while the socket is alive, which on iOS means foregrounded.
+    /// Banners show even while frontmost: presence updates only arrive while
+    /// the socket is alive, which on iOS means foregrounded.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,

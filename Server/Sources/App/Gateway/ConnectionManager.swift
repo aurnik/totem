@@ -2,26 +2,24 @@ import Foundation
 import TotemKit
 import Vapor
 
-/// One live socket per user. With the 100-buddy cap, fan-out is a direct loop
-/// over connected buddies — no pub/sub topology in v1 (spec §4).
+/// One live socket per user. Under the 100-buddy cap, fan-out is a direct loop
+/// over connected buddies rather than pub/sub.
 actor ConnectionManager {
     private var sockets: [UUID: WebSocket] = [:]
-    /// Bumped on every register; lets the 90s offline-grace task tell whether
-    /// the user reconnected while it slept.
+    /// Bumped on every register, so the offline-grace task can tell whether the
+    /// user reconnected while it slept.
     private var generations: [UUID: Int] = [:]
     private var lastActivity: [UUID: Date] = [:]
     private var lastPong: [UUID: Date] = [:]
-    /// The 1:1 conversation each connection reports having on screen. State
-    /// of the socket, not the user: it's cleared wherever a socket is dropped
-    /// or replaced, and a fresh socket has nothing on screen until it says so.
+    /// The 1:1 conversation each connection reports having on screen. Socket
+    /// state, not user state: a fresh socket has nothing on screen until it says so.
     private var viewing: [UUID: Viewing] = [:]
 
     struct Viewing: Equatable {
         let conversationID: UUID
         let peerID: UUID
     }
-    /// Each connection's live-voice endpoint ticket, socket state the same
-    /// way: a fresh socket has none until it announces one.
+    /// Each connection's peer endpoint ticket, socket state in the same way.
     private var endpoints: [UUID: String] = [:]
 
     func register(_ ws: WebSocket, for userID: UUID) async -> Int {
@@ -35,7 +33,7 @@ actor ConnectionManager {
         return generation
     }
 
-    /// True when this socket was the live one and is now gone; false when a
+    /// True when this socket was the live one and is now gone, false when a
     /// newer socket had already replaced it.
     func unregister(_ userID: UUID, ifStill ws: WebSocket) -> Bool {
         guard sockets[userID] === ws else { return false }
@@ -52,7 +50,7 @@ actor ConnectionManager {
         endpoints[userID]
     }
 
-    /// Returns what they were viewing before, so the caller can tell that peer.
+    /// Returns the previous target, so the caller can tell that peer.
     func setViewing(_ target: Viewing?, for userID: UUID) -> Viewing? {
         let previous = viewing[userID]
         viewing[userID] = target
@@ -87,10 +85,9 @@ actor ConnectionManager {
         lastActivity[userID] = Date()
     }
 
-    /// A registered socket isn't proof of a live app: a suspended or killed
-    /// iOS app leaves the connection open and silent. A protocol ping needs
-    /// the client's runtime to answer, so no pong within the timeout means
-    /// dead. Recent inbound traffic short-circuits the round trip.
+    /// A registered socket is no proof of a live app, since a suspended iOS app
+    /// leaves the connection open and silent. Answering a protocol ping needs
+    /// the client's runtime; recent inbound traffic short-circuits the round trip.
     func verifyAlive(_ userID: UUID, timeout: TimeInterval = 3) async -> Bool {
         guard let ws = sockets[userID] else { return false }
         if let recent = lastActivity[userID], Date().timeIntervalSince(recent) < 5 {
@@ -106,8 +103,8 @@ actor ConnectionManager {
         return false
     }
 
-    /// Force-close a connection whose heartbeats have gone silent. Bumps the
-    /// generation so any pending offline-grace task for the old socket no-ops.
+    /// Force-closes a silent connection, bumping the generation so a pending
+    /// offline-grace task for the old socket no-ops.
     func expire(_ userID: UUID) async {
         if let ws = sockets.removeValue(forKey: userID) {
             try? await ws.close(code: .goingAway)

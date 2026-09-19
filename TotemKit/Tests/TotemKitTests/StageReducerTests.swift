@@ -35,8 +35,7 @@ final class StageReducerTests: XCTestCase {
         XCTAssertEqual(state.positionAt, t0)
     }
 
-    /// The product call: picking a video always takes over, so a stale pick
-    /// can't be silently dropped.
+    /// Picking a video always takes over the stage.
     func testSetVideoReplacesWhatWasPlayingRegardlessOfVersion() {
         let first = updated(StageReducer.reduce(nil, video("one"), by: me, expectedVersion: nil, at: t0))!
         let second = updated(StageReducer.reduce(first, video("two"), by: me, expectedVersion: nil, at: t0))!
@@ -68,9 +67,7 @@ final class StageReducerTests: XCTestCase {
         XCTAssertEqual(youtube(resumed).positionSeconds, 47)
     }
 
-    /// Every client with the chat open reports the video ending. The first
-    /// wins; re-reporting an already-paused stage must not rebroadcast, or
-    /// everyone re-seeks on each duplicate.
+    /// Re-reporting an already-paused stage does not rebroadcast.
     func testSetPlayingToCurrentValueIsUnchangedAndNotBroadcast() {
         let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let outcome = StageReducer.reduce(started, .youtube(.setPlaying(true, positionSeconds: 12)),
@@ -92,8 +89,7 @@ final class StageReducerTests: XCTestCase {
         XCTAssertEqual(sought.version, 2)
     }
 
-    /// Skipping back past the start clamps rather than going negative, which
-    /// would make `position(at:)` run backwards for everyone.
+    /// Skipping back past the start clamps rather than going negative.
     func testSeekBeforeZeroClamps() {
         let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         let sought = updated(StageReducer.reduce(started, .youtube(.seek(positionSeconds: -15)),
@@ -101,8 +97,7 @@ final class StageReducerTests: XCTestCase {
         XCTAssertEqual(youtube(sought).positionSeconds, 0)
     }
 
-    /// A skip is aimed at what the sender was watching, so it must not land on
-    /// a video someone else just put on.
+    /// A skip aimed at a replaced video is refused.
     func testSeekWithStaleVersionIsRejected() {
         let first = updated(StageReducer.reduce(nil, video("one"), by: me, expectedVersion: nil, at: t0))!
         let second = updated(StageReducer.reduce(first, video("two"), by: me, expectedVersion: nil, at: t0))!
@@ -130,9 +125,7 @@ final class StageReducerTests: XCTestCase {
         XCTAssertEqual(outcome, .cleared)
     }
 
-    /// Everyone watching reports the end at slightly different moments. The
-    /// first clears the stage; the rest must not clear it again, or the chat
-    /// gets a burst of duplicate frames.
+    /// Only the first end report clears the stage.
     func testSecondEndReportFindsNothingLeftAndIsRefused() {
         let started = updated(StageReducer.reduce(nil, video(), by: me, expectedVersion: nil, at: t0))!
         XCTAssertEqual(StageReducer.reduce(started, .youtube(.ended),
@@ -142,8 +135,7 @@ final class StageReducerTests: XCTestCase {
                                            by: me, expectedVersion: started.version, at: t0), .rejected)
     }
 
-    /// A stale end report — the video already changed — must not take down
-    /// whatever is playing now.
+    /// A stale end report does not take down whatever is playing now.
     func testEndedWithStaleVersionIsRejected() {
         let first = updated(StageReducer.reduce(nil, video("one"), by: me, expectedVersion: nil, at: t0))!
         let second = updated(StageReducer.reduce(first, video("two"), by: me, expectedVersion: nil, at: t0))!
@@ -187,7 +179,7 @@ final class StageReducerTests: XCTestCase {
         XCTAssertEqual(held.position(at: t0.addingTimeInterval(5)), 10, accuracy: 0.001)
     }
 
-    /// Clocks can disagree; a snapshot must never rewind past where it started.
+    /// A snapshot never rewinds past where it started, even if clocks disagree.
     func testPositionNeverGoesBackwardsForAnEarlierClock() {
         let live = YouTubeState(videoID: "a", title: "t", isPlaying: true,
                                 positionSeconds: 10, positionAt: t0)

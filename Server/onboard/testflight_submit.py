@@ -1,12 +1,14 @@
 """Submit a processed TestFlight build to the external tester group.
 
-Uploading a build only puts it in App Store Connect; external testers see
-nothing until the build is attached to their group and passes Beta App Review.
-Both steps are API-driven, and both have prerequisites Apple rejects the
-submission without: export-compliance answered, "What to Test" notes present,
-and the app's beta review contact details on file.
+    testflight_submit.py --status
+    testflight_submit.py --commits <build-number>
+    testflight_submit.py --submit <build-number> [--notes-file <path>] [--dry-run] [--notify]
+    testflight_submit.py --expire-previous <build-number> [--dry-run]
 
-Run with --status to inspect without changing anything.
+Uploading a build only puts it in App Store Connect. External testers see
+nothing until it is attached to their group and passes Beta App Review, which
+also needs export compliance answered, "What to Test" notes, and beta review
+contact details on file.
 
 Env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH (same key as provision.py).
 """
@@ -69,8 +71,7 @@ def latest_build(app, version=None):
 
 
 def previous_version(app, current):
-    """Highest build number below `current`. Zero-padded stamps of equal width,
-    so string ordering is chronological."""
+    """Highest build number below `current`; equal-width stamps sort chronologically."""
     versions = sorted(
         (b["attributes"]["version"]
          for b in api("GET", f"builds?filter[app]={app}&limit=200")["data"]),
@@ -79,13 +80,10 @@ def previous_version(app, current):
 
 
 def commit_titles(previous, current):
-    """Commit subjects this build carries. testflight.sh stamps build numbers
-    with `date +%Y%m%d%H%M`, so two of them bound the range directly — no tag
-    or recorded SHA needed."""
+    """Commit subjects this build carries, bounded by the two build-number timestamps."""
     def when(stamp):
-        # Stamps have minute resolution and a build is archived from the
-        # working tree, usually a moment before its commit lands, so a
-        # build's minute belongs to it whole.
+        # Stamps have minute resolution, and a build is archived just before
+        # its commit lands, so the whole minute belongs to the build.
         return f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[8:10]}:{stamp[10:12]}:59"
 
     result = subprocess.run(
@@ -178,15 +176,11 @@ def add_to_group(group_id, build_id):
 
 
 def set_auto_notify(build_id, enabled):
-    """Whether TestFlight emails every tester the moment the build goes live.
+    """Whether TestFlight emails every tester when the build goes live.
 
-    Off unless asked for: builds go out several times a day here, and an inbox
-    that fills with them is one nobody reads on the release that matters.
-    Testers still get the build — silently if their TestFlight auto-updates,
-    otherwise next time they open it — and expiring the older builds means
-    anyone who fell behind is told to update by the app itself rather than by
-    a mail they've learned to ignore. Must run before the build reaches an
-    external group, since that is what sends the mail.
+    Off unless asked for; testers get the build either way, and the in-app
+    banner tells anyone who falls behind. Must run before the build reaches an
+    external group, which is what sends the mail.
     """
     detail = api("GET", f"builds/{build_id}/buildBetaDetail")["data"]["id"]
     api("PATCH", f"buildBetaDetails/{detail}",
@@ -209,15 +203,10 @@ def submit_for_review(build_id):
 def announce_build_to_server(version):
     """Tell the server which build testers can now install.
 
-    The in-app banner reads this off the welcome frame, so the number has to
-    reach the server's environment — which Railway only re-injects by
-    deploying. That deploy is also what delivers it: every client reconnects,
-    gets a fresh welcome, and the ones left behind start showing the banner.
-    The bounce lands inside the presence grace, so nobody flaps offline.
-
-    Never fatal. It runs after the build is already submitted, and a release
-    that shipped but didn't announce itself is a missing banner, not a broken
-    release — recoverable by setting the variable by hand.
+    The in-app banner reads this off the welcome frame, and Railway only
+    re-injects the variable by deploying; that deploy is what delivers it, and
+    the bounce lands inside the presence grace. Never fatal: a failure here is
+    a missing banner, fixable by setting the variable by hand.
     """
     try:
         subprocess.run(["railway", "variable", "set", f"LATEST_CLIENT_BUILD={version}"],
@@ -238,10 +227,9 @@ def expire_build(build_id):
 def expire_previous(app, keep_version, dry_run=False):
     """Retire every older build once the new one is live.
 
-    TestFlight keeps offering builds until they expire, so a tester who
-    reinstalls can land on an old one — and this app's client and server ship
-    together, so an old client is one that talks to a server that has moved
-    past it. Expiring leaves exactly one installable build.
+    TestFlight keeps offering builds until they expire, and client and server
+    ship together, so a reinstalled old build would talk to a server that has
+    moved past it.
     """
     builds = api("GET", f"builds?filter[app]={app}&limit=50&sort=-version")["data"]
     retired = 0
@@ -297,8 +285,7 @@ def submit(version, notes=None, dry_run=False, notify=False):
         name = group["attributes"]["name"]
         print(f"group {name}: {add_to_group(group['id'], build_id)}")
     print(f"review submission: {submit_for_review(build_id)}")
-    # Last, so a failure earlier leaves the old builds installable rather than
-    # retiring them in favour of one that never shipped.
+    # Last, so an earlier failure leaves the old builds installable.
     expire_previous(app, version)
     print(f"announce: {announce_build_to_server(version)}")
 

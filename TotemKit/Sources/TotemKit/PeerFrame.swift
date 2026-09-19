@@ -1,46 +1,25 @@
 import Foundation
 
-/// Frames that travel between peers over the iroh link's ordered stream —
-/// everything conversation-shaped, which the server no longer sees. Encoded
-/// with `WireCoder` like the socket frames, so the same compatibility rules
-/// apply: an optional new field is safe in both directions, a new case needs
-/// both ends updated.
-///
-/// The receiver never trusts a frame about who sent it: `PeerLink` stamps the
-/// sender from the authenticated connection, and a frame is applied only for
-/// a conversation that sender is actually in.
+/// Frames exchanged directly between peers over the iroh link's ordered
+/// stream. `PeerLink` stamps the sender from the authenticated connection, and
+/// a frame is applied only for a conversation that sender belongs to.
 public enum PeerFrame: Codable, Hashable, Sendable {
-    /// `sessionID` carries the conversation ID; `id` and `sentAt` are the
-    /// sender's own, there being no server left to mint them.
     case message(ChatMessage)
-    /// The receiver got a message and accepted it. A QUIC write completes
-    /// when the bytes reach the local send buffer, not the peer, so this is
-    /// the only evidence of delivery there is: a message nobody acknowledges
-    /// in time was not delivered.
+    /// The only evidence of delivery: a write completes at the local send buffer.
     case ack(messageID: UUID)
     case typing(conversationID: UUID)
-    /// The sender can't hear the conversation's live audio right now, or can
-    /// again.
     case audioMuted(conversationID: UUID, muted: Bool)
-    /// Sent to the stage's owner only, who runs the reducer and answers with
-    /// `stage`. `expectedVersion` is what the sender was looking at, so a
-    /// conditional action aimed at a stage that has since moved is dropped.
+    /// Sent to the stage's owner, who runs the reducer and answers with `stage`.
     case stageAction(conversationID: UUID, action: StageAction, expectedVersion: Int?)
-    /// Sent to the owner: take the stage down.
     case stageClose(conversationID: UUID)
-    /// Asked of everyone in the conversation; only the owner answers.
+    /// Asked of everyone; only the owner answers.
     case stageRequest(conversationID: UUID)
-    /// The stage, from its owner — the one party whose word counts for it.
-    /// `actorID` is whoever acted, and nil for a snapshot or a re-sync after a
-    /// refused action, so only real changes post a transcript notice.
+    /// `actorID` is nil for a snapshot or re-sync, so only changes post a notice.
     case stage(conversationID: UUID, stage: Stage?, actorID: UUID?)
 }
 
-/// Length-prefixed framing for `PeerFrame` on a byte stream: a big-endian
-/// 32-bit length, then the JSON.
+/// Length-prefixed framing: a big-endian 32-bit length, then the JSON.
 public enum PeerWire {
-    /// Nothing legitimate comes near this; a peer sending more is broken or
-    /// hostile, and the stream carrying it is dropped.
     public static let maxFrameBytes = 256 * 1024
 
     public enum Error: Swift.Error, Equatable {
@@ -56,9 +35,7 @@ public enum PeerWire {
         return data
     }
 
-    /// Reassembles frames from a stream read in arbitrary chunks. A frame that
-    /// doesn't decode — a case this build predates — is skipped, since the
-    /// framing around it is intact; only an oversize length is fatal.
+    /// A frame that fails to decode is skipped, since the framing is intact.
     public struct Decoder {
         private var buffer = Data()
 

@@ -1,10 +1,9 @@
 import SwiftUI
 import TotemKit
 
-/// One field that takes either a search or a pasted link, because the server's
-/// YouTube key is optional — without it search 404s and pasting is the whole
-/// interface. Picking a result puts it on the stage for everyone immediately;
-/// there's no confirm step and no queue.
+/// One field taking either a search or a pasted link: the server's YouTube key
+/// is optional, and without it search 404s and pasting is the whole interface.
+/// Picking a result puts it straight on the stage.
 struct YouTubePickerSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -15,8 +14,6 @@ struct YouTubePickerSheet: View {
     @State private var searching = false
     @State private var message: String?
 
-    /// A pasted link resolves locally through YouTube's keyless oEmbed
-    /// endpoint, so it works even when the server has no API key.
     private var pastedVideoID: String? {
         Self.videoID(fromURL: query)
     }
@@ -58,7 +55,7 @@ struct YouTubePickerSheet: View {
                 }
             }
             .onChange(of: query) {
-                // A pasted link needs no search, and no button either.
+                // A pasted link needs no search.
                 if pastedVideoID != nil { run() }
             }
         }
@@ -117,8 +114,8 @@ struct YouTubePickerSheet: View {
         }
     }
 
-    /// oEmbed needs no API key, so a pasted link works regardless of server
-    /// configuration. If it fails the ID is still good enough to play.
+    /// oEmbed needs no API key, so a pasted link resolves whatever the server is
+    /// configured with. If it fails, the ID alone is still playable.
     private func resolvePasted(_ videoID: String) async {
         searching = true
         defer { searching = false }
@@ -148,8 +145,7 @@ struct YouTubePickerSheet: View {
         let thumbnail_url: String?
     }
 
-    /// Recognises the link shapes people actually paste, including the mobile
-    /// share and Shorts forms.
+    /// Recognizes the watch, youtu.be, Shorts and embed link shapes.
     static func videoID(fromURL text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URLComponents(string: trimmed), let host = url.host,

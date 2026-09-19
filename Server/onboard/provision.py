@@ -1,13 +1,12 @@
-"""Ensure signing prerequisites exist, all via the App Store Connect API:
-the bundle ID, an Apple Distribution certificate (created with a locally
-generated key, imported into the dedicated signing keychain), and a fresh
-App Store provisioning profile.
+"""Ensure signing prerequisites via the App Store Connect API.
 
-Profiles are immutable, so the profile is recreated on every run.
-Idempotent otherwise.
+    provision.py
 
-Env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH. State lives in
-~/.appstoreconnect/dist/.
+Ensures the bundle ID, an Apple Distribution certificate in the signing
+keychain, and the App Store provisioning profile. Profiles are immutable, so
+that one is recreated every run; everything else is idempotent.
+
+Env: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH. State in ~/.appstoreconnect/dist/.
 """
 import base64
 import json
@@ -24,12 +23,12 @@ BUNDLE_ID = "com.deadsimple.totem"
 APPSTORE_PROFILE_NAME = "Totem AppStore"
 API = "https://api.appstoreconnect.apple.com/v1"
 STATE = os.path.expanduser("~/.appstoreconnect/dist")
-# Dedicated signing keychain so codesign works headless: the login keychain
-# is locked in ssh sessions, this one we can unlock with a known password.
+# Dedicated signing keychain so codesign works headless; the login keychain is
+# locked in ssh sessions.
 KEYCHAIN = os.path.expanduser("~/Library/Keychains/totem-signing.keychain-db")
 KEYCHAIN_PASS = "totem-signing"
-# System LibreSSL, never Homebrew OpenSSL 3: its default PKCS12 format
-# (AES + PBKDF2 MAC) is rejected by `security import`.
+# System LibreSSL, not Homebrew OpenSSL 3, whose default PKCS12 format is
+# rejected by `security import`.
 OPENSSL = "/usr/bin/openssl"
 
 
@@ -109,7 +108,7 @@ def ensure_certificate():
 
 
 def ensure_keychain():
-    # First run on a fresh machine: the WWDR downloads below land in STATE.
+    # The WWDR downloads below land in STATE.
     os.makedirs(STATE, exist_ok=True)
     if not os.path.exists(KEYCHAIN):
         run("security", "create-keychain", "-p", KEYCHAIN_PASS, KEYCHAIN)
@@ -119,7 +118,7 @@ def ensure_keychain():
     if "totem-signing" not in listed:
         existing = [line.strip().strip('"') for line in listed.splitlines() if line.strip()]
         run("security", "list-keychains", "-d", "user", "-s", KEYCHAIN, *existing)
-    # Apple's WWDR intermediates, or codesign can't build the cert chain.
+    # Apple's WWDR intermediates, without which codesign cannot build the chain.
     for generation in ("G3", "G4", "G5", "G6"):
         cer = f"{STATE}/wwdr{generation}.cer"
         if not os.path.exists(cer):
@@ -132,9 +131,7 @@ def ensure_keychain():
 
 
 def import_into_keychain(cert):
-    """Build a p12 from our key + the issued cert and import it into the
-    signing keychain, pre-authorized for codesign so nothing ever prompts.
-    Idempotent — reimport of an existing identity fails and is ignored."""
+    """Import the key and issued cert into the signing keychain, pre-authorized for codesign."""
     cer_path = f"{STATE}/dist.cer"
     pem_path = f"{STATE}/dist.pem"
     p12_path = f"{STATE}/dist.p12"

@@ -1,8 +1,7 @@
 import SwiftUI
 import TotemKit
 
-/// Primary screen: grouped by state — online, away, idle, then offline collapsed.
-/// Alphabetical within group, no algorithmic ordering (spec §6).
+/// Primary screen. Grouped by presence state, alphabetical within a group.
 struct BuddyListView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
@@ -91,8 +90,8 @@ struct BuddyListView: View {
     }
 
     /// Testers are not emailed about new builds, so the app says so itself.
-    /// The TestFlight scheme opens the app's page with its Update button; the
-    /// public join link is the fallback for a phone without TestFlight.
+    /// The `itms-beta` scheme opens the app's TestFlight page; the public join
+    /// link is the fallback for a phone without TestFlight.
     @ViewBuilder
     private var updateBanner: some View {
         if model.updateAvailable, let appID = Self.testFlightAppID {
@@ -132,8 +131,8 @@ struct BuddyListView: View {
 
     @ViewBuilder
     private var groupChatsSection: some View {
-        // Ended sittings stay in `groupSessions` so an open window keeps its
-        // roster, but a dead group isn't a chat you can enter from here.
+        // Ended sittings stay in `groupSessions` for open windows, but a dead
+        // group can't be entered from here.
         let groups = model.groupSessions.values
             .filter { !model.endedGroups.contains($0.session.id) }
             .sorted { $0.session.startedAt > $1.session.startedAt }
@@ -244,8 +243,7 @@ struct BuddyRow: View {
     #endif
     let buddy: Buddy
 
-    /// The pair conversation this row opens — computed from the two user IDs,
-    /// which is why tapping a name needs no round trip.
+    /// Computed from the two user IDs, so opening it needs no round trip.
     private var conversationID: UUID? {
         model.conversationID(with: buddy.user.id)
     }
@@ -256,13 +254,12 @@ struct BuddyRow: View {
 
     var body: some View {
         if model.presence(of: buddy).state == .offline || conversationID == nil {
-            // Offline friends are listed but not openable: the server refuses
-            // delivery to them, so there's no conversation to have.
+            // Offline friends are listed but not openable.
             label
         } else if let conversationID {
             #if os(iOS)
-            // Custom chevron so it can darken with unread state — the system
-            // NavigationLink accessory color isn't styleable.
+            // Custom chevron: the NavigationLink accessory color isn't
+            // styleable, and this one darkens with unread state.
             ZStack {
                 NavigationLink(value: conversationID) { EmptyView() }
                     .opacity(0)
@@ -307,9 +304,8 @@ struct BuddyRow: View {
     }
 }
 
-/// How long ago an offline buddy was last here, at a glance: "Just now" for
-/// the first hour, then "3hr", "2d", "1wk", "4mo", "1y". Hours are the finest
-/// unit, so re-rendering hourly is as often as the text can change.
+/// How long ago an offline buddy was last here: "Just now", "3hr", "2d",
+/// "1wk", "4mo", "1y". Hours are the finest unit, hence the hourly timeline.
 struct LastSeenLabel: View {
     let date: Date
 
@@ -335,8 +331,8 @@ struct LastSeenLabel: View {
     }
 }
 
-/// Sets or changes the away message; coming back is the "I'm Back" button on
-/// the user's own buddy-list row, not here. Recent messages are one tap.
+/// Sets or changes the away message. Coming back is the "I'm Back" button on
+/// the user's own buddy-list row.
 struct AwayMessageSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss

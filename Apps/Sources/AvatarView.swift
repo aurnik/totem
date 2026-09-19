@@ -1,10 +1,8 @@
 import SwiftUI
 import TotemKit
 
-/// Palette stops for the avatar sliders, as RGB triples so the same values
-/// drive the gradient tracks, the knob previews, and avatar rendering.
+/// Palette stops shared by the avatar sliders, knob previews, and rendering.
 enum AvatarPalette {
-    /// Pale white → dark brown.
     static let skin: [(Double, Double, Double)] = [
         (0.98, 0.89, 0.80),
         (0.94, 0.80, 0.64),
@@ -13,8 +11,7 @@ enum AvatarPalette {
         (0.42, 0.27, 0.16),
         (0.28, 0.18, 0.11),
     ]
-    /// Blonde → ginger → brunette → almost black → greys, stopping at medium
-    /// grey rather than running all the way to white.
+    /// Blonde through brunette to black, then grays, stopping at medium gray.
     static let hair: [(Double, Double, Double)] = [
         (0.92, 0.78, 0.44),
         (0.78, 0.42, 0.18),
@@ -42,17 +39,14 @@ enum AvatarPalette {
     }
 }
 
-/// Flat, angular character head — the design's SVG geometry (viewBox
-/// "20 0 80 85") rendered natively. Adapted from the original web component:
-/// everything static (face, hair, glasses, cigarette, grills, doodle) draws
-/// once into a cached Canvas, and only the smoke and the sparkles on the
-/// grills — present only while those are on — animate, in their own 30fps
-/// TimelineView so a lit cigarette never forces the head itself to redraw.
+/// Flat, angular character head drawn from the design's SVG geometry (viewBox
+/// "20 0 80 85"). Everything static draws once into a cached Canvas; only the
+/// smoke and grill sparkles animate, in their own 30fps TimelineView, so they
+/// never force the head to redraw.
 struct AvatarHeadView: View {
     var avatar: Avatar
     var size: CGFloat
-    /// Small list/badge renders skip the smoke and sparkles entirely — no
-    /// TimelineView, no per-frame work; the cigarette and grills still show.
+    /// False skips the smoke and sparkles; the cigarette and grills still show.
     var animated: Bool = true
 
     @Environment(\.colorScheme) private var colorScheme
@@ -93,17 +87,13 @@ struct AvatarHeadView: View {
     // MARK: - Static layers
 
     private func drawHead(in context: inout GraphicsContext, g: AvatarGeometry) {
-        // Face: heptagon, no stroke.
         context.fill(g.polygon([
             (60, 5), (90, 20), (95, 55), (85, 80), (35, 80), (25, 55), (30, 20),
         ]), with: .color(skin))
 
         if avatar.longHair {
-            // Parted in the middle: the crown dips to the part, the fringe sits
-            // higher than the crop's, and the sides fall past the face to the
-            // bottom of the box as strands of even width, bending three times
-            // and leaning slightly outward. The outer corners sit just outside
-            // the viewBox, in the margin the square frame leaves beside it.
+            // Parted in the middle, with the outer corners just outside the
+            // viewBox, in the margin the square frame leaves beside it.
             context.fill(g.polygon([
                 (60, 5), (78, 2), (96, 16), (100, 32), (97, 50), (102, 68),
                 (99, 85), (88, 78), (91, 68), (86, 50), (84, 31),
@@ -112,17 +102,15 @@ struct AvatarHeadView: View {
                 (24, 16), (42, 2),
             ]), with: .color(hairColor))
         } else {
-            // Bottom corners sit exactly on the face side edges
-            // (x = 90 + 20/7 and 30 - 20/7 at y=40) so the hair seams with
-            // the face silhouette — not rounded to integers on purpose.
+            // The unrounded bottom corners sit exactly on the face side edges at
+            // y=40, so the hair seams with the silhouette.
             context.fill(g.polygon([
                 (60, 2), (95, 18), (90 + 20.0 / 7, 40), (75, 35),
                 (60, 38), (45, 35), (30 - 20.0 / 7, 40), (25, 18),
             ]), with: .color(hairColor))
         }
 
-        // The doodle sits on the face and hair; glasses and the cigarette stay
-        // on top of it, since they are things worn over a face, not drawn on it.
+        // The doodle sits on the face and hair, under anything worn over it.
         if let doodle = avatar.doodle {
             for stroke in doodle.strokes {
                 let points = stride(from: 0, to: stroke.points.count - 1, by: 2).map {
@@ -141,8 +129,7 @@ struct AvatarHeadView: View {
 
     // MARK: - Adornments
 
-    /// One adornment by itself, in the head's coordinates. The settings grid
-    /// draws these alone through a geometry fitted to their own bounds.
+    /// One adornment by itself, in the head's coordinates.
     static func draw(_ adornment: Adornment, in context: inout GraphicsContext, g: AvatarGeometry) {
         switch adornment {
         case .glasses:
@@ -172,12 +159,10 @@ struct AvatarHeadView: View {
     // MARK: - Grills
 
     /// The row of teeth, in viewBox units. The cigarette's mouth end (x=75)
-    /// lands on the last tooth and is drawn over it, so both can be worn at once.
+    /// lands on the last tooth and is drawn over it.
     private static let grillsFrame = (x: 42.0, y: 64.0, width: 36.0, height: 9.5)
 
-    /// Silver lit from above: a bright lip, a dark band across the middle and
-    /// a second, softer highlight below it, which is what makes a flat fill
-    /// read as polished metal rather than grey paint.
+    /// Silver lit from above: bright lip, dark middle band, softer highlight below.
     private static let silver = Gradient(stops: [
         .init(color: Color(red: 0.99, green: 0.99, blue: 1.00), location: 0),
         .init(color: Color(red: 0.86, green: 0.88, blue: 0.91), location: 0.30),
@@ -209,8 +194,7 @@ struct AvatarHeadView: View {
         }
     }
 
-    /// Each slot is one sparkle that fires once per period; the offsets stagger
-    /// the slots so they never pop in unison.
+    /// One sparkle per slot, fired once per period; the offsets stagger them.
     private static let sparkleSlots: [(period: Double, offset: Double)] = [
         (1.3, 0.0), (1.7, 0.45), (1.1, 0.9), (2.1, 0.2), (1.5, 1.15),
     ]
@@ -224,8 +208,7 @@ struct AvatarHeadView: View {
             let phase = clock - Double(cycle) * slot.period
             guard phase < Self.sparkleLife else { continue }
             let t = phase / Self.sparkleLife
-            // A new spot every cycle, the same spot on every device for a
-            // given cycle, and no state kept between frames.
+            // Hashed, so the spot is stateless but agrees across devices.
             let (u, v) = Self.sparkleSpot(index, cycle)
             let center = g.p(f.x + 3 + u * (f.width - 6), f.y + 1.5 + v * (f.height - 3))
             let envelope = sin(t * .pi)
@@ -246,7 +229,7 @@ struct AvatarHeadView: View {
         }
     }
 
-    /// Splits a slot and cycle number into two independent 0…1 coordinates.
+    /// Splits a slot and cycle number into two independent 0...1 coordinates.
     private static func sparkleSpot(_ index: Int, _ cycle: Int) -> (Double, Double) {
         var h = UInt64(bitPattern: Int64(cycle)) &* 0x9E37_79B9_7F4A_7C15
         h &+= UInt64(index) &* 0xBF58_476D_1CE4_E5B9
@@ -269,10 +252,10 @@ struct AvatarHeadView: View {
         return path
     }
 
-    // MARK: - Smoke (the web version's SMIL keyframes, interpolated per frame)
+    // MARK: - Smoke
 
-    /// A wavy stroke morphing between two coordinate sets (the SMIL A;B;A
-    /// cycle): start point then quad-curve (control, end) pairs, flattened.
+    /// A wavy stroke morphing between two coordinate sets: start point then
+    /// quad-curve (control, end) pairs, flattened.
     private struct Wisp {
         let width: Double
         let duration: Double
@@ -312,8 +295,7 @@ struct AvatarHeadView: View {
     private func drawSmoke(
         in context: inout GraphicsContext, g: AvatarGeometry, color: Color, time: Double
     ) {
-        // The web version masked the smoke with a bottom-to-top fade
-        // (1 → 0.5 at 60% → 0); a gradient stroke is the same thing cheaper.
+        // Bottom-to-top fade, as a gradient stroke rather than a mask.
         let fade = Gradient(stops: [
             .init(color: color, location: 0),
             .init(color: color.opacity(0.5), location: 0.6),
@@ -324,7 +306,7 @@ struct AvatarHeadView: View {
 
         for wisp in Self.wisps {
             let phase = (time / wisp.duration).truncatingRemainder(dividingBy: 1)
-            // A;B;A cycle → triangle wave.
+            // A-to-B-to-A cycle, as a triangle wave.
             let t = 1 - abs(2 * phase - 1)
             var path = Path()
             path.move(to: g.p(lerp(wisp.a[0], wisp.b[0], t), lerp(wisp.a[1], wisp.b[1], t)))
@@ -358,7 +340,7 @@ struct AvatarHeadView: View {
         }
     }
 
-    /// The mask gradient's alpha at a viewBox height (span y=80 down to 10).
+    /// The fade gradient's alpha at a viewBox height (span y=80 down to 10).
     private func fadeAlpha(atY y: Double) -> Double {
         let location = min(max((80 - y) / 70, 0), 1)
         return location <= 0.6
@@ -370,7 +352,7 @@ struct AvatarHeadView: View {
         a + (b - a) * t
     }
 
-    /// SMIL-style evenly spaced linear keyframes.
+    /// Evenly spaced linear keyframes.
     private func keyframe(_ values: [Double], _ phase: Double) -> Double {
         let position = phase * Double(values.count - 1)
         let index = min(Int(position), values.count - 2)
@@ -378,17 +360,13 @@ struct AvatarHeadView: View {
     }
 }
 
-/// A user's avatar wherever one appears inline. Users who haven't published
-/// one (a friend still on an older build) get nothing at all — the unset
-/// default look is only ever shown to its owner, in settings.
+/// A user's avatar wherever one appears inline. Users who have published none
+/// render nothing: the unset default look is only shown to its owner.
 struct UserAvatar: View {
     let avatar: Avatar?
     var size: CGFloat = 28
-    /// Handle to fall back to when this user has published no avatar. Supply
-    /// it only where the slot itself carries information — who is speaking,
-    /// who a row is about — since losing it would lose that. Purely decorative
-    /// slots leave it nil and render nothing, because a stand-in face would be
-    /// a look its owner never chose.
+    /// Handle to fall back to when this user has published no avatar. Supply it
+    /// only where the slot itself identifies someone; decorative slots pass nil.
     var monogram: String?
 
     var body: some View {
@@ -400,11 +378,9 @@ struct UserAvatar: View {
     }
 }
 
-/// Buddy-list presence badge: the avatar itself is the status indicator.
-/// Full color means online; greyscale means offline; away and idle are
-/// greyscale too, marked by a pair of rising Z's. Without a published avatar
-/// it degrades to the colored state dot. Never animates — these appear by the
-/// dozen in lists.
+/// Buddy-list presence badge: the avatar itself is the status indicator. Full
+/// color is online, grayscale offline, grayscale with rising Z's away or idle.
+/// Falls back to the colored state dot, and never animates.
 struct PresenceAvatar: View {
     let avatar: Avatar?
     let state: PresenceState
@@ -429,9 +405,8 @@ struct PresenceAvatar: View {
     }
 }
 
-/// Two hand-drawn Z's rising to the right over an away buddy's greyscale
-/// avatar; the nearer one is smaller. Haloed in the opposite ink so they stay
-/// legible where they cross the head.
+/// Two Z's rising over an away buddy's avatar, haloed in the opposite ink so
+/// they stay legible across the head.
 private struct SleepingZs: View {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -477,8 +452,7 @@ struct StateDot: View {
     }
 }
 
-/// Stands in for a missing avatar only where a row would otherwise be
-/// anonymous — the live-audio meters carry no handle of their own.
+/// Stands in for a missing avatar where a row would otherwise be anonymous.
 struct MonogramCircle: View {
     let handle: String
     var size: CGFloat = 28
@@ -495,8 +469,7 @@ struct MonogramCircle: View {
     }
 }
 
-/// Maps the design's viewBox ("20 0 80 85", aspect-fit centered) into canvas
-/// points.
+/// Maps the design's viewBox ("20 0 80 85", aspect-fit centered) to canvas points.
 struct AvatarGeometry {
     let s: CGFloat
     private let xOffset: CGFloat
@@ -506,9 +479,8 @@ struct AvatarGeometry {
         self.init(fitting: CGRect(x: 20, y: 0, width: 80, height: 85), in: canvasSize)
     }
 
-    /// Aspect-fits a rect of viewBox units into the canvas, so a single
-    /// adornment can fill a settings cell in the same coordinates it is drawn
-    /// with on the head.
+    /// Aspect-fits a rect of viewBox units, so a single adornment can fill a
+    /// settings cell in its on-head coordinates.
     init(fitting box: CGRect, in canvasSize: CGSize) {
         s = min(canvasSize.width / box.width, canvasSize.height / box.height)
         xOffset = (canvasSize.width - box.width * s) / 2 - box.minX * s
@@ -519,7 +491,7 @@ struct AvatarGeometry {
         CGPoint(x: x * s + xOffset, y: y * s + yOffset)
     }
 
-    // The doodle grid spans the head's box, x 20…100 and y 0…85 in viewBox
+    // The doodle grid spans the head's box, x 20...100 and y 0...85 in viewBox
     // units, so a drawing made at one size lands identically at every other.
 
     func point(gridX: Int, gridY: Int) -> CGPoint {
@@ -550,8 +522,7 @@ struct AvatarGeometry {
     }
 }
 
-/// Monokai, in swatch order. Indexes are what the wire carries, so this
-/// order is part of the protocol: append, never reorder.
+/// Monokai, in swatch order. Indexes ride the wire, so append, never reorder.
 enum DoodlePalette {
     static let colors: [Color] = [
         Color(red: 0xF9 / 255, green: 0x26 / 255, blue: 0x72 / 255),
@@ -570,18 +541,16 @@ enum DoodlePalette {
 }
 
 enum DoodleBrush {
-    /// In viewBox units, so a stroke scales with the head it sits on; the
-    /// floor keeps a doodle legible on the smallest list avatars.
+    /// In viewBox units, so a stroke scales with the head it sits on.
     static let width: Double = 2.5
 
     static func style(_ g: AvatarGeometry) -> StrokeStyle {
         StrokeStyle(lineWidth: max(width * g.s, 1), lineCap: .round, lineJoin: .round)
     }
 
-    /// Midpoint quadratics: every sample is a control point and the joints
-    /// sit halfway between samples, so the tangent is continuous through each
-    /// one and a finger-drawn line has no corners. A lone sample is a dot,
-    /// which the round cap draws from a zero-length segment.
+    /// Midpoint quadratics: samples are control points and joints sit halfway
+    /// between them, so a finger-drawn line has no corners. A lone sample
+    /// becomes a zero-length segment, which the round cap draws as a dot.
     static func path(through points: [CGPoint]) -> Path {
         var path = Path()
         guard let first = points.first else { return path }
@@ -600,15 +569,13 @@ enum DoodleBrush {
     }
 }
 
-/// The things worn over the face, listed in the order the settings grid
-/// shows them.
+/// The things worn over the face, in the order the settings grid shows them.
 enum Adornment: CaseIterable, Identifiable {
     case glasses, cigarette, grills
 
     var id: Self { self }
 
-    /// Bottom to top above the doodle: the cigarette hangs in front of the
-    /// grills, since its mouth end lands on the last tooth.
+    /// Bottom to top above the doodle; the cigarette hangs in front of the grills.
     static let drawOrder: [Adornment] = [.glasses, .grills, .cigarette]
 
     var label: String {

@@ -1,10 +1,9 @@
 import SwiftUI
 import TotemKit
 
-/// Soundboard sheet: tap a sample to play it into the chat, swipe left to
-/// delete, "New sound" while under the cap. The recorder pushes within this
-/// sheet's own NavigationStack — dismissing one presentation to start
-/// another proved unreliable and left presentation state stuck.
+/// Soundboard sheet: tap a sample to play it into the chat, swipe to delete.
+/// The recorder pushes within this sheet's own NavigationStack rather than
+/// replacing the presentation, which leaves presentation state stuck.
 struct SoundboardSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -35,8 +34,8 @@ struct SoundboardSheet: View {
 }
 
 /// Every sample with swipe-to-delete, plus "New sound" while under the cap.
-/// With `onTap` the rows play; without it they are inert labels, which is what
-/// the Settings copy of the list wants.
+/// With `onTap` the rows play; without it they are inert labels, as Settings
+/// wants them.
 struct SoundSampleRows: View {
     @Environment(AppModel.self) private var model
     var onTap: ((AppModel.SoundSample) -> Void)?
@@ -71,8 +70,8 @@ struct SoundSampleRows: View {
     }
 }
 
-/// Records a soundboard sample: up to 10s, saved on-device with a label.
-/// Saving pops back to the list; backing out abandons the take.
+/// Records a soundboard sample, saved on-device with a label. Saving pops back
+/// to the list; backing out abandons the take.
 struct RecordSoundView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss

@@ -2,8 +2,7 @@ import Fluent
 import TotemKit
 import Vapor
 
-/// Profile data beyond auth — currently just the avatar settings. Reads go
-/// out with the `welcome` frame rather than through a route here.
+/// Profile writes. Reads go out with the `welcome` frame, not through a route here.
 struct ProfileController: RouteCollection {
     let gateway: GatewayController
 
@@ -20,8 +19,7 @@ struct ProfileController: RouteCollection {
         }
         user.avatarJSON = String(decoding: try JSONEncoder().encode(avatar), as: UTF8.self)
         try await user.save(on: req.db)
-        // Everyone already looking at this user updates in place; nobody has
-        // to refetch a buddy list to stop seeing the old face.
+        // Everyone rendering this user patches their cached copy in place.
         await gateway.fanOutAvatar(avatar, of: try user.requireID())
         return .ok
     }

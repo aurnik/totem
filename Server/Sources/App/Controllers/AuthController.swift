@@ -18,8 +18,8 @@ struct TokenAuthenticator: AsyncBearerAuthenticator {
 struct AuthController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let auth = routes.grouped("auth")
-        // TODO: replace with Sign in with Apple verification (spec §8).
-        // Dev-only: trusts the handle it is given.
+        // TODO: replace with Sign in with Apple verification. This dev-only
+        // route trusts whatever handle it is given.
         auth.post("dev", use: devLogin)
     }
 
@@ -35,8 +35,7 @@ struct AuthController: RouteCollection {
         else {
             throw Abort(.badRequest, reason: "Handle must be 3–16 letters, numbers, or underscores.")
         }
-        // Bots and users share one handle namespace, so nobody can sign in as
-        // the bot they're about to be talking to.
+        // Bots and users share one handle namespace.
         guard try await BotModel.query(on: req.db).filter(\.$handle == handle).first() == nil else {
             throw Abort(.badRequest, reason: "That handle is taken.")
         }

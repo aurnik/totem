@@ -15,8 +15,6 @@ final class AppModel {
     var presences: [UUID: Presence] = [:]
     var machine = PresenceStateMachine()
 
-    /// A transcript mixes real messages with centered system notices
-    /// (away-status changes), iMessage-group-event style.
     enum TranscriptItem: Identifiable, Hashable {
         case message(ChatMessage)
         case notice(id: UUID, text: String, at: Date)
@@ -29,132 +27,74 @@ final class AppModel {
         }
     }
 
-    /// Transcripts keyed by conversation ID — derived from the participant
-    /// set (`ConversationID.derive`), the same value for every shape of chat
-    /// and every party in it. Scoped to the local user's own online session:
-    /// one continuous log while signed on, no matter how often peers come and
-    /// go; cleared when this user's session ends (deliberate sign-off, or a
-    /// `freshSignOn` welcome after the server marked them offline). Never
-    /// persisted — messages live only in the RAM of currently-online
-    /// participants.
+    /// Never persisted, and cleared whenever the local session ends.
     var transcripts: [UUID: [TranscriptItem]] = [:]
-    /// Group rosters by conversation ID. Kept after a group's sitting ends so
-    /// an open window still renders names — `endedGroups` marks those.
+    /// Group rosters, kept after a sitting ends so a window still has names.
     var groupSessions: [UUID: SessionInfo] = [:]
-    /// Groups whose sitting has ended (fewer than two participants left).
-    /// The roster stays renderable; sending is over until it's started again.
     var endedGroups: Set<UUID> = []
-    /// Derived pair conversation ID → the buddy behind it, rebuilt from the
-    /// buddy list. How an incoming conversation-keyed frame gets back to a
-    /// person to render.
     private var pairPeers: [UUID: UUID] = [:]
-    /// Bots this server runs, by bot ID — from the `welcome` frame, so a new
-    /// bot needs no client build. Used to render a bot's bubbles and to bold
-    /// its tag; the server alone decides whether a bot actually answers.
+    /// Bots this server runs, by bot ID, from the `welcome` frame.
     var bots: [UUID: Bot] = [:]
-    /// Newest build testers can install, as of the last `welcome`. Nil when the
-    /// server hasn't been told one — every comparison against it then fails
-    /// closed, so a server without the variable set simply shows no banner.
+    /// Newest build testers can install. Nil shows no banner.
     private(set) var latestBuild: String?
-    /// Peers with messages not yet seen. Local-only — never sent over the
-    /// wire; the spec's no-read-receipts rule is about the other party.
+    /// Conversations with messages not yet seen. Local-only, never sent.
     var unreadPeers: Set<UUID> = []
     private var activeConversations: Set<UUID> = []
-    /// The one conversation on screen in a frontmost window — narrower than
-    /// `activeConversations`, which is every open chat. Sent to the server
-    /// on every change and again after a reconnect, since the server forgets
-    /// it with the socket.
+    /// Resent after a reconnect, since the server forgets it with the socket.
     private var viewedConversation: UUID? {
         didSet {
             guard viewedConversation != oldValue else { return }
             fire(.viewing(conversationID: viewedConversation))
         }
     }
-    /// Pair conversations the peer has on screen right now — the header dot.
     var peerViewing: Set<UUID> = []
-    /// Peers currently typing. Plain observable state (expired by tasks, not
-    /// polled) so views update reliably — offscreen TimelineViews pause on iOS.
+    /// Peers currently typing. Plain observable state expired by tasks rather
+    /// than polled, because offscreen TimelineViews pause on iOS.
     private var typingPeers: Set<UUID> = []
     private var typingExpiry: [UUID: Task<Void, Never>] = [:]
-    /// The most recently appended transcript item, stamped with the local
-    /// clock — drives entrance animations without trusting server timestamps.
+    /// Stamped locally, for entrance animations.
     private var lastAppended: (id: UUID, at: Date)?
-    /// Where the last outbound message was typed — server error frames carry
-    /// no context, so refusals ("they're offline") surface as notices there.
+    /// Server error frames carry no context, so refusals are noticed here.
     private var lastSentConversation: UUID?
-    /// Pair conversations whose sitting this client has told the server about
-    /// this session. Messages travel peer-to-peer, so the server learns that
-    /// a pair is talking only from whichever end says so; once is enough
-    /// until the sitting ends.
+    /// Pair conversations whose sitting this client has reported this session.
     private var reportedActive: Set<UUID> = []
-    /// Messages written to a link and not yet acknowledged, by message and
-    /// recipient. A write completing says nothing about delivery — QUIC
-    /// accepts bytes into a buffer whose far end may be in airplane mode —
-    /// so only the recipient's `ack` counts, and silence past the window is
-    /// "not delivered".
-    /// My sent messages no recipient has acknowledged yet, each with the set
-    /// of recipients still owed an ack. A message leaves this the moment its
-    /// last recipient acks; its bubble is half-lit until then. A write
-    /// completing says nothing — QUIC buffers into a send buffer whose far
-    /// end may be in airplane mode — so only the recipient's `ack` clears it,
-    /// and a message to someone briefly unreachable simply stays half-lit and
-    /// turns solid when it finally lands.
+    /// A completed write says nothing about delivery, so only an `ack` clears.
     private var unackedRecipients: [UUID: Set<UUID>] = [:]
     static let deliveryTimeout: Duration = .seconds(5)
     private var lastTypingSentAt: [UUID: Date] = [:]
-    /// Live voice: the conversation the local mic streams into (one at a
-    /// time) and who we currently hear, per conversation. Speakers are
-    /// inferred from chunk arrival and expire after a beat of silence —
-    /// no explicit mic-state frames on the wire.
+    /// The conversation the local mic streams into, one at a time.
     var liveMicConversation: UUID?
+    /// Inferred from packet arrival; there are no mic-state frames.
     var speakingUsers: [UUID: Set<UUID>] = [:]
-    /// Participants whose device can't play audio right now (volume at zero),
-    /// per conversation — drives the crossed-out speaker row while voice is
-    /// live so speakers know who can't hear them.
+    /// Participants whose device can't play audio right now, per conversation.
     var mutedListeners: [UUID: Set<UUID>] = [:]
-    /// Conversations this user chose not to hear. Packets still arrive and
-    /// still drive the meters, so who's talking stays visible; only the
-    /// speaker is skipped. Scoped to the chat being open, like voice itself.
+    /// Conversations this user muted. Packets still drive the meters.
     private var mutedConversations: Set<UUID> = []
-    /// How each peer's link is reaching them, from `PeerLink`.
     var links: [UUID: PeerLink.LinkState] = [:]
-    /// Conversations we've told peers *we* can't hear — cleared when hearing
-    /// comes back (with a follow-up frame) or the chat goes silent.
     private var reportedMutedConversations: Set<UUID> = []
-    /// Per-chunk spectrum frames for the speaker meters, keyed by speaking user.
     var speakerSpectrum: [UUID: [Float]] = [:]
-    /// What's on each conversation's stage, keyed by conversation ID. The
-    /// stage's owner (`Stage.ownerID`) holds the authoritative copy and runs
-    /// the reducer; everyone else sends actions there and renders whatever
-    /// the owner broadcasts back, never applying anything optimistically.
+    /// What's on each conversation's stage. The owner (`Stage.ownerID`) runs
+    /// the reducer; everyone else renders what the owner broadcasts back.
     var stages: [UUID: Stage] = [:]
-    /// Conversations already told (via notice) that playback is broken —
-    /// throttles the notice to once per sign-on.
     private var playbackFailureNoticed: Set<UUID> = []
     private var speakingExpiry: [UUID: Task<Void, Never>] = [:]
     private var captureTask: Task<Void, Never>?
-    /// Dictation: the conversation the mic is being transcribed into — one at
-    /// a time, and the same mic the broadcast uses.
+    /// The conversation the mic is transcribed into, one at a time.
     var dictationConversation: UUID?
-    /// True only while the language model actually downloads.
+    /// True only while the language model downloads.
     var dictationPreparing = false
-    /// `VoiceTranscriber` where the OS has it; stored untyped because stored
-    /// properties can't carry an availability annotation.
+    /// A `VoiceTranscriber`; stored properties can't carry availability.
     private var dictationTranscriber: AnyObject?
     private var dictationSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     private let audio = AudioStreamer()
-    /// The peer-to-peer side of every conversation, one per sign-on: it
-    /// exists while the socket does, since the server is what introduces its
-    /// peers.
+    /// Lives exactly as long as the socket, which introduces its peers.
     private var peers: PeerLink?
 
     private var api = APIClient()
     private var socket: SocketClient?
     private var socketTask: Task<Void, Never>?
-    /// Server-side setting: push "X signed on" to this account's devices
-    /// while the app is closed.
+    /// Server-side setting: push sign-on alerts while the app is closed.
     var signOnPushes = UserDefaults.standard.object(forKey: "signOnPushes") as? Bool ?? false
-    /// A sign-on is waiting behind the local-network explainer.
     var needsNetworkExplainer = false
 
     // MARK: - Appearance
@@ -183,30 +123,21 @@ final class AppModel {
 
     // MARK: - Avatar
 
-    /// This account's look, or nil while its owner has never picked one — an
-    /// unchosen avatar is never published, so nobody renders a face this user
-    /// didn't pick.
+    /// This account's look, nil until its owner picks one.
     var avatar: Avatar? = {
         guard let data = UserDefaults.standard.data(forKey: "avatar") else { return nil }
         return try? JSONDecoder().decode(Avatar.self, from: data)
     }()
 
-    /// Live value behind the settings sliders — views mutate it freely while
-    /// dragging, and `commitAvatar()` persists and uploads on release. The
-    /// default look stands in for the editor until the first edit makes it
-    /// this owner's actual choice.
+    /// Live value behind the settings sliders; `commitAvatar()` persists it.
     var avatarSetting: Avatar {
         get { avatar ?? Avatar() }
         set { avatar = newValue }
     }
 
-    /// Set while an edit hasn't reached the server. Survives relaunch so a
-    /// change made offline still wins the next reconciliation instead of
-    /// being silently overwritten by the server's older copy.
+    /// Survives relaunch so an edit made offline wins the next reconciliation.
     private var avatarNeedsUpload = UserDefaults.standard.bool(forKey: "avatarNeedsUpload")
 
-    /// Persist locally and push to the server, which embeds it in this
-    /// user's DTO — and fans it out to everyone currently rendering us.
     func commitAvatar() {
         let committed = avatarSetting
         storeAvatarLocally(committed)
@@ -218,20 +149,14 @@ final class AppModel {
             } catch {
                 return
             }
-            // A newer edit may have landed mid-flight; that one still owes an
-            // upload of its own.
+            // A newer edit may have landed mid-flight; it owes its own upload.
             guard let self, avatar == committed else { return }
             setAvatarNeedsUpload(false)
         }
     }
 
-    /// Reconciles this device with the account using the `welcome` frame's
-    /// copy. An account with no avatar gets this device's chosen one —
-    /// installs signed in before avatars existed never pass through `signIn`
-    /// again — while a device whose owner never picked one publishes nothing.
-    /// Otherwise the account's copy wins, so a second device can't overwrite
-    /// it with a stale local one, unless this device is still holding an edit
-    /// the server never received.
+    /// The account's copy wins unless this device holds an unuploaded edit,
+    /// or the account has no avatar at all.
     private func reconcileAvatar(remote: Avatar?) {
         guard !avatarNeedsUpload else {
             commitAvatar()
@@ -273,9 +198,8 @@ final class AppModel {
            let user = try? WireCoder.decoder().decode(User.self, from: data) {
             api.token = token
             currentUser = user
-            // Sign on immediately rather than after the buddy fetch: the
-            // socket reconnects on its own, whereas gating on a fetch that
-            // failed transiently left the app stuck on the Sign On screen.
+            // Before the buddy fetch: a transient failure there would
+            // otherwise strand the app on the Sign On screen.
             signOn()
             Task {
                 for attempt in 1...3 {
@@ -293,12 +217,10 @@ final class AppModel {
         }
     }
 
-    /// Dismissed for this launch only: the update is still waiting next time,
-    /// and a build nobody updates to is one the server has already moved past.
+    /// Dismissed for this launch only.
     var updateBannerDismissed = false
 
-    /// Whether TestFlight is offering something newer than what's running.
-    /// Locally-built copies never qualify — see `BuildStamp`.
+    /// Locally-built copies never qualify; see `BuildStamp`.
     var updateAvailable: Bool {
         !updateBannerDismissed
             && BuildStamp.isOutdated(Self.currentBuild, latestAvailable: latestBuild)
@@ -328,7 +250,7 @@ final class AppModel {
     func signIn(handle: String, serverURL: String) async throws {
         guard let url = URL(string: serverURL) else { throw URLError(.badURL) }
         api.baseURL = url
-        // Before the request, not after: the prompt is raised by the attempt,
+        // Before the request: the attempt itself raises the system prompt,
         // whether or not the server answers.
         LocalNetworkExplainer.noteReached(url)
         let response = try await api.devLogin(handle: handle)
@@ -342,8 +264,7 @@ final class AppModel {
         defaults.set(handle, forKey: "lastHandle")
 
         try await refreshBuddies()
-        // Signing in is already a deliberate act — flow straight into presence.
-        // The separate Sign On button is for subsequent launches.
+        // Signing in flows straight into presence.
         signOn()
     }
 
@@ -363,7 +284,7 @@ final class AppModel {
     func refreshBuddies() async throws {
         buddies = try await api.buddies()
         rebuildPairIndex()
-        // Contextual, never at launch (spec §7): ask only once buddies exist.
+        // Ask only once buddies exist, never at launch.
         if !buddies.isEmpty {
             NotificationManager.shared.requestPermissionIfNeeded()
         }
@@ -371,14 +292,12 @@ final class AppModel {
 
     // MARK: - Conversation identity
 
-    /// The 1:1 conversation with a buddy — computed, never fetched, so
-    /// tapping a name opens a chat with no round trip.
+    /// Computed rather than fetched, so opening a chat costs no round trip.
     func conversationID(with buddyID: UUID) -> UUID? {
         currentUser.map { ConversationID.derive([$0.id, buddyID]) }
     }
 
-    /// The buddy behind a pair conversation, nil for groups (and for pair
-    /// IDs no current buddy derives to).
+    /// The buddy behind a pair conversation, nil for groups.
     func peer(of conversationID: UUID) -> UUID? {
         pairPeers[conversationID]
     }
@@ -393,8 +312,7 @@ final class AppModel {
         })
     }
 
-    /// Ascending by the requester's open-request count, so people who
-    /// blast requests broadly sort to the bottom.
+    /// Ascending by open-request count, so broad requesters sort last.
     var incomingRequests: [Buddy] {
         buddies.filter { $0.status == .pending && $0.incoming }
             .sorted {
@@ -412,14 +330,11 @@ final class AppModel {
         try await refreshBuddies()
     }
 
-    /// The buddy record for a user in any state (accepted or pending, either
-    /// direction), or nil when there's no relationship at all.
     func relationship(with userID: UUID) -> Buddy? {
         buddies.first { $0.user.id == userID }
     }
 
-    /// Group-chat co-participants with no buddy relationship: quick-add
-    /// candidates, most recent session first.
+    /// Group co-participants who aren't buddies, most recent session first.
     var recentNonFriends: [User] {
         let related = Set(buddies.map(\.user.id))
         var seen = Set<UUID>()
@@ -440,8 +355,8 @@ final class AppModel {
 
     func signOn() {
         guard let token = api.token, !isSignedOn else { return }
-        // Signing on binds the voice endpoint, and its first LAN probe is
-        // what makes the system ask about the local network. Say why first.
+        // Signing on binds the voice endpoint, whose first LAN probe triggers
+        // the system's local-network prompt. Explain it first.
         if LocalNetworkExplainer.isNeeded {
             needsNetworkExplainer = true
             return
@@ -482,9 +397,7 @@ final class AppModel {
         signOn()
     }
 
-    /// Session-scoped ephemerality: none of this outlives the local user's own
-    /// online session, so it is cleared on sign-off, on a fresh sign-on that
-    /// ended the previous session, and on log-out.
+    /// Clears everything scoped to the local user's online session.
     private func clearSessionScopedState() {
         transcripts = [:]
         endedGroups = []
@@ -509,8 +422,7 @@ final class AppModel {
         self.peers = nil
         links = [:]
         presences = [:]
-        // Sign-off closes all conversation windows (spec §3); views observe
-        // isSignedOn and dismiss themselves.
+        // Views observe isSignedOn and dismiss their own windows.
         clearSessionScopedState()
         typingPeers = []
         typingExpiry.values.forEach { $0.cancel() }
@@ -536,21 +448,14 @@ final class AppModel {
 
     var botAliases: [String] { bots.values.flatMap(\.aliases) }
 
-    /// The bot a draft or body tags, if any, and whether that tag asks for the
-    /// conversation. The same match the server runs, from the same shared
-    /// matcher — so what the composer promises is what actually happens.
+    /// Runs the same shared matcher the server does.
     func taggedBot(in body: String) -> (bot: Bot, wantsContext: Bool)? {
         guard let hit = BotTag.match(body, bots: Array(bots.values)) else { return nil }
         return (hit.bot, hit.bot.wantsContext(hit.match.tag))
     }
 
-    /// The conversation so far, flattened for a bot prompt — but only when the
-    /// tag used asks for it. The server keeps no transcript, so this client is
-    /// the only party that can answer "what has been said", and it sends that
-    /// nowhere else.
-    ///
-    /// Notices ("X signed on") are left out: they are chrome this app draws,
-    /// not things anyone said.
+    /// The conversation flattened for a bot prompt, minus notices, and only
+    /// when the tag asks for it.
     private func botContext(for body: String, in conversationID: UUID) -> [BotContextMessage]? {
         guard let tagged = taggedBot(in: body), tagged.wantsContext else { return nil }
         let items = (transcripts[conversationID] ?? []).suffix(Limits.botContextMaxMessages)
@@ -568,18 +473,14 @@ final class AppModel {
         }
     }
 
-    /// A message goes straight to the people in the conversation over their
-    /// peer links; the server never sees it. It's minted here — ID and
-    /// timestamp — and lands in the transcript at once, since there is no
-    /// ack to wait for; a link that won't come up is reported afterwards
-    /// where the message was typed.
+    /// The server never sees this. The message is appended immediately and
+    /// stays half-lit until every recipient acks.
     func sendMessage(to conversationID: UUID, body: String, dictated: Bool = false) {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let selfID = currentUser?.id else { return }
         lastSentConversation = conversationID
         let peerID = peer(of: conversationID)
-        // The check the server used to make: a 1:1 to someone offline is
-        // refused, never spooled.
+        // A 1:1 to someone offline is refused, never spooled.
         if let peerID, (presences[peerID]?.state ?? .offline) == .offline {
             append(.notice(id: UUID(), text: "Message not delivered — they're offline", at: Date()),
                    to: conversationID)
@@ -591,25 +492,22 @@ final class AppModel {
         append(.message(message), to: conversationID)
         SoundPlayer.play(.messageSent)
         noteTraffic(in: conversationID)
-        // Bots are the server's, so a tagged message is the one thing it is
-        // still told about — with the conversation, when the tag asks for it.
+        // Bots are server services, so a tagged message is the one thing the
+        // server is told about.
         if taggedBot(in: trimmed) != nil {
             fire(.botQuery(conversationID: conversationID, body: trimmed,
                            context: botContext(for: trimmed, in: conversationID)))
         }
         let recipients = participants(in: conversationID)
-        // Half-lit until acknowledged. No recipients (a group all offline)
-        // means delivered to no one, so it never lights.
+        // No recipients means delivered to no one, so it never lights.
         if !recipients.isEmpty {
             unackedRecipients[message.id] = recipients
         }
         for userID in recipients {
             peers?.sendBestEffort(.message(message), to: userID)
         }
-        // If a 1:1 message goes unacked for a spell, nudge the server to check
-        // whether the peer is still reachable so the buddy list can catch up.
-        // The bubble stays half-lit regardless, and lights when a late ack
-        // lands.
+        // An unacked 1:1 nudges the server to re-check reachability so the
+        // buddy list can catch up. The bubble stays half-lit either way.
         if let peerID {
             Task { [weak self] in
                 try? await Task.sleep(for: Self.deliveryTimeout)
@@ -619,16 +517,13 @@ final class AppModel {
         }
     }
 
-    /// A recipient acknowledged one of my messages; its bubble lights once the
-    /// last recipient has.
     private func markAcked(_ messageID: UUID, by userID: UUID) {
         guard var remaining = unackedRecipients[messageID] else { return }
         remaining.remove(userID)
         unackedRecipients[messageID] = remaining.isEmpty ? nil : remaining
     }
 
-    /// Writes a frame to each recipient's link, waiting briefly for links
-    /// that aren't up yet, and returns whoever it couldn't reach.
+    /// Writes a frame to each recipient and returns whoever it couldn't reach.
     private func deliver(_ frame: PeerFrame, to recipients: Set<UUID>) async -> Set<UUID> {
         guard let peers else { return recipients }
         return await withTaskGroup(of: UUID?.self) { group in
@@ -650,22 +545,18 @@ final class AppModel {
         }
     }
 
-    /// Best-effort delivery for frames that carry no promise to the user.
     private func sendToPeers(_ frame: PeerFrame, _ recipients: Set<UUID>) {
         Task { [weak self] in _ = await self?.deliver(frame, to: recipients) }
     }
 
-    /// The first message in or out of a pair this session opens its sitting
-    /// on the server, which can no longer see the traffic itself.
+    /// Opens a pair's sitting on the first message either way this session.
     private func noteTraffic(in conversationID: UUID) {
         guard peer(of: conversationID) != nil, reportedActive.insert(conversationID).inserted
         else { return }
         fire(.conversationActive(conversationID: conversationID))
     }
 
-    /// One participant is the pair conversation, whose ID this client can
-    /// compute itself — no server involved in opening it. More participants
-    /// asks the server to start (or restart) the group's sitting.
+    /// One participant derives the pair ID locally; more asks the server.
     func startChat(with participantIDs: [UUID]) async throws -> UUID {
         if participantIDs.count == 1, let pairID = conversationID(with: participantIDs[0]) {
             return pairID
@@ -701,10 +592,7 @@ final class AppModel {
         return nil
     }
 
-    /// Patches every cached copy of a user's avatar. Both caches are DTO
-    /// snapshots — the buddy list is fetched at launch, group participants
-    /// when the session opened — so a live change has to be written into
-    /// each of them rather than waiting on a refetch.
+    /// Patches a user's avatar into the buddy list and every group roster.
     private func applyAvatar(_ avatar: Avatar, of userID: UUID) {
         for index in buddies.indices where buddies[index].user.id == userID {
             buddies[index].user.avatar = avatar
@@ -720,9 +608,7 @@ final class AppModel {
         }
     }
 
-    /// Last known avatar for a user: own live settings, else the buddy list,
-    /// else the snapshot a group session carried when it was initiated —
-    /// both kept current by `avatarChanged` pushes.
+    /// Own live settings, else the buddy list, else a group roster.
     func avatar(of userID: UUID) -> Avatar? {
         if userID == currentUser?.id { return avatar }
         if let buddyAvatar = buddy(withID: userID)?.user.avatar { return buddyAvatar }
@@ -736,10 +622,7 @@ final class AppModel {
 
     // MARK: - Sound samples
 
-    /// A short recorded sound the user can broadcast into a chat from the
-    /// mic button's long-press menu. Audio lives on this device only, as
-    /// Opus packets in Application Support (`OpusPacketFile`); only the
-    /// labels are listed here (persisted in UserDefaults).
+    /// The audio stays on this device as Opus packets; only the label is here.
     struct SoundSample: Identifiable, Codable, Hashable {
         let id: UUID
         var label: String
@@ -766,8 +649,7 @@ final class AppModel {
         samplesDir.appendingPathComponent("\(id).opus")
     }
 
-    /// Samples recorded before the Opus cutover are in a format nothing can
-    /// play any more; their files and labels go together.
+    /// Drops labels whose Opus file is missing, and any legacy PCM beside it.
     private func pruneUnreadableSamples() {
         let stale = soundSamples.filter { !FileManager.default.fileExists(atPath: sampleURL($0.id).path) }
         guard !stale.isEmpty else { return }
@@ -837,9 +719,7 @@ final class AppModel {
         }
     }
 
-    /// Broadcasts a sample into the chat over the same peer links as the mic,
-    /// paced in real time so recipients' meters and speaker expiry behave
-    /// normally — and looped back locally so the sender hears it too.
+    /// Paced in real time so recipients' meters and speaker expiry behave.
     func playSample(_ sample: SoundSample, in conversationID: UUID) {
         guard let peers, let selfID = currentUser?.id,
               let data = try? Data(contentsOf: sampleURL(sample.id))
@@ -858,9 +738,7 @@ final class AppModel {
 
     // MARK: - Live voice
 
-    /// Stream the mic to the conversation. Closing it closes dictation too —
-    /// that rides on the same mic and has no control of its own once the mic
-    /// is off.
+    /// Streams the mic to the conversation, closing dictation with it.
     func toggleMic(in conversationID: UUID) {
         if liveMicConversation == conversationID {
             stopSelfMonitor(in: conversationID)
@@ -873,9 +751,8 @@ final class AppModel {
         applyCapture(in: conversationID)
     }
 
-    /// Also transcribe the open mic on-device, sending each utterance as an
-    /// ordinary message — indistinguishable from typing at the other end.
-    /// Rides on the mic rather than claiming it: never changes mic state.
+    /// Also transcribes the open mic on-device, sending each utterance as an
+    /// ordinary message. Rides on the mic and never changes its state.
     func toggleDictation(in conversationID: UUID) {
         guard dictationSupported, liveMicConversation == conversationID else { return }
         dictationConversation = dictationConversation == conversationID
@@ -883,8 +760,7 @@ final class AppModel {
         applyCapture(in: conversationID)
     }
 
-    /// The mic serves one conversation at a time; opening it elsewhere closes
-    /// whatever it was doing before.
+    /// The mic serves one conversation at a time.
     private func claimMic(for conversationID: UUID) {
         guard let previous = liveMicConversation ?? dictationConversation,
               previous != conversationID
@@ -895,10 +771,8 @@ final class AppModel {
         applyCapture(in: previous)
     }
 
-    /// The self monitor ends with the mic, not after the silence expiry: a
-    /// speaker strip that outlives the mic offers the listener's controls.
-    /// The tap can still deliver a frame or two after this — those are
-    /// dropped where they'd re-light it.
+    /// Ends with the mic, not the silence expiry, so no speaker strip
+    /// outlives it offering listener controls.
     private func stopSelfMonitor(in conversationID: UUID) {
         guard let selfID = currentUser?.id else { return }
         speakingUsers[conversationID]?.remove(selfID)
@@ -920,11 +794,8 @@ final class AppModel {
         if let stopDictating { Task { await stopDictating() } }
     }
 
-    /// Drops dictation state now and hands back the stop the transcriber still
-    /// owes. Clearing has to be synchronous — a caller that returns before the
-    /// fields are nil would let the next toggle see a transcriber that is on
-    /// its way out — while the stop itself can only be awaited. The two
-    /// callers differ in nothing but whether they are able to await it.
+    /// Clears synchronously, since the next toggle must not see a
+    /// transcriber on its way out, and returns its stop to await.
     private func takeDictationStop() -> (@Sendable () async -> Void)? {
         dictationPreparing = false
         dictationSink = nil
@@ -936,15 +807,14 @@ final class AppModel {
         return { await transcriber.stop() }
     }
 
-    /// Reconciles the mic tap with the two toggles: the tap carries exactly
-    /// the sinks currently wanted and is torn down once both are off. Runs
-    /// serially so rapid toggling can't interleave two setups.
+    /// Reconciles the mic tap with both toggles, serially so rapid toggling
+    /// can't interleave two setups.
     private func applyCapture(in conversationID: UUID) {
         let previous = captureTask
         captureTask = Task { [weak self] in
             _ = await previous?.value
             // `stopMic` cancels the chain, so a toggle queued before it can't
-            // reclaim the mic afterwards — sample recording borrows it too.
+            // reclaim the mic that sample recording may now hold.
             guard !Task.isCancelled else { return }
             await self?.reconcileCapture(in: conversationID)
         }
@@ -970,11 +840,9 @@ final class AppModel {
             peers.setRecipients(participants(in: conversationID), of: conversationID)
             let selfID = currentUser?.id
             packetSink = { [weak self] packet, spectrum in
-                // Straight off the audio thread: the link is thread-safe and
-                // datagrams don't block.
+                // Off the audio thread: datagrams don't block.
                 peers.send(packet, in: conversationID)
-                // Meter-only self monitor (no playback — that would echo)
-                // so the speaker can see their own audio going out.
+                // Meter-only self monitor; playing it back would echo.
                 guard let selfID else { return }
                 Task { @MainActor in
                     guard let self, self.liveMicConversation == conversationID else { return }
@@ -989,9 +857,7 @@ final class AppModel {
         }
     }
 
-    /// Everyone else in a conversation: the buddy of a pair, or the rest of
-    /// a group. Where every frame goes, and who a frame may come from.
-    /// Anyone the server hasn't introduced yet is simply not dialled.
+    /// Everyone else in a conversation: where frames go and who may send them.
     private func participants(in conversationID: UUID) -> Set<UUID> {
         if let peerID = peer(of: conversationID) { return [peerID] }
         var members = Set(groupSessions[conversationID]?.participants.map(\.id) ?? [])
@@ -999,17 +865,14 @@ final class AppModel {
         return members
     }
 
-    /// The client's copy of the server's `usableConversation` check: a frame
-    /// counts only from someone in the conversation — a buddy for a pair, a
-    /// member of a group whose sitting is still live. A derived conversation
-    /// ID is computable by anyone, so it is not a capability here either.
+    /// A derived conversation ID is computable by anyone, so naming one is
+    /// not a capability; this mirrors the server's `usableConversation`.
     private func canReceive(from senderID: UUID, in conversationID: UUID) -> Bool {
         guard participants(in: conversationID).contains(senderID) else { return false }
         return peer(of: conversationID) != nil || !endedGroups.contains(conversationID)
     }
 
-    /// Links stay up to everyone in an open chat, so the first keystroke
-    /// doesn't wait on a handshake.
+    /// Keeps links warm to everyone in an open chat.
     private func refreshWarmLinks() {
         var wanted = Set<UUID>()
         for conversationID in activeConversations {
@@ -1020,7 +883,6 @@ final class AppModel {
 
     // MARK: - Dictation
 
-    /// The conversation the mic is open for, whichever way it's being used.
     private var micConversation: UUID? { liveMicConversation ?? dictationConversation }
 
     var dictationSupported: Bool {
@@ -1059,8 +921,6 @@ final class AppModel {
         if let stopDictating = takeDictationStop() { await stopDictating() }
     }
 
-    /// Voice is scoped to having the chat open, both directions: drop the mic
-    /// if it was live here, and stop anything still coming in.
     private func silenceConversation(_ conversationID: UUID) {
         if micConversation == conversationID { stopMic() }
         mutedListeners[conversationID] = nil
@@ -1082,8 +942,6 @@ final class AppModel {
         case connecting, relay, direct
     }
 
-    /// The worst of the links to this conversation's participants, nil when
-    /// none exists — a group is only as direct as its slowest member.
     func voiceStatus(in conversationID: UUID) -> VoiceStatus? {
         let states = participants(in: conversationID).compactMap { links[$0] }
         guard !states.isEmpty else { return nil }
@@ -1092,8 +950,7 @@ final class AppModel {
         return .direct
     }
 
-    /// Stop (or resume) hearing a conversation. To whoever is talking it is
-    /// the same fact as the volume being at zero: this listener can't hear.
+    /// Reported to speakers as the same fact as a device at zero volume.
     func toggleVoiceMute(in conversationID: UUID) {
         if mutedConversations.remove(conversationID) == nil {
             mutedConversations.insert(conversationID)
@@ -1105,13 +962,10 @@ final class AppModel {
         }
     }
 
-    /// Whether live voice in a conversation reaches this user's ears right now.
     private func cannotHear(in conversationID: UUID) -> Bool {
         audio.outputMuted || mutedConversations.contains(conversationID)
     }
 
-    /// On transitions only: while audio is audible in a conversation, tell its
-    /// participants whether this device can actually play it.
     private func outputVolumeChanged() {
         if audio.outputMuted {
             for conversationID in speakingUsers.keys
@@ -1144,14 +998,13 @@ final class AppModel {
                     participants(in: conversationID))
     }
 
-    /// Best-effort send: these frames carry no promise to the user, so a
-    /// failure is dropped. `sendMessage` reports its own instead.
+    /// Best-effort socket send; failures are dropped.
     private func fire(_ frame: ClientFrame) {
         let socket = self.socket
         Task { try? await socket?.send(frame) }
     }
 
-    /// Throttled to one event per 3s per peer (spec §6).
+    /// Throttled to one event per 3s per peer.
     func sendTyping(to peerID: UUID) {
         guard let pairID = conversationID(with: peerID) else { return }
         let now = Date()
@@ -1174,7 +1027,6 @@ final class AppModel {
         typingPeers.contains(peerID)
     }
 
-    /// One of my messages still waiting for a recipient's ack.
     func isPendingDelivery(_ messageID: UUID) -> Bool {
         unackedRecipients[messageID] != nil
     }
@@ -1195,9 +1047,8 @@ final class AppModel {
         typingExpiry[peerID] = nil
     }
 
-    /// Termination path: mark signed off and hand the socket to the caller,
-    /// which flushes the sign-off frame outside the main actor while the
-    /// process winds down. UI cleanup is skipped — the process is dying.
+    /// Marks signed off and hands the socket back so the caller can flush the
+    /// sign-off frame off the main actor. No UI cleanup: the process is dying.
     func detachSocketForTermination() -> SocketClient? {
         guard isSignedOn else { return nil }
         machine.handle(.signOff)
@@ -1214,16 +1065,12 @@ final class AppModel {
         requestStage(in: conversationID)
     }
 
-    /// Asked of everyone; only the stage's owner answers, and silence means
-    /// there's nothing on. Catches up on broadcasts missed while the link to
-    /// the owner was down.
+    /// Asked of everyone; only the owner answers, and silence means nothing.
     private func requestStage(in conversationID: UUID) {
         sendToPeers(.stageRequest(conversationID: conversationID), participants(in: conversationID))
     }
 
-    /// A chat reports itself viewed when it's on screen in the frontmost
-    /// window and not otherwise; with one window per conversation on macOS
-    /// several can report, so only the one reporting true wins.
+    /// Several macOS windows can report, so only the one reporting true wins.
     func conversationViewed(_ conversationID: UUID, _ viewed: Bool) {
         if viewed {
             viewedConversation = conversationID
@@ -1234,15 +1081,13 @@ final class AppModel {
 
     // MARK: - Stage
 
-    /// Hosted here when this user owns the stage (or nobody does yet);
-    /// otherwise sent to whoever does, with the version it was aimed at, so
-    /// the owner can drop one that no longer applies.
+    /// Applied here when this user owns the stage or nobody does, otherwise
+    /// forwarded to the owner with the version it targeted.
     func sendStageAction(_ action: StageAction, in conversationID: UUID) {
         guard let selfID = currentUser?.id else { return }
         let effects = StageHost.act(action, on: stages[conversationID], by: selfID, at: Date())
-        // A finished board's time is up on every clock at once. The owner's
-        // broadcast makes it official, but this copy needn't wait for it —
-        // and if the owner's link is down, it would otherwise never come.
+        // Every client's countdown fires at once, and the owner's broadcast
+        // may never arrive if their link is down.
         if case .four(.expire) = action {
             stages[conversationID] = nil
         }
@@ -1272,10 +1117,8 @@ final class AppModel {
         }
     }
 
-    /// A stage lives on its owner's device, so it goes when they do — and a
-    /// game needs both its players, so it goes when either does. A group
-    /// gets told who went, since nothing else in a group announces a
-    /// departure; a pair's sign-off notice already has.
+    /// A stage dies with its owner, a game with either player. Only groups
+    /// get a notice; a pair's sign-off notice covers it.
     private func clearStages(dependingOn userID: UUID) {
         for (conversationID, stage) in stages {
             var doomed = stage.ownerID == userID
@@ -1295,18 +1138,14 @@ final class AppModel {
         try await api.searchYouTube(query)
     }
 
-    /// Where the player web view loads from. The start position is resolved
-    /// against the shared clock, so a late joiner opens mid-song where
-    /// everyone else already is.
+    /// The start position resolves against the shared clock.
     func playerURL(for youtube: YouTubeState) -> URL {
         api.playerURL(videoID: youtube.videoID,
                       start: youtube.position(at: Date()),
                       playing: youtube.isPlaying)
     }
 
-    /// After a reconnect the server has forgotten what this socket had told
-    /// it — what's on screen, and where our endpoint is — and the peers may
-    /// have moved a stage on while our links were down with the network.
+    /// Replays the socket state the server forgot with the old connection.
     private func resendAfterReconnect() {
         for conversationID in activeConversations {
             requestStage(in: conversationID)
@@ -1322,17 +1161,14 @@ final class AppModel {
     private func applyStage(_ stage: Stage?, in conversationID: UUID, from actorID: UUID?) {
         let previous = stages[conversationID]
         stages[conversationID] = stage
-        // Snapshot replies and re-syncs after a rejected action carry no
-        // actor: nobody did anything, so nothing is worth announcing.
+        // Snapshot replies and re-syncs carry no actor: nobody did anything.
         guard let actorID, let handle = handle(of: actorID),
               let text = Self.stageNotice(from: previous, to: stage, by: handle)
         else { return }
         append(.notice(id: UUID(), text: text, at: Date()), to: conversationID)
     }
 
-    /// Only stage changes worth interrupting the transcript for. Play and pause
-    /// are deliberately silent — they're visible on the stage and would bury
-    /// the conversation.
+    /// The stage changes that earn a notice; the rest are plain on the stage.
     private static func stageNotice(from previous: Stage?, to stage: Stage?,
                                     by handle: String) -> String? {
         guard let stage else {
@@ -1340,8 +1176,7 @@ final class AppModel {
             switch previous.state {
             case .youtube: return "\(handle) closed the video"
             case .four(let game):
-                // A finished game already announced its result; taking the
-                // board down afterwards isn't news.
+                // A finished game already announced its result.
                 return game.outcome == nil ? "\(handle) closed the game" : nil
             }
         }
@@ -1360,10 +1195,6 @@ final class AppModel {
             if old.outcome != nil {
                 return game.outcome == nil ? "\(handle) started a game of Four" : nil
             }
-            // Joining and every drop are silent — they're plain on the board,
-            // and a notice per move would bury the conversation. Only the
-            // result is worth interrupting for, and the sender is the player
-            // who just made it.
             switch game.outcome {
             case .won: return "\(handle) won"
             case .draw: return "Four ended in a draw"
@@ -1379,14 +1210,11 @@ final class AppModel {
         refreshWarmLinks()
     }
 
-    /// Most recent distinct away messages, newest first — the quick-tap
-    /// options in the away sheet.
     var recentAwayMessages: [String] =
         UserDefaults.standard.stringArray(forKey: "recentAwayMessages") ?? []
 
     func setAwayMessage(_ message: String) {
         apply(machine.handle(.setAwayMessage(message)))
-        // Record what the machine actually kept (trimmed, truncated).
         guard let saved = machine.awayMessage else { return }
         recentAwayMessages.removeAll { $0 == saved }
         recentAwayMessages.insert(saved, at: 0)
@@ -1399,11 +1227,9 @@ final class AppModel {
     }
 
     #if os(macOS)
-    /// System sleep is the "I'm away" boundary. Without this, the reconnect
-    /// loop re-establishes the socket during dark wakes (Power Nap), which the
-    /// server reads as a fresh sign-on — buddies get pushed "signed on" all
-    /// day while the lid is closed. Deliberate sign-off kills the reconnect
-    /// loop; dark wakes don't post didWake, so only a real wake signs back on.
+    /// Signs off on sleep: the reconnect loop would otherwise re-establish
+    /// the socket on every dark wake, which the server reads as a fresh
+    /// sign-on. Dark wakes don't post didWake, so only a real wake resumes.
     private var resumeOnWake = false
 
     private func observeSystemSleep() {
@@ -1431,7 +1257,6 @@ final class AppModel {
 
     // MARK: - Push notifications
 
-    /// Called by the app delegate once iOS hands over the APNs token.
     func registerPushToken(_ token: String) {
         let api = self.api
         Task { try? await api.registerPushToken(token) }
@@ -1484,22 +1309,16 @@ final class AppModel {
         switch frame {
         case .welcome(_, let buddies, let sessions, let freshSignOn, let selfAvatar, let bots,
                       let latestBuild):
-            // Describes the server, not this sign-on, so it survives the
-            // session-scoped wipe below alongside the bot registry.
+            // These describe the server, not this sign-on, so they are set
+            // before the session-scoped wipe below.
             self.latestBuild = latestBuild
             reconcileAvatar(remote: selfAvatar)
-            // The registry outlives a session — it describes the server, not
-            // this sign-on — so it's set before the session-scoped wipe below.
             self.bots = Dictionary(uniqueKeysWithValues: (bots ?? []).map { ($0.id, $0) })
-            // A fresh sign-on means the server ended our previous online
-            // session (suspension sweep, >90s drop, sign-off) — everything
-            // conversation-scoped from before it is gone. A reconnect within
-            // the grace window keeps the log intact.
+            // A fresh sign-on means the server ended our previous session.
+            // A reconnect within the grace window keeps the log intact.
             if freshSignOn {
                 clearSessionScopedState()
             }
-            // Socket state on the server's side too: anyone still looking is
-            // re-announced right after this frame.
             peerViewing = []
             presences = Dictionary(uniqueKeysWithValues: buddies.compactMap { key, value in
                 UUID(uuidString: key).map { ($0, value) }
@@ -1510,9 +1329,7 @@ final class AppModel {
             if freshSignOn {
                 groupSessions = live
             } else {
-                // A group we knew that's absent from the snapshot died while
-                // we weren't looking — no sessionClosed reached us. Its
-                // roster stays renderable behind the ended mark.
+                // A known group missing from the snapshot died in the gap.
                 for id in groupSessions.keys where live[id] == nil {
                     endedGroups.insert(id)
                 }
@@ -1523,8 +1340,6 @@ final class AppModel {
         case .sessionStarted(let info):
             if info.isGroup {
                 groupSessions[info.session.id] = info
-                // The same combination restarted is the same conversation —
-                // its sitting is live again.
                 endedGroups.remove(info.session.id)
             }
         case .avatarChanged(let userID, let avatar):
@@ -1537,14 +1352,11 @@ final class AppModel {
             if presence.state == .offline {
                 peers?.removePeer(userID)
                 clearStages(dependingOn: userID)
-                // The buddy list is a fetched snapshot; the server's own stamp
-                // replaces this on the next refresh.
+                // The server's own stamp replaces this on the next refresh.
                 for index in buddies.indices where buddies[index].user.id == userID {
                     buddies[index].user.lastSeenAt = Date()
                 }
             }
-            // Where this buddy's conversation lives — notices about a person
-            // land in the chat with that person.
             let pairID = conversationID(with: userID)
             let hasConversation = pairID.map {
                 !(transcripts[$0] ?? []).isEmpty || activeConversations.contains($0)
@@ -1565,20 +1377,17 @@ final class AppModel {
                     append(.notice(id: UUID(), text: "\(handle) is away: \"\(away)\"", at: Date()),
                            to: pairID)
                 } else if presence.isUnreachableMark, !wasAway {
-                    // The server marked them away because it couldn't reach
-                    // them, so there's nothing of theirs to quote.
+                    // The server's own mark; there's no message to quote.
                     append(.notice(id: UUID(), text: "\(handle) is away", at: Date()),
                            to: pairID)
                 }
-                // Coming back from away — but not by signing off, which
-                // already got its own notice above.
+                // Back from away, but not by signing off, noticed above.
                 if wasAway, presence.state != .away, presence.state != .offline {
                     append(.notice(id: UUID(), text: "\(handle) is back", at: Date()),
                            to: pairID)
                 }
             }
-            // Presence for someone not yet an accepted buddy means the list
-            // changed server-side (e.g. our request was just accepted).
+            // Presence for a non-buddy means the list changed server-side.
             if !buddies.contains(where: { $0.user.id == userID && $0.status == .accepted }) {
                 Task { try? await refreshBuddies() }
             }
@@ -1592,7 +1401,7 @@ final class AppModel {
                 for key in mutedListeners.keys {
                     mutedListeners[key]?.remove(userID)
                 }
-                // A 1:1 stage dies with the conversation — whoever owned it.
+                // A 1:1 stage dies with the conversation, whoever owned it.
                 if let pairID {
                     stages[pairID] = nil
                     peerViewing.remove(pairID)
@@ -1613,12 +1422,7 @@ final class AppModel {
         case .endpoint(let userID, let ticket):
             peers?.setPeer(userID, ticket: ticket)
         case .sessionClosed(let sessionID):
-            // The conversation's sitting ended — fewer than two participants
-            // left. Our own transcript survives (it's scoped to our online
-            // session, not the sitting), and for a group the roster stays
-            // renderable behind an `endedGroups` mark; starting the same
-            // combination again revives the same conversation ID. Only the
-            // live ephemera stop.
+            // Only the live ephemera stop; the transcript and roster stay.
             if groupSessions[sessionID] != nil {
                 endedGroups.insert(sessionID)
             }
@@ -1640,8 +1444,8 @@ final class AppModel {
 
     // MARK: - Peer frames
 
-    /// A frame off a peer link. The link vouches for who sent it; what it
-    /// says about a conversation counts only if the sender is in it.
+    /// The link vouches for who sent a frame; the conversation it names
+    /// counts only if that sender is in it.
     private func handle(_ inbound: PeerLink.Inbound) {
         let senderID = inbound.senderID
         guard let selfID = currentUser?.id else { return }
@@ -1680,10 +1484,6 @@ final class AppModel {
         }
     }
 
-    /// The message carries its conversation: `sessionID` is the derived
-    /// conversation ID, the key this client renders by. No inference from
-    /// the sender — that inference is what filed 1:1 messages into a group
-    /// when the server keyed them wrong.
     private func receiveMessage(_ message: ChatMessage) {
         append(.message(message), to: message.sessionID)
         clearTyping(message.senderID)
@@ -1703,12 +1503,8 @@ final class AppModel {
         }
     }
 
-    /// One live-voice packet reaching the ears and meters — from a peer, or
-    /// looped back locally while broadcasting a sound sample. A peer's packet
-    /// only counts for a conversation they're actually in: the link vouches
-    /// for who sent it, not for what they labelled it.
+    /// The link vouches for the sender, not the conversation they named.
     private func receiveAudio(conversationID: UUID, senderID: UUID, packet: Data) {
-        // Live voice only reaches ears with that chat open.
         guard activeConversations.contains(conversationID),
               senderID == currentUser?.id || participants(in: conversationID).contains(senderID)
         else { return }
@@ -1725,16 +1521,13 @@ final class AppModel {
                        to: conversationID)
             }
         }
-        // A silent chat just became audible — if our volume is at zero,
-        // that's the moment the speaker needs to know we can't hear.
+        // A silent chat just became audible: tell speakers we can't hear.
         if (speakingUsers[conversationID] ?? []).isEmpty {
             reportMutedIfNeeded(in: conversationID)
         }
         markSpeaking(senderID, in: conversationID, spectrum: spectrum)
     }
 
-    /// Lights up the speaker meters for one frame — remote audio, the local
-    /// mic monitor, or a sample loopback — and schedules the quiet-expiry.
     private func markSpeaking(_ senderID: UUID, in conversationID: UUID, spectrum: [Float]) {
         speakingUsers[conversationID, default: []].insert(senderID)
         speakerSpectrum[senderID] = spectrum

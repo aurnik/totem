@@ -19,16 +19,14 @@ enum FourPalette {
     }
 }
 
-/// The menu glyph: a slab with four holes punched clean through, so whatever is
-/// behind it shows in the circles. Even-odd is what makes them holes rather than
-/// four more filled circles, and `Shape` carries no fill rule of its own — the
-/// caller has to pass `FillStyle(eoFill: true)`.
+/// The menu glyph: a slab with four holes punched through. Even-odd is what
+/// makes them holes rather than filled circles, and `Shape` carries no fill
+/// rule of its own, so the caller must pass `FillStyle(eoFill: true)`.
 struct FourBoardIcon: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path(roundedRect: rect, cornerRadius: min(rect.width, rect.height) * 0.24)
         let radius = min(rect.width, rect.height) * 0.16
-        // Three equal gaps across each axis — the two margins and the space
-        // between — so the pair sits centred and evenly spaced either way.
+        // Three equal gaps per axis: two margins plus the space between.
         let inset = CGPoint(x: (rect.width - 4 * radius) / 3, y: (rect.height - 4 * radius) / 3)
         for x in [rect.minX + inset.x + radius, rect.maxX - inset.x - radius] {
             for y in [rect.minY + inset.y + radius, rect.maxY - inset.y - radius] {
@@ -40,20 +38,17 @@ struct FourBoardIcon: Shape {
     }
 }
 
-/// Maps board coordinates onto a view's bounds. The same arithmetic serves the
-/// plate, the pieces and the taps, so none of them can disagree about where a
-/// cell is.
+/// Maps board coordinates onto a view's bounds, shared by the plate, the pieces
+/// and the taps.
 struct FourGeometry {
     let cell: CGFloat
     let radius: CGFloat
-    /// The blue slab.
     let plate: CGRect
-    /// The grid of holes inside it, inset by the plate's border.
+    /// The grid of holes, inset by the plate's border.
     let grid: CGRect
 
     init(_ size: CGSize) {
-        // A border so the outer holes aren't flush with the edge of the plate,
-        // which is what makes it read as a board rather than a grid.
+        // A border keeps the outer holes off the edge of the plate.
         let border = min(size.width, size.height) * 0.045
         cell = min((size.width - 2 * border) / CGFloat(FourState.columns),
                    (size.height - 2 * border) / CGFloat(FourState.rows))
@@ -65,22 +60,19 @@ struct FourGeometry {
         plate = grid.insetBy(dx: -border, dy: -border)
     }
 
-    /// Row 0 is the bottom of the board, which is upside down from the view's
-    /// coordinates.
+    /// Row 0 is the bottom of the board, inverted from view coordinates.
     func center(_ slot: FourSlot) -> CGPoint {
         CGPoint(x: grid.minX + (CGFloat(slot.column) + 0.5) * cell,
                 y: grid.maxY - (CGFloat(slot.row) + 0.5) * cell)
     }
 
-    /// Where a falling piece starts: the top hole of its column, so it fades in
-    /// somewhere the player can actually see it.
     func entry(column: Int) -> CGPoint {
         center(FourSlot(column: column, row: FourState.rows - 1))
     }
 }
 
-/// The blue plate, holes and all. Drawn over the pieces so they show *through*
-/// it, which is what makes an empty hole show the chat behind the board.
+/// The blue plate, drawn over the pieces with an even-odd fill so the holes are
+/// transparent and show the pieces, or the chat, behind them.
 struct FourBoardPlate: Shape {
     func path(in rect: CGRect) -> Path {
         let geometry = FourGeometry(rect.size)
@@ -98,10 +90,9 @@ struct FourBoardPlate: Shape {
     }
 }
 
-/// A game of Connect 4 everyone in the chat watches, and two of them play. Like
-/// the video stage, nothing is applied locally: a tap sends a drop and the board
-/// only moves when the stage's owner says it did, so both players always see the
-/// same position.
+/// A game of Connect 4 everyone in the chat watches and two of them play.
+/// Nothing is applied locally: a tap sends a drop and the board only moves when
+/// the stage's owner says it did.
 struct FourStageView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.stageBox) private var stageBox
@@ -112,24 +103,19 @@ struct FourStageView: View {
     private static let railWidth: CGFloat = 40
     private static let railSpacing: CGFloat = 10
     private static let seatSize: CGFloat = 34
-    /// Both rails plus the view's own horizontal padding — what the board
-    /// doesn't get.
+    /// Both rails plus the view's horizontal padding: the width the board loses.
     private static let boardInset = 24 + 2 * (railWidth + railSpacing)
 
-    /// Nil unless the conversation is too short to give the board its full
-    /// width — a cap bigger than the board would be claimed as an empty band.
-    /// The board is what gives, never the rails beside it, which say whose turn
-    /// it is.
+    /// Nil unless the conversation is too short for the board's full width; a
+    /// cap bigger than the board would be claimed as an empty band.
     private var boardCap: CGFloat? {
         guard stageBox.width > 0 else { return nil }
         let natural = (stageBox.width - Self.boardInset) / Self.boardRatio
         return stageBox.height < natural ? stageBox.height : nil
     }
 
-    /// The piece currently falling. It's drawn separately from the settled ones
-    /// so it can be animated into place, and the board skips its slot until it
-    /// lands — at which point the two renderings coincide and the handoff is
-    /// invisible.
+    /// The piece currently falling, drawn separately so it can be animated. The
+    /// board skips its slot until it lands.
     private struct Landing: Equatable {
         var slot: FourSlot
         var disc: FourDisc
@@ -191,9 +177,8 @@ struct FourStageView: View {
                           ? geometry.center(landing.slot)
                           : geometry.entry(column: landing.slot.column))
                 .opacity(landing.settled ? 1 : 0)
-                // Identity keyed to the slot so a second drop landing before the
-                // first has cleared still gets its own appearance, and with it
-                // its own animation.
+                // Keyed to the slot so a second drop landing before the first has
+                // cleared still gets its own appearance, and its own animation.
                 .id(landing.slot)
                 .onAppear { drop(landing) }
         }
@@ -231,18 +216,13 @@ struct FourStageView: View {
         }
         .frame(width: geometry.grid.width, height: geometry.grid.height)
         .position(x: geometry.grid.midX, y: geometry.grid.midY)
-        // Out of turn, waiting for an opponent, or the game is over: the board
-        // is a picture, not a control.
         .disabled(!isMyTurn)
     }
 
     // MARK: - Beside the board
 
-    /// Who holds a colour, and whether it's their go. The seat carries the
-    /// identity, so a player without a published avatar falls back to their
-    /// monogram rather than to nothing — losing it would lose who is playing.
-    /// The empty seat still takes its width, so the board doesn't resize under
-    /// the players the moment someone joins.
+    /// Who holds a color, and whether it is their go. The empty seat still takes
+    /// its width so the board doesn't resize when someone joins.
     private func rail(_ disc: FourDisc) -> some View {
         VStack(spacing: 6) {
             if let player = four.player(disc) {
@@ -257,16 +237,10 @@ struct FourStageView: View {
                 .frame(width: 16, height: 16)
         }
         .frame(width: Self.railWidth)
-        // Whose move it is, said by the board rather than a caption. Dimming
-        // only ever means "not your go", so a game that hasn't started or has
-        // finished dims neither seat.
         .opacity(isActive(disc) ? 1 : 0.5)
         .animation(.easeInOut(duration: 0.2), value: four.turn)
     }
 
-    /// The seat nobody has taken. A question mark rather than a stand-in face:
-    /// there's no user here yet to render, and the piece below still says which
-    /// colour is going spare.
     private var openSeat: some View {
         Circle()
             .fill(.quaternary)
@@ -277,9 +251,7 @@ struct FourStageView: View {
             .frame(width: Self.seatSize, height: Self.seatSize)
     }
 
-    /// Dimming says "not your go", so it only applies to a game in progress —
-    /// before a second player joins and after the result is in, both seats read
-    /// at full strength.
+    /// Dimming means "not your go", so it applies only to a game in progress.
     private func isActive(_ disc: FourDisc) -> Bool {
         guard four.outcome == nil, four.yellow != nil else { return true }
         return four.turn == disc
@@ -296,8 +268,6 @@ struct FourStageView: View {
         }
         #endif
         if four.outcome == nil, four.yellow == nil, four.red != me {
-            // The player waiting for an opponent needs no caption — the open
-            // seat beside the board already says what's missing.
             action("Join") { model.sendStageAction(.four(.join), in: conversationID) }
         }
     }
@@ -319,10 +289,10 @@ struct FourStageView: View {
 
     // MARK: - The falling piece
 
-    /// Works out what changed rather than being told: the owner sends whole
-    /// boards, and exactly one column can have grown.
+    /// The owner sends whole boards, so the move is found by diffing: exactly
+    /// one column can have grown.
     private func noteDrop(from old: FourState, to new: FourState) {
-        // A fresh game rather than a move — nothing fell.
+        // A fresh game rather than a move.
         guard new.red == old.red, new.yellow == old.yellow else { return }
         guard let column = (0..<FourState.columns).first(where: {
             new.stacks[$0].count == old.stacks[$0].count + 1
@@ -331,10 +301,9 @@ struct FourStageView: View {
                           disc: disc)
     }
 
-    /// Started from the piece's own `onAppear`, so the un-fallen frame is
-    /// guaranteed to have rendered — kicking the animation off from
-    /// `noteDrop` would let SwiftUI coalesce both states into one frame and
-    /// the piece would simply appear where it landed.
+    /// Started from the piece's own `onAppear` so the un-fallen frame has
+    /// rendered; from `noteDrop` SwiftUI would coalesce both states into one
+    /// frame and the piece would appear where it landed.
     private func drop(_ piece: Landing) {
         // Longer falls take longer, so the board keeps one sense of gravity.
         let distance = Double(FourState.rows - 1 - piece.slot.row)
@@ -342,16 +311,14 @@ struct FourStageView: View {
         withAnimation(.easeIn(duration: duration)) { landing?.settled = true }
         Task {
             try? await Task.sleep(for: .seconds(duration))
-            // Hand the piece back to the board unless another has since started
-            // falling, in which case that one owns the state now.
+            // Hand the piece back to the board unless another is already falling.
             if landing?.slot == piece.slot { landing = nil }
         }
     }
 
-    /// The finished board stays up long enough for everyone to read it, then
-    /// clears itself. Every client with the chat open runs this; the version
-    /// check means only the first report lands. Timed from the owner's stamp,
-    /// so opening the chat late doesn't restart the countdown.
+    /// Clears the finished board after a pause. Every client runs this and the
+    /// version check keeps only the first; it is timed from the owner's stamp so
+    /// opening the chat late doesn't restart the countdown.
     private func expireWhenTimeIsUp() async {
         guard let finishedAt = four.finishedAt else { return }
         let remaining = FourState.lingerSeconds - Date().timeIntervalSince(finishedAt)

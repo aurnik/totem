@@ -28,7 +28,7 @@ final class PresenceStateMachineTests: XCTestCase {
         let effects = m.handle(.signOff)
         XCTAssertEqual(m.displayState, .offline)
         XCTAssertTrue(effects.contains(.playSignOffSound))
-        // Explicit sign-off proposes offline so the server doesn't wait out the TTL.
+        // Explicit sign-off proposes offline so the server need not wait out the TTL.
         XCTAssertTrue(effects.contains(.sendPresence(.offline, awayMessage: nil)))
     }
 
@@ -88,7 +88,7 @@ final class PresenceStateMachineTests: XCTestCase {
         var m = signedOn()
         m.handle(.connectionLost)
         XCTAssertTrue(m.isReconnecting)
-        XCTAssertEqual(m.displayState, .online, "reconnecting must not display as offline (spec §10)")
+        XCTAssertEqual(m.displayState, .online, "reconnecting must not display as offline")
     }
 
     func testAwayMessageSurvivesReconnect() {

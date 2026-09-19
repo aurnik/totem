@@ -1,17 +1,14 @@
 import Foundation
 
-/// A conversation's identity is a pure function of who is in it: the UUIDv5 of
-/// the sorted participant IDs. Any combination of people names exactly one
-/// conversation — pairs and groups differ only in how many IDs go in — and both
-/// server and client can compute it locally, so opening a chat never needs a
-/// round trip and a lookup can never hand back a conversation of the wrong
-/// shape.
+/// A conversation's identity is the UUIDv5 of its sorted participant IDs, for
+/// pairs and groups alike. Both ends compute it locally, so opening a chat
+/// needs no round trip. A derived ID is computable by anyone and so is not a
+/// capability: every frame naming one is membership-checked.
 public enum ConversationID {
-    /// Frozen forever: changing it re-keys every conversation in existence.
+    /// Frozen: changing it re-keys every conversation in existence.
     public static let namespace = UUID(uuidString: "7B0FD8AE-2D8A-4F0B-96D2-D30A2E0B6ED9")!
 
-    /// Order-insensitive and duplicate-insensitive: participants are a set,
-    /// however the caller happens to hold them.
+    /// Participants are treated as a set, in any order.
     public static func derive(_ participants: some Sequence<UUID>) -> UUID {
         var name = uuidBytes(namespace)
         let sorted = Set(participants).map(uuidBytes).sorted { lhs, rhs in
@@ -37,9 +34,8 @@ public enum ConversationID {
     }
 }
 
-/// Just enough SHA-1 for UUIDv5 (RFC 4122 §4.3) — name hashing, not security.
-/// Embedded so TotemKit stays dependency-free: CryptoKit doesn't exist on
-/// Linux, where the server builds.
+/// Just enough SHA-1 for UUIDv5 (RFC 4122 4.3): name hashing, not security.
+/// Embedded because CryptoKit is unavailable on Linux, where the server builds.
 private enum SHA1 {
     static func hash(_ message: [UInt8]) -> [UInt8] {
         var h: [UInt32] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0]

@@ -2,8 +2,8 @@ import SwiftUI
 import TotemKit
 
 #if os(macOS)
-/// Quitting signs off (spec §7): termination waits for the sign-off frame so
-/// buddies see the door close immediately instead of after the 90s timeout.
+/// Termination waits for the sign-off frame, so buddies see the door close
+/// immediately rather than after the 90s timeout.
 @MainActor
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     static weak var model: AppModel?
@@ -18,9 +18,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 #else
-/// Best-effort immediate sign-off when the app is killed while running.
-/// (No code runs when an already-suspended app is swiped away — the server's
-/// liveness sweep covers that case.)
+/// Best-effort immediate sign-off when the app is killed while running. An
+/// already-suspended app runs no code, and the server's sweep covers that.
 final class PhoneAppDelegate: NSObject, UIApplicationDelegate {
     static weak var model: AppModel?
 
@@ -37,8 +36,8 @@ final class PhoneAppDelegate: NSObject, UIApplicationDelegate {
     func applicationWillTerminate(_ application: UIApplication) {
         let socket = MainActor.assumeIsolated { Self.model?.detachSocketForTermination() }
         guard let socket else { return }
-        // The socket actor runs off the main thread, so a short main-thread
-        // wait lets the sign-off frame flush before the process dies.
+        // The socket actor runs off the main thread, so a short wait here
+        // lets the sign-off frame flush before the process dies.
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
             await socket.close()
@@ -76,7 +75,7 @@ struct TotemApp: App {
                 .preferredColorScheme(model.colorScheme)
         }
         #if os(macOS)
-        // One window per conversation — the AIM interaction model (spec §7).
+        // One window per conversation.
         WindowGroup("Conversation", for: UUID.self) { $conversationID in
             if let conversationID {
                 ConversationView(conversationID: conversationID)
@@ -86,7 +85,7 @@ struct TotemApp: App {
         }
         .defaultSize(width: 360, height: 460)
 
-        // Menu bar presence without focusing the app (spec §7).
+        // Menu bar presence without focusing the app.
         MenuBarExtra("Totem \(model.isSignedOn ? "(\(model.onlineBuddyCount))" : "")",
                      systemImage: model.isSignedOn ? "person.2.fill" : "person.2") {
             MenuBarView()
@@ -114,8 +113,7 @@ struct ContentView: View {
 }
 
 private extension View {
-    /// Nothing else is reachable until it's acknowledged; the sign-on it
-    /// gates is the reason the app is open.
+    /// Modal: nothing else is reachable until it's acknowledged.
     func explainerCover(isPresented: Bool, onContinue: @escaping () -> Void) -> some View {
         let binding = Binding(get: { isPresented }, set: { _ in })
         #if os(iOS)

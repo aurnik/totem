@@ -2,7 +2,7 @@ import XCTest
 @testable import TotemKit
 
 final class DoodleTests: XCTestCase {
-    /// An avatar published by a build that predates doodles has no key at all.
+    /// An avatar encoded without the key still decodes.
     func testAvatarWithoutDoodleDecodes() throws {
         let json = #"{"skinTone":0.5,"hair":0.2,"glasses":true,"cigarette":false}"#
         let avatar = try JSONDecoder().decode(Avatar.self, from: Data(json.utf8))
@@ -10,8 +10,7 @@ final class DoodleTests: XCTestCase {
         XCTAssertTrue(avatar.glasses)
     }
 
-    /// No doodle means no key, so an older server re-encoding the avatar
-    /// produces exactly what it did before.
+    /// No doodle means no key on the wire.
     func testNilDoodleIsOmitted() throws {
         let data = try JSONEncoder().encode(Avatar())
         XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("doodle"))
@@ -47,7 +46,7 @@ final class DoodleTests: XCTestCase {
         XCTAssertFalse(overLong.isValid)
     }
 
-    /// A maximal doodle has to fit the server's default request body limit.
+    /// A maximal doodle fits the server's default request body limit.
     func testMaximalDoodleFitsRequestBody() throws {
         var strokes: [Doodle.Stroke] = []
         let perStroke = Doodle.maxPoints / Doodle.maxStrokes

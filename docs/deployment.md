@@ -1,98 +1,61 @@
-# Deployment — Railway server + Mac mini build machine
+# Deployment
 
-Instructions for setting up Totem's production topology. Read `CLAUDE.md`
-first for the architecture.
+Two machines: a container host for the server and a Mac for TestFlight builds.
 
-- **Railway** runs everything user-facing 24/7: the chat/presence relay.
-  Messages and presence flow through it; live voice does not — peers dial
-  each other directly over iroh, and the server only hands out their
-  endpoint tickets (see `CLAUDE.md`, "Live voice").
-- **The Mac mini** is a build machine only (iOS signing needs macOS +
-  Xcode). It archives and uploads TestFlight builds; it is never exposed to
-  the internet, no funnel, no static IP, no server.
+## Server
 
-## Part 1 — Railway
+The root `Dockerfile` builds the server with the repo as its build context
+(TotemKit is a local package). The container needs:
 
-1. Create a Railway project; deploy this repo as a service (connect the
-   GitHub repo, or `railway up` from the repo root). The root `Dockerfile`
-   is picked up automatically; the build context must be the repo root
-   (TotemKit is a local package dependency).
-2. Add a **Redis** database to the project.
-3. Add a **volume** to the app service, mounted at `/data` (SQLite lives
-   there; without it every redeploy wipes users).
-4. Service variables:
-   - `DB_PATH` = `/data/db.sqlite`
-   - `REDIS_URL` = reference the Redis service's connection URL variable
-   - `REDIS_PUBLIC_URL` = reference the Redis service's public URL variable
-     (fallback — NIO fails to resolve Railway's IPv6-only private DNS, so
-     the server retries the private URL then falls back to this)
-5. Generate a public domain under Settings → Networking (target port 8080).
-6. Redeploy after setting variables.
+| Variable | Purpose |
+| --- | --- |
+| `PORT` | Listen port (injected by most hosts; defaults to 8080) |
+| `DB_PATH` | SQLite file on a persistent volume, e.g. `/data/db.sqlite` |
+| `REDIS_URL` | Redis connection URL |
+| `REDIS_PUBLIC_URL` | Optional fallback if the private hostname does not resolve at boot |
+| `APNS_KEY_PEM`, `APNS_KEY_ID`, `APNS_TEAM_ID` | Optional; pushes are disabled without them |
+| `GEMINI_API_KEY` | Optional; the Gemini bot is not registered without it |
+| `YOUTUBE_API_KEY` | Optional; the picker falls back to pasted links without it |
+| `LATEST_CLIENT_BUILD` | Set by the release script; drives the in-app update banner |
 
-That domain is what `testflight.sh` bakes into distributed builds as the
-default server (`TOTEM_SERVER_URL`), so friends sign in with just a handle.
-The apps' sign-in screen also accepts it typed by hand.
+Without the volume, every redeploy wipes users. Clients reconnect on their own
+after a deploy; the bounce lands inside the presence grace period, so nobody
+flaps offline.
 
-## Part 2 — Mac mini (TestFlight builds)
+## TestFlight builds
 
-### Tools
+Signing is API-driven manual signing, so the build machine needs no Xcode
+account. `Server/onboard/provision.py` ensures, through the App Store Connect
+API, the bundle ID, an Apple Distribution certificate created from a locally
+generated key (imported into a dedicated keychain so codesign works over ssh),
+Apple's WWDR intermediates, and a fresh App Store profile. Profiles are
+immutable, so the profile is recreated on every run.
 
-- Full Xcode from the App Store (the pipeline runs `xcodebuild archive`).
-  Then `sudo xcodebuild -license accept` and `xcodebuild -runFirstLaunch`.
-- The iOS platform: `xcodebuild -downloadPlatform iOS` (Xcode ships without
-  it).
-- xcodegen installed as its full release layout, NOT a bare symlink to the
-  binary — xcodegen finds its bundled SettingPresets relative to the binary
-  path, and through a symlink it silently generates projects with no platform
-  settings. Unzip the release to `~/tools/xcodegen/` and put
-  `~/tools/xcodegen/bin` on PATH.
-- This repo cloned somewhere stable.
-
-### Secrets (ask the user to place these — do not read the key contents)
-
-- App Store Connect API key `.p8` (App Manager role) at
-  `~/.appstoreconnect/AuthKey.p8`, `chmod 600`. Note its Key ID and
-  Issuer ID.
-
-### How signing works (no Xcode account needed)
-
-Signing is fully API-driven manual signing — `provision.py` (run by
-`testflight.sh` on every build) ensures via the App Store Connect API:
-
-- the distribution bundle ID `com.deadsimple.totem` (dev builds keep
-  `com.aurnik.totem.Totem-iOS` under the personal team; that ID is not
-  registrable in the paid team `BUQNMSY5Q2`),
-- an Apple Distribution certificate created from a locally generated key
-  (state in `~/.appstoreconnect/dist/`), imported into a dedicated
-  `totem-signing` keychain that the pipeline unlocks with a known password —
-  the login keychain is locked in ssh sessions, so codesign would otherwise
-  prompt or fail,
-- a recreated "Totem AppStore" profile (profiles are immutable — recreation
-  is how certificate changes get in),
-- Apple's WWDR intermediate certificates.
-
-### Publish a build
-
-The app record `com.deadsimple.totem` must already exist in App Store
-Connect, with an external tester group and a public link.
+Requirements on the build machine: full Xcode with the iOS platform installed,
+xcodegen as its full release layout (a bare symlink to the binary loses its
+bundled setting presets), and an App Store Connect API key with the App Manager
+role.
 
 ```sh
 export ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_KEY_PATH=~/.appstoreconnect/AuthKey_….p8
-export TOTEM_SERVER_URL=https://<railway-domain>
-/PATH/TO/REPO/Server/onboard/testflight.sh
+export TOTEM_TEAM_ID=… TOTEM_SERVER_URL=https://your-server.example
+export TOTEM_TESTFLIGHT_APP_ID=…          # numeric App Store id, for the update banner
+/path/to/repo/Server/onboard/testflight.sh
 ```
 
-Invoke it with an absolute path — cwd drifts. The build appears in App Store
-Connect after processing (~5–15 min), then goes to testers.
+Build numbers are stamped from the clock (`YYYYMMDDHHMM`); `MARKETING_VERSION`
+in `Apps/project.yml` is bumped by hand per meaningful release, and each new
+value re-triggers Beta App Review.
 
-## Operations
+Once the build has processed, `testflight_submit.py` attaches it to every
+external group, sets the tester notes, submits it for review, expires older
+builds, and announces the build number to the server:
 
-- **Onboard a friend**: send them the TestFlight public link.
-- **Publish an app update**: run `testflight.sh` on the mini. Build numbers
-  auto-stamp from the clock; bump `MARKETING_VERSION` in `Apps/project.yml`
-  by hand per meaningful release — each new marketing version re-triggers
-  external Beta App Review.
-- **Server update**: push to the deployed branch (or `railway up`) —
-  Railway rebuilds. Users' sockets reconnect automatically.
-- **Logs**: Railway dashboard for the server; the `testflight.sh` output on
-  the mini.
+```sh
+Server/onboard/.venv/bin/python Server/onboard/testflight_submit.py --status
+Server/onboard/.venv/bin/python Server/onboard/testflight_submit.py --submit <build> --notes-file notes.txt
+```
+
+Releases are silent by default; pass `--notify` to email testers. Older builds
+are expired because client and server ship together, and a tester reinstalling
+an old build would talk to a server that has moved past it.

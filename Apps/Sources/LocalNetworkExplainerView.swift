@@ -1,16 +1,12 @@
 import SwiftUI
 
-/// The first sign-on binds the voice endpoint, and the endpoint probing the
-/// LAN is what makes the system ask about the local network. Asked cold,
-/// that question reads as suspicious for a chat app, so it's preceded once by
-/// a screen that says what it's for, and the prompt is raised deliberately
-/// on Continue rather than whenever the endpoint's first probe happens to go
-/// out.
+/// The voice endpoint's LAN probes make the system ask about local network
+/// access. That question is preceded once by a screen explaining it, and the
+/// prompt is then raised on Continue rather than at the endpoint's first probe.
 enum LocalNetworkExplainer {
     private static let shownKey = "explainedLocalNetwork"
 
-    /// macOS only started asking in Sequoia; a screen about a question that
-    /// never comes is just noise.
+    /// macOS only started asking in Sequoia.
     static var isNeeded: Bool {
         guard !UserDefaults.standard.bool(forKey: shownKey) else { return false }
         #if os(macOS)
@@ -25,12 +21,9 @@ enum LocalNetworkExplainer {
         UserDefaults.standard.set(true, forKey: shownKey)
     }
 
-    /// Reaching the server itself can be local network access — a Bonjour
-    /// name resolves over multicast, a private address is on the LAN — in
-    /// which case the system asks at the first sign-in request, long before
-    /// the endpoint binds. The explainer's moment has passed by then, so it
-    /// is counted as shown rather than raised after the fact. Loopback is
-    /// exempt from the prompt and from this.
+    /// Reaching the server can itself be local network access (a Bonjour name,
+    /// a private address), in which case the system asks at the first sign-in
+    /// request. The explainer's moment has passed, so it counts as shown.
     static func noteReached(_ url: URL) {
         guard let host = url.host?.lowercased(), isLocalNetwork(host) else { return }
         markShown()
@@ -52,9 +45,8 @@ enum LocalNetworkExplainer {
     }
 
     /// Apple's documented way to raise the alert (TN3179): connecting a UDP
-    /// socket to a link-local address counts as local network access without
-    /// sending anything. Best effort — if it doesn't fire, the endpoint's own
-    /// probes will a moment later.
+    /// socket to a link-local address counts as access without sending anything.
+    /// Best effort; the endpoint's own probes raise it otherwise.
     static func triggerPrompt() {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return }
@@ -129,9 +121,7 @@ struct LocalNetworkExplainerView: View {
     }
 }
 
-/// Two people, breathing slowly, with a signal drifting between them. Soft
-/// shapes and slow easing on purpose: this is the moment before a permission
-/// prompt, so the picture should feel calm, not technical.
+/// Two people with a signal drifting between them.
 private struct ConnectionVisualization: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -152,7 +142,6 @@ private struct ConnectionVisualization: View {
         let right = CGPoint(x: mid.x + reach, y: mid.y)
         let breath = 0.5 + 0.5 * sin(t * 0.9)
 
-        // A halo behind everything, swelling with the breath.
         let haloRadius = size.height * (0.46 + 0.04 * breath)
         canvas.fill(
             Path(ellipseIn: CGRect(x: mid.x - haloRadius, y: mid.y - haloRadius,
@@ -161,10 +150,8 @@ private struct ConnectionVisualization: View {
                 Gradient(colors: [Color.explainerHalo, Color.explainerHalo.opacity(0)]),
                 center: mid, startRadius: 0, endRadius: haloRadius))
 
-        // The path between them: a faint arc, with soft dots drifting along
-        // it from one person to the other and back, spaced evenly so the
-        // motion reads as a steady flow rather than a clump. Each dot wears
-        // the colour of whoever it set out from.
+        // A faint arc between them, with evenly spaced dots drifting back and
+        // forth along it in the color of whoever they set out from.
         let control = CGPoint(x: mid.x, y: mid.y - 44)
         var arc = Path()
         arc.move(to: left)
@@ -180,8 +167,7 @@ private struct ConnectionVisualization: View {
                 y: u * u * left.y + 2 * u * s * control.y + s * s * right.y)
             let dotRadius = 5 + 2 * sin(s * .pi)
             let opacity = 0.3 + 0.6 * sin(s * .pi)
-            // The first half of the cycle runs left to right, the second
-            // half back again.
+            // The first half of the cycle runs left to right, the second back.
             let origin = phase < 0.5 ? Color.explainerYou : Color.explainerFriend
             canvas.fill(
                 Path(ellipseIn: CGRect(x: point.x - dotRadius, y: point.y - dotRadius,

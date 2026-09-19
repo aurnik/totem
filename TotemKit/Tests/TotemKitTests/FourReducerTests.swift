@@ -36,8 +36,7 @@ final class FourReducerTests: XCTestCase {
                                            expectedVersion: stage.version, at: t0))!
     }
 
-    /// Plays the columns in order, alternating red and yellow, and returns the
-    /// stage after the last one. Fails the test if any drop is refused.
+    /// Plays the columns in order, failing the test if any drop is refused.
     @discardableResult
     private func play(_ columns: [Int], from stage: Stage,
                       file: StaticString = #filePath, line: UInt = #line) -> Stage {
@@ -67,8 +66,7 @@ final class FourReducerTests: XCTestCase {
         XCTAssertEqual(state.turn, .red, "red always moves first")
     }
 
-    /// Starting is unconditional, so nothing upstream stops it landing on a
-    /// board already in play. Anyone watching could otherwise wipe the game.
+    /// Starting is unconditional, so the reducer itself guards a live board.
     func testStartOnAGameInProgressIsRejected() {
         let stage = joined()
         XCTAssertEqual(StageReducer.reduce(stage, .four(.start), by: bystander,
@@ -120,8 +118,7 @@ final class FourReducerTests: XCTestCase {
         XCTAssertEqual(game(next).turn, .red)
     }
 
-    /// The whole point of a turn-based game: the version check serialises
-    /// actions, but it can't tell whose turn it is.
+    /// The version check serializes actions but cannot tell whose turn it is.
     func testDropOutOfTurnIsRejected() {
         let stage = joined()
         XCTAssertEqual(StageReducer.reduce(stage, .four(.drop(column: 0)), by: yellow,
@@ -157,8 +154,7 @@ final class FourReducerTests: XCTestCase {
         }
     }
 
-    /// A drop is aimed at the board the sender was looking at, so it must not
-    /// land after the opponent has already moved.
+    /// A drop aimed at a board the opponent has since moved on is refused.
     func testDropWithStaleVersionIsRejected() {
         let stage = joined()
         let moved = play([0], from: stage)
@@ -209,16 +205,15 @@ final class FourReducerTests: XCTestCase {
         XCTAssertEqual(line, (0..<4).map { FourSlot(column: $0, row: 3 - $0) })
     }
 
-    /// A drop that extends a run past four is still one line, and the client
-    /// draws whatever it's handed — so the ends have to be the ends.
+    /// A run past four is one line, sorted so its ends are the array's ends.
     func testWinningLineCoversTheWholeRun() {
         var stacks = [[FourDisc]](repeating: [], count: FourState.columns)
         for column in [0, 1, 3, 4] { stacks[column] = [.red] }
         let state = FourState(stacks: stacks, red: red, yellow: yellow)
         let stage = Stage(version: 1, state: .four(state), ownerID: red)
 
-        // Eight pieces are down, so it's red's turn, and column 2 joins the two
-        // halves into a run of five.
+        // Eight pieces are down, so it is red's turn, and column 2 joins the
+        // two halves into a run of five.
         let won = updated(StageReducer.reduce(stage, .four(.drop(column: 2)), by: red,
                                               expectedVersion: 1, at: t0))!
         guard case .won(_, let line)? = game(won).outcome else {
@@ -234,10 +229,9 @@ final class FourReducerTests: XCTestCase {
     }
 
     func testFullBoardWithNoLineIsADraw() {
-        // Columns alternate RRYYRR / YYRRYY, which leaves every row, column and
-        // diagonal topping out at a run of two. Set up directly rather than
-        // played: this pattern isn't 21/21, so no alternating move order
-        // reaches it, and the reducer only cares that the last drop fills it.
+        // Columns alternate RRYYRR / YYRRYY, so every row, column and diagonal
+        // tops out at a run of two. Built directly, since no alternating move
+        // order reaches this pattern.
         let even: [FourDisc] = [.red, .red, .yellow, .yellow, .red, .red]
         let odd: [FourDisc] = [.yellow, .yellow, .red, .red, .yellow, .yellow]
         var stacks = (0..<FourState.columns).map { $0.isMultiple(of: 2) ? even : odd }
@@ -267,8 +261,7 @@ final class FourReducerTests: XCTestCase {
                                            expectedVersion: stage.version, at: t0), .cleared)
     }
 
-    /// Everyone with the chat open runs the same countdown, so the reports
-    /// arrive together. The first clears the stage; the rest must find nothing.
+    /// Every client runs the same countdown; only the first report clears.
     func testSecondExpireReportIsRefused() {
         let stage = play([0, 1, 0, 1, 0, 1, 0], from: joined())
         XCTAssertEqual(StageReducer.reduce(stage, .four(.expire), by: red,
@@ -286,8 +279,7 @@ final class FourReducerTests: XCTestCase {
                                            expectedVersion: nil, at: t0), .rejected)
     }
 
-    /// The board only stays up so everyone can see the line. It shouldn't hold
-    /// the stage hostage for the rest of its countdown.
+    /// A finished board does not hold the stage for the rest of its countdown.
     func testYouTubeCanTakeTheStageFromAFinishedGame() {
         let finished = play([0, 1, 0, 1, 0, 1, 0], from: joined())
         let takeover = StageAction.youtube(.setVideo(videoID: "abc", title: "T", thumbnailURL: nil))
@@ -297,7 +289,7 @@ final class FourReducerTests: XCTestCase {
     }
 
     func testAGameCantTakeTheStageFromAnotherLiveGame() {
-        // Same extension, so `preservesState` never comes into it — the reducer
+        // Same extension, so `preservesState` does not apply and the reducer
         // has to refuse this itself.
         let stage = joined()
         XCTAssertEqual(StageReducer.reduce(stage, .four(.start), by: bystander,

@@ -18,7 +18,7 @@ final class BotTagTests: XCTestCase {
     }
 
     func testLongestAliasWinsOverPrefix() {
-        // "@g" is a prefix of "@gemini"; the longer tag must not be shadowed.
+        // "@g" is a prefix of "@gemini"; the longer tag wins.
         XCTAssertEqual(BotTag.match("@gemini hi", aliases: ["@g", "@gemini"])?.tag, "@gemini")
     }
 
@@ -71,7 +71,7 @@ final class BotTagTests: XCTestCase {
         let all = gemini.aliases
         XCTAssertEqual(BotTag.match("@g_ recap", aliases: all)?.tag, "@g_")
         XCTAssertEqual(BotTag.match("@gemini_ recap", aliases: all)?.tag, "@gemini_")
-        // The trailing underscore must not be swallowed by the shorter tag.
+        // The trailing underscore is not swallowed by the shorter tag.
         XCTAssertEqual(BotTag.match("@g_ recap", aliases: all)?.prompt, "recap")
     }
 

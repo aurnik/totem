@@ -1,13 +1,10 @@
 import SwiftUI
 import TotemKit
 
-/// The settings preview, with a Draw mode its owner toggles from the section
-/// header. Idle, it is just the head at the list's size and the list scrolls
-/// over it; drawing grows it into a finger canvas with swatches. Committed strokes live on the avatar itself and are
-/// drawn by `AvatarHeadView` exactly as friends will see them; this view only
-/// draws the stroke in progress on top, then simplifies and quantises it into
-/// the avatar on release and commits once per stroke, the way the sliders
-/// commit once per drag.
+/// The settings avatar preview, which grows into a finger canvas in Draw mode.
+/// Committed strokes live on the avatar and are drawn by `AvatarHeadView`; this
+/// view only draws the stroke in progress, then simplifies and quantizes it
+/// into the avatar on release, one commit per stroke.
 struct DoodleEditor: View {
     @Environment(AppModel.self) private var model
     /// Side of the canvas while drawing.
@@ -146,10 +143,9 @@ struct DoodleEditor: View {
 }
 
 enum Polyline {
-    /// Ramer-Douglas-Peucker: keeps only the points that bend the line by
-    /// more than `tolerance`. A loose tolerance is deliberate — it drops hand
-    /// jitter along with the bytes, and the midpoint curves through what's
-    /// left are what make a stroke look smooth.
+    /// Ramer-Douglas-Peucker: keeps only the points that bend the line by more
+    /// than `tolerance`. A loose tolerance also drops hand jitter, which the
+    /// midpoint curves through the survivors then smooth over.
     static func simplified(_ points: [CGPoint], tolerance: CGFloat) -> [CGPoint] {
         guard points.count > 2 else { return points }
         let a = points[0], b = points[points.count - 1]

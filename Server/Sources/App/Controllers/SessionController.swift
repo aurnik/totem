@@ -15,11 +15,9 @@ struct SessionController: RouteCollection {
     }
 
     /// Resolves the conversation for the caller plus the given participants,
-    /// all of whom must be accepted buddies of the caller. The combination
-    /// *is* the identity, so this is idempotent: the same people always get
-    /// the same conversation back. Creating a group also opens its sitting —
-    /// that's the deliberate act a group needs to be live, where a 1:1 sitting
-    /// opens on first traffic instead.
+    /// all of whom must be accepted buddies. Idempotent, since the combination
+    /// is the identity. Creating a group also opens its sitting; a pair's
+    /// sitting opens on first traffic instead.
     func create(req: Request) async throws -> SessionInfo {
         let user = try req.auth.require(UserModel.self)
         let userID = try user.requireID()

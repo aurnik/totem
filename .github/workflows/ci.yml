@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  kit:
+    name: TotemKit tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: TotemKit
+
+  server:
+    name: Server build and tests
+    runs-on: ubuntu-latest
+    container: swift:6.2-jammy
+    services:
+      redis:
+        image: redis:7
+    env:
+      REDIS_URL: redis://redis:6379
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build
+        working-directory: Server
+      - run: swift test
+        working-directory: Server
+
+  apps:
+    name: App builds
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen generate
+        working-directory: Apps
+      - run: >
+          xcodebuild -project Totem.xcodeproj -scheme Totem-macOS
+          -configuration Debug CODE_SIGNING_ALLOWED=NO build
+        working-directory: Apps
+      - run: >
+          xcodebuild -project Totem.xcodeproj -scheme Totem-iOS
+          -destination "generic/platform=iOS Simulator"
+          -configuration Debug CODE_SIGNING_ALLOWED=NO build
+        working-directory: Apps

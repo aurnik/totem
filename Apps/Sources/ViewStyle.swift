@@ -26,16 +26,12 @@ extension Color {
         #endif
     }
 
-    /// A bot's bubble: near-black on light, near-white on dark. Not quite
-    /// either extreme, so it reads as a deliberate color rather than as the
-    /// absence of one against the chat background.
-    ///
-    /// Resolved from the trait environment rather than read off
-    /// `\.colorScheme`, so it follows the in-app appearance override the same
-    /// way system colors do.
+    /// A bot's bubble: near-black on light, near-white on dark. Resolved from
+    /// the trait environment rather than `\.colorScheme`, so it follows the
+    /// in-app appearance override the way system colors do.
     static var botBubble: Color { dynamic(light: 0.11, dark: 0.93) }
 
-    /// Text on `botBubble` — the inverse, so contrast holds in both schemes.
+    /// The inverse of `botBubble`, so contrast holds in both schemes.
     static var botBubbleText: Color { dynamic(light: 0.96, dark: 0.08) }
 
     private static func dynamic(light: Double, dark: Double) -> Color {

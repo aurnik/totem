@@ -36,9 +36,7 @@ final class PeerWireTests: XCTestCase {
         }
     }
 
-    /// A QUIC stream hands back whatever bytes have arrived: several frames
-    /// at once, or half of one. Both must reassemble to exactly the frames
-    /// that were written, in order.
+    /// A stream read can land several frames at once, or half of one.
     func testConcatenatedAndSplitChunksReassemble() throws {
         let frames = sampleFrames()
         var stream = Data()
@@ -55,9 +53,7 @@ final class PeerWireTests: XCTestCase {
         XCTAssertEqual(received, frames)
     }
 
-    /// A case this build doesn't know decodes as nothing, and the frames
-    /// after it still arrive — the framing, not the payload, keeps the
-    /// stream readable.
+    /// An undecodable frame is skipped and the frames after it still arrive.
     func testUnknownPayloadIsSkippedWithoutLosingTheStream() throws {
         let known = PeerFrame.typing(conversationID: UUID())
         let unknown = Data(#"{"futureCase":{"x":1}}"#.utf8)

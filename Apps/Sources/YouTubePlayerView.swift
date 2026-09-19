@@ -2,32 +2,24 @@ import SwiftUI
 import TotemKit
 import WebKit
 
-/// The shared video surface.
-///
-/// Two constraints came out of testing this against YouTube, and both are
-/// load-bearing: the page must be served from a real HTTP origin (hence
-/// `AppModel.playerURL`, not `loadHTMLString`, which fails with player error
-/// 152/153), and the web view must be attached to a visible window or playback
-/// stalls at "buffering" forever. Everything else is a reconciliation loop:
-/// the shared `YouTubeState` is the intent, and the coordinator issues only the
-/// commands needed to make the player match it.
+/// The shared video surface. The page must be served from a real HTTP origin
+/// (`AppModel.playerURL`, not `loadHTMLString`, which fails with player error
+/// 152/153), and the web view must be in a visible window or playback stalls at
+/// buffering forever. The rest is a reconciliation loop: `YouTubeState` is the
+/// intent and the coordinator issues the commands that make the player match.
 @MainActor
 struct YouTubePlayerView {
     let initialURL: URL
     let youtube: YouTubeState
-    /// Latest position the player reported, so a pause records where playback
-    /// really was rather than where the shared clock estimated.
+    /// Latest position the player reported, so a pause records where it really was.
     var onTime: (Double) -> Void
     var onEnded: () -> Void
     var onUnplayable: () -> Void
 
-    /// Beyond this the player is far enough from the shared position to be
-    /// worth a visible seek; below it, seeking would be more jarring than the
-    /// drift.
+    /// Drift beyond this is corrected with a seek, below it tolerated.
     private static let driftTolerance: Double = 3
 
     /// Player states a play command can still move: unstarted, paused, cued.
-    /// Buffering is already on its way, and ended is the stage's business.
     private static let stalledStates: Set<Int> = [-1, 2, 5]
 
     func makeCoordinator() -> Coordinator {
@@ -36,8 +28,7 @@ struct YouTubePlayerView {
 
     private func makeWebView(_ context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        // Without this the player refuses to start without a tap, which would
-        // defeat the point of a shared stage.
+        // Otherwise the player refuses to start without a tap.
         configuration.mediaTypesRequiringUserActionForPlayback = []
         #if os(iOS)
         configuration.allowsInlineMediaPlayback = true
@@ -49,14 +40,11 @@ struct YouTubePlayerView {
         webView.scrollView.isScrollEnabled = false
         webView.isOpaque = false
         webView.backgroundColor = .clear
-        // Belt and braces with the page's own pointer-events blocking and the
-        // SwiftUI hit-test opt-out: nothing about this view is interactive.
         webView.isUserInteractionEnabled = false
         #endif
         context.coordinator.webView = webView
-        // isPlaying starts false whatever the stage says: the page's own
-        // autoplay is one shot, and seeding the intent here would make the
-        // first reconcile a no-op and leave nothing to re-issue it.
+        // isPlaying starts false whatever the stage says: the page's autoplay is
+        // one shot, so seeding the intent would make the first reconcile a no-op.
         context.coordinator.applied = .init(videoID: youtube.videoID, isPlaying: false,
                                            positionAt: youtube.positionAt)
         webView.load(URLRequest(url: initialURL))
@@ -79,9 +67,7 @@ struct YouTubePlayerView {
         struct Applied {
             var videoID: String
             var isPlaying: Bool
-            /// The stamp of the position last applied. A new stamp means the
-            /// playhead moved deliberately — a skip — as opposed to simply
-            /// advancing on its own.
+            /// A new stamp means a skip, not the playhead advancing on its own.
             var positionAt: Date
         }
 
@@ -89,11 +75,10 @@ struct YouTubePlayerView {
         var webView: WKWebView?
         var applied = Applied(videoID: "", isPlaying: false, positionAt: .distantPast)
         private var ready = false
-        /// The player's own last report, as opposed to `applied`, which is what
-        /// we asked for. -1 is the API's "unstarted".
+        /// The player's own last report, unlike `applied`. -1 is "unstarted".
         private var playerState = -1
-        /// Set while a video change is in flight: the player reports the old
-        /// previous state briefly, and acting on it would fight the new video.
+        /// Set while a video change is in flight and the player still reports the
+        /// old state.
         private var loading = false
 
         init(_ parent: YouTubePlayerView) {
@@ -111,8 +96,8 @@ struct YouTubePlayerView {
                     "cmdLoad('\(youtube.videoID)', \(start), \(youtube.isPlaying))")
                 return
             }
-            // Seek before transport, so a resume picks up from where the skip
-            // put the playhead rather than where it left off.
+            // Seek before transport, so a resume picks up from where the skip put
+            // the playhead.
             if applied.positionAt != youtube.positionAt {
                 applied.positionAt = youtube.positionAt
                 webView.evaluateJavaScript("cmdSeek(\(youtube.position(at: Date())))")
@@ -135,9 +120,7 @@ struct YouTubePlayerView {
             case "time":
                 handleTime(body["t"] as? Double ?? 0)
             case "error":
-                // 101 and 150 both mean the owner disabled embedding; 2 and 5
-                // are malformed-request and playback failures. None are worth
-                // distinguishing to the user.
+                // 101/150 embedding disabled, 2/5 request and playback failures.
                 parent.onUnplayable()
             default:
                 break
@@ -148,13 +131,11 @@ struct YouTubePlayerView {
             playerState = state
             switch state {
             case 0:
-                // Ended. Every client with the chat open reports this; the
-                // stage's owner keeps the first and rejects the rest.
+                // Ended. Every client reports this; the owner keeps the first.
                 parent.onEnded()
             case 1, 2, 5:
-                // Cued (5) counts as settled too: a load that comes to rest
-                // without playing is still done loading, and leaving `loading`
-                // set would gate the retry below off forever.
+                // Cued (5) counts as settled: leaving `loading` set would gate the
+                // retry in handleTime off forever.
                 loading = false
                 applied.isPlaying = state == 1
             default:
@@ -165,11 +146,9 @@ struct YouTubePlayerView {
         private func handleTime(_ time: Double) {
             parent.onTime(time)
             guard !loading, parent.youtube.isPlaying, let webView else { return }
-            // A play that never took — the window wasn't visible yet, or the
-            // page's one-shot autoplay was refused — leaves the stage playing
-            // and this player sitting still. The tick is the only thing that
-            // runs regardless of whether SwiftUI re-renders, so it's what gets
-            // to notice.
+            // A play that never took (window not yet visible, or autoplay refused)
+            // leaves the stage playing and this player still; the tick is the only
+            // thing that runs without a re-render, so the retry lives here.
             if YouTubePlayerView.stalledStates.contains(playerState) {
                 webView.evaluateJavaScript("cmdPlay()")
                 return

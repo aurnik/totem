@@ -1,9 +1,8 @@
 import TotemKit
 import Vapor
 
-/// Search for the YouTube picker. The API key stays server-side, so clients
-/// never hold one and search can be turned off for a deployment by leaving
-/// `YOUTUBE_API_KEY` out of the env — the picker falls back to pasted links.
+/// Search for the YouTube picker. The API key stays server-side; without
+/// `YOUTUBE_API_KEY` search is off and the picker falls back to pasted links.
 struct YouTubeController: RouteCollection {
 
     func boot(routes: RoutesBuilder) throws {
@@ -36,7 +35,7 @@ struct YouTubeController: RouteCollection {
         return results.items.compactMap(\.video)
     }
 
-    /// Only the fields the picker renders; YouTube's payload is much larger.
+    /// Only the fields the picker renders.
     private struct SearchResponse: Content {
         struct Item: Content {
             struct ID: Content { let videoId: String? }
@@ -70,8 +69,7 @@ struct YouTubeController: RouteCollection {
 extension TotemKit.YouTubeVideo: Content {}
 
 private extension String {
-    /// Titles come back with HTML entities ("Tom &amp; Jerry"), which would
-    /// render literally in a SwiftUI Text.
+    /// Titles come back with HTML entities, which render literally in a Text.
     var htmlUnescaped: String {
         var out = self
         for (entity, character) in [("&amp;", "&"), ("&quot;", "\""), ("&#39;", "'"),

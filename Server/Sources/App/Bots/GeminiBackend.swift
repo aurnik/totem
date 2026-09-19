@@ -2,10 +2,9 @@ import Foundation
 import TotemKit
 import Vapor
 
-/// Gemini, run by us. The API key stays server-side and the bot is only
-/// registered when `GEMINI_API_KEY` is in the env, so a deployment without one
-/// advertises no bots rather than leaving clients waiting on a reply that can
-/// never come.
+/// Gemini backend. The API key stays server-side, and the bot is registered
+/// only when `GEMINI_API_KEY` is set, so a deployment without one advertises
+/// no bots.
 struct GeminiBackend: BotBackend {
     let client: Client
     let logger: Logger
@@ -13,19 +12,9 @@ struct GeminiBackend: BotBackend {
     private static let endpoint =
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
-    /// Chat bubbles, not essays. The client renders a plain string, so markdown
-    /// would show up as literal asterisks.
-    ///
-    /// The date is stamped in rather than left to the model: a model has no
-    /// clock, and making it search for today's date to answer "what's the date"
-    /// is both slow and prone to returning its training cutoff instead.
-    ///
-    /// Keep this instruction short and free of commentary. Asked merely to
-    /// "lead with the answer, working after", the model answered a percentage
-    /// problem with a numbered markdown list and led with the method; asking
-    /// for the answer alone is what actually produces answer-first prose.
-    /// Explaining that reasoning *inside* the instruction made it worse again —
-    /// text describing worksheets appears to invite them.
+    /// The date is stamped in because the model has no clock and searching for
+    /// it is slow. Keep this instruction short and literal; commentary inside
+    /// it changes the shape of the answers.
     private static func systemInstruction(now: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE, d MMMM yyyy 'at' HH:mm zzz"
@@ -60,17 +49,13 @@ struct GeminiBackend: BotBackend {
     static var isConfigured: Bool { Environment.get("GEMINI_API_KEY") != nil }
 
     /// The transcript rides in the prompt rather than as prior `contents`
-    /// turns: those are a two-role user/model alternation, and a group chat has
-    /// as many speakers as it has people. Labelled lines keep who-said-what.
-    ///
-    /// It is fenced and explicitly marked as quoted material, because the
-    /// transcript is other people's text arriving from a client — anything in
-    /// it that reads like an instruction must stay data.
+    /// turns, which only allow a two-role alternation. It is fenced and marked
+    /// as quoted material so text in it is never read as instructions.
     private static func prompt(for invocation: BotInvocation) -> String {
         guard !invocation.context.isEmpty else { return invocation.prompt }
         var transcript = ""
-        // Newest-first budget, then flip: when the cap bites, keep the turns
-        // nearest the question.
+        // Budget newest-first, then flip, so the cap keeps the turns nearest
+        // the question.
         for message in invocation.context.reversed() {
             let line = "\(message.speaker): \(message.body)\n"
             if transcript.count + line.count > Limits.botContextMaxCharacters { break }
@@ -89,8 +74,7 @@ struct GeminiBackend: BotBackend {
 
     func respond(to invocation: BotInvocation) async throws -> String {
         guard let key = Environment.get("GEMINI_API_KEY") else { throw BotError.notConfigured }
-        // A tag with nothing after it is not a prompt. Say so rather than
-        // spending a call on inventing a greeting.
+        // A tag with nothing after it is not a prompt.
         guard !invocation.prompt.isEmpty else { return "No prompt given." }
         let prompt = Self.prompt(for: invocation)
 
@@ -100,21 +84,15 @@ struct GeminiBackend: BotBackend {
                 systemInstruction: .init(
                     role: nil, parts: [.init(text: Self.systemInstruction(now: Date()))]),
                 contents: [.init(role: "user", parts: [.init(text: prompt)])],
-                // Grounding: without it the bot answers from a training
-                // snapshot, which in a chat reads as confidently out of date.
+                // Grounding, so answers do not come from a training snapshot.
                 tools: [.init(googleSearch: .init())],
                 generationConfig: .init(
                     temperature: 0.7,
-                    // Thinking tokens draw on this budget, so it has to leave
-                    // room for both; the reply itself is capped separately.
+                    // Thinking tokens draw on this budget too; the reply is
+                    // capped separately.
                     maxOutputTokens: 2048,
-                    // Dynamic, not disabled. Measured on a two-step percentage
-                    // word problem: with thinking off the model reasons in the
-                    // visible answer — showing its working despite being told
-                    // not to, and heading it with a figure ($51.98) that
-                    // contradicted its own derivation ($55.56). Dynamic
-                    // thinking answered "$55.56" in one sentence, at the same
-                    // ~2.5s. Terseness and correctness both came from here.
+                    // Dynamic rather than disabled: with thinking off the
+                    // model reasons in the visible answer and gets it wrong.
                     thinkingConfig: .init(thinkingBudget: -1))))
         }
 
@@ -159,8 +137,8 @@ struct GeminiBackend: BotBackend {
         let generationConfig: GenerationConfig
     }
 
-    /// Every field optional — a safety-blocked or truncated response omits
-    /// most of them, and that has to decode into "no text" rather than throw.
+    /// Every field is optional: a blocked or truncated response omits most of
+    /// them and has to decode into "no text" rather than throw.
     private struct GenerateContentResponse: Content {
         struct Candidate: Content {
             struct Turn: Content {

@@ -24,6 +24,14 @@ let package = Package(
                 "TotemKit",
             ],
             path: "Sources/App"
-        )
+        ),
+        .testTarget(
+            name: "AppTests",
+            dependencies: [
+                "App",
+                .product(name: "XCTVapor", package: "vapor"),
+            ],
+            path: "Tests/AppTests"
+        ),
     ]
 )

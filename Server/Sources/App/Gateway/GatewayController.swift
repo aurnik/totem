@@ -4,8 +4,8 @@ import TotemKit
 import Vapor
 
 /// The stateful WebSocket gateway: presence transitions, heartbeats, peer
-/// introductions, sittings and bots (spec §3, §4). Conversations themselves
-/// never pass through it — they travel peer to peer.
+/// introductions, sittings and bots. Conversation content never passes through
+/// it; that travels peer to peer.
 struct GatewayController {
     let app: Application
     let connections: ConnectionManager
@@ -16,9 +16,8 @@ struct GatewayController {
     var sittings: SittingStore { SittingStore(redis: app.redis) }
     var db: Database { app.db }
 
-    /// Built per use rather than stored: the dispatcher needs a way back in to
-    /// fan out the reply, and the gateway is a value type, so capturing a copy
-    /// is both cheap and cycle-free.
+    /// Built per use: the dispatcher needs a way back in to fan out the reply,
+    /// and capturing a copy of this value type is cheap and cycle-free.
     private var botDispatcher: BotDispatcher {
         let gateway = self
         return BotDispatcher(registry: bots, app: app) { botID, sessionID, text in
@@ -32,8 +31,7 @@ struct GatewayController {
             return
         }
         let generation = await connections.register(ws, for: userID)
-        // A socket this one replaced may have left a chat on screen; this one
-        // hasn't said what it shows yet.
+        // A socket this one replaced may have left a chat on screen.
         await stopViewing(userID)
 
         ws.onBinary { _, buffer in
@@ -49,11 +47,9 @@ struct GatewayController {
         await signOn(user: user, userID: userID)
     }
 
-    /// A suspended iOS app never closes its socket — heartbeats just stop and
-    /// the Redis key expires silently, which by itself notifies no one. This
-    /// sweep turns TTL expiry into a real offline transition: fan-out to
-    /// buddies, sessions archived, socket reaped (spec §3: server marks
-    /// offline after 90s of silence).
+    /// Turns silent TTL expiry into a real offline transition. A suspended iOS
+    /// app never closes its socket: heartbeats stop, the Redis key expires, and
+    /// nothing else would notice.
     func startLivenessSweep() {
         Task.detached {
             while !Task.isCancelled {
@@ -69,10 +65,9 @@ struct GatewayController {
         }
     }
 
-    /// A new request pushes to the target's socket so no client ever needs a
-    /// manual refresh to see it. A registered socket is no proof the app is
-    /// awake to render that, though, so verify liveness and fall back to APNs
-    /// — off the request path, since the ping costs 3s.
+    /// Pushes a new request to the target's socket, falling back to APNs when
+    /// the socket does not answer a ping. Verified off the request path, since
+    /// the ping costs 3s.
     func buddyRequestReceived(by targetID: UUID, from user: User) async {
         await connections.send(.buddyRequest, to: targetID)
         let (connections, pusher) = (self.connections, self.pusher)
@@ -82,14 +77,12 @@ struct GatewayController {
         }
     }
 
-    /// After a mutual accept, each party's welcome snapshot predates the
-    /// buddyship — push each one's current presence to the other. Only the
-    /// requester is learning something they didn't do themselves, so they get
-    /// the same live-socket-then-APNs treatment the request itself got.
+    /// Both welcome snapshots predate the buddyship, so each party is sent the
+    /// other's current presence. Only the requester is learning something they
+    /// did not do themselves, so they also get the APNs fallback.
     func buddyshipFormed(accepter: UUID, accepterHandle: String, requester: UUID) async {
-        // The pair's conversation exists from the moment it *could* be used:
-        // a derived ID arriving on the wire can't be reversed into its
-        // participants, so the row must predate anyone naming it.
+        // A derived ID on the wire cannot be reversed into its participants,
+        // so the row has to exist before anyone can name it.
         do {
             _ = try await conversation(for: [accepter, requester])
         } catch {
@@ -119,14 +112,11 @@ struct GatewayController {
         do {
             // Preserve an existing away state on reconnect; otherwise online.
             let existing = try await presence.get(for: userID)
-            // Only a genuine offline→online transition is a sign-on; socket
-            // reconnects within the presence TTL are not.
+            // Only an offline-to-online transition is a sign-on; a reconnect
+            // within the presence TTL is not.
             let wasOffline = existing.state == .offline
-            // A message-less away is the one the server set on their behalf
-            // when it found them unreachable — clients can only go away by
-            // writing a message, so nothing else produces this shape. Being
-            // back is the answer to it, so it clears; a real away message is
-            // the user's own and survives the reconnect.
+            // A message-less away is the server's unreachable mark, which
+            // being back answers. An away the user wrote survives the reconnect.
             let current = wasOffline || existing.isUnreachableMark
                 ? Presence(state: .online) : existing
             try await presence.set(current, for: userID)
@@ -151,9 +141,8 @@ struct GatewayController {
                          bots: await bots.all(),
                          latestBuild: Environment.get("LATEST_CLIENT_BUILD")),
                 to: userID)
-            // What peers have on screen, and where their voice endpoints are,
-            // is socket state, so it isn't in the welcome; a client back from
-            // a drop is told afresh.
+            // Viewing and endpoints are socket state, not in the welcome, so a
+            // client back from a drop is told afresh.
             for (viewerID, conversationID) in await connections.viewers(of: userID) {
                 await connections.send(
                     .viewing(conversationID: conversationID, userID: viewerID, viewing: true),
@@ -165,8 +154,7 @@ struct GatewayController {
                 }
             }
             await fanOut(.presence(userID: userID, presence: current), toBuddiesOf: userID)
-            // Buddies' cached lists were fetched at their own launch and can
-            // predate this user ever publishing an avatar.
+            // Buddies' cached lists can predate this user publishing an avatar.
             if let avatar {
                 await fanOutAvatar(avatar, of: userID)
             }
@@ -183,9 +171,8 @@ struct GatewayController {
         }
     }
 
-    /// Non-deliberate drop: hold the last presence for the TTL window so a user
-    /// in a tunnel doesn't flap to offline (spec §10). If they haven't
-    /// reconnected when the grace elapses, they go offline.
+    /// Non-deliberate drop: holds the last presence for the grace window so a
+    /// user in a tunnel does not flap to offline.
     private func handleClose(userID: UUID, ws: WebSocket, generation: Int) async {
         if await connections.unregister(userID, ifStill: ws) {
             await stopViewing(userID)
@@ -193,16 +180,14 @@ struct GatewayController {
         await goOffline(userID: userID, afterGraceFrom: generation)
     }
 
-    /// Force-close a silent socket. Whatever it had on screen went with it.
+    /// Force-closes a silent socket.
     private func reap(_ userID: UUID) async {
         await connections.expire(userID)
         await stopViewing(userID)
     }
 
-    /// Offline once the grace elapses, unless they came back. The generation
-    /// they were at when we started waiting is the test: any reconnect — or any
-    /// `expire` that supersedes this wait with its own — bumps it, and this
-    /// no-ops.
+    /// Goes offline once the grace elapses, unless the user came back. Any
+    /// reconnect or `expire` bumps the generation and makes this a no-op.
     private func goOffline(userID: UUID, afterGraceFrom generation: Int) async {
         try? await Task.sleep(for: .seconds(PresenceStore.ttlSeconds))
         guard await connections.generation(of: userID) == generation,
@@ -211,18 +196,13 @@ struct GatewayController {
         await goOffline(userID: userID)
     }
 
-    /// A failed liveness check is certain evidence we can't reach them *now*,
-    /// and only weak evidence that they left — a wifi handoff looks identical
-    /// to a walk-out. So it marks them away rather than crossing them offline:
-    /// going offline is the expensive transition (their transcripts cleared,
-    /// 1:1 sessions archived, a sign-on alert to every buddy on the way back),
-    /// and the grace period exists precisely so a tunnel doesn't pay it. This
-    /// tells whoever just tried to send them something what their buddy list
-    /// was contradicting, and costs nothing if they walk straight back in.
+    /// Marks a user away rather than offline after a failed liveness check. A
+    /// failed ping proves only that they are unreachable now, and offline is
+    /// the expensive transition: transcripts cleared, sittings ended, a sign-on
+    /// alert to every buddy on the way back.
     private func markUnreachable(_ userID: UUID) async {
-        // A half-open socket never fires onClose, so a dead-but-registered one
-        // is reaped here or not at all. Reaping supersedes the countdown its
-        // own close would have started, so this takes over that duty.
+        // A half-open socket never fires onClose, so reap it here and start
+        // the offline countdown its own close would have started.
         if await connections.isConnected(userID) {
             await reap(userID)
             let generation = await connections.generation(of: userID)
@@ -230,8 +210,7 @@ struct GatewayController {
         }
         do {
             let current = try await presence.get(for: userID)
-            // Offline needs no correction, and an away they wrote themselves
-            // outranks anything the server inferred.
+            // An away the user wrote outranks anything the server inferred.
             guard current.state != .offline, current.state != .away else { return }
             guard try await presence.annotate(.unreachable, for: userID) else { return }
             await fanOut(.presence(userID: userID, presence: .unreachable), toBuddiesOf: userID)
@@ -240,9 +219,8 @@ struct GatewayController {
         }
     }
 
-    /// Evidence the user is here right now. Deliberately not called from
-    /// `goOffline`: the grace and sweep paths reach it up to two minutes after
-    /// the last real sign of life, and a stamp then would claim otherwise.
+    /// Stamps evidence the user is here now. Not called from `goOffline`,
+    /// which can run minutes after the last real sign of life.
     private func touchLastSeen(_ userID: UUID) async throws {
         try await UserModel.query(on: db).filter(\.$id == userID)
             .set(\.$lastSeenAt, to: Date()).update()
@@ -261,12 +239,8 @@ struct GatewayController {
         }
     }
 
-    /// A sitting ends when fewer than two participants remain online: for a
-    /// pair that's either party leaving — the old 1:1 auto-archive — and for a
-    /// group it's the single-sitting rule, since a conversation one person is
-    /// sitting in alone isn't one. Presence is the judge, so a member inside
-    /// the reconnect grace window still counts as present and keeps the
-    /// sitting alive, exactly as they keep their own transcripts.
+    /// Ends every sitting left with fewer than two participants online. A
+    /// member inside the reconnect grace window still counts as present.
     private func endSittings(involving userID: UUID) async {
         let all = (try? await sittings.all()) ?? [:]
         for (conversationID, sitting) in all where sitting.participants.contains(userID) {
@@ -312,9 +286,7 @@ struct GatewayController {
                 try? await touchLastSeen(userID)
                 await goOffline(userID: userID)
 
-            // Nothing in a conversation comes through here: peers dial each
-            // other's endpoints directly. The server only introduces them, to
-            // exactly the people who render this user.
+            // The server only introduces peers, to the people who render this user.
             case .announceEndpoint(let ticket):
                 guard ticket.count <= Limits.endpointTicketMaxLength else { return }
                 await connections.setEndpoint(ticket, for: userID)
@@ -322,9 +294,7 @@ struct GatewayController {
                     await connections.send(.endpoint(userID: userID, ticket: ticket), to: id)
                 }
 
-            // Only a 1:1 has a peer to tell; a group on screen counts as
-            // nothing on screen, which still takes down the dot in whichever
-            // pair chat they just left.
+            // Only a 1:1 has a peer to tell; a group counts as nothing on screen.
             case .viewing(let conversationID):
                 var target: ConnectionManager.Viewing?
                 if let conversationID,
@@ -336,15 +306,12 @@ struct GatewayController {
                 let previous = await connections.setViewing(target, for: userID)
                 await announceViewing(of: userID, from: previous, to: target)
 
-            // The humans already have the message, over their peer links;
-            // the server only sees the copy that tagged a bot, and only so
-            // the bot can answer it.
+            // The humans already have the message over their peer links.
             case .botQuery(let conversationID, let body, let context):
                 guard let conversation = try await usableConversation(conversationID, by: userID)
                 else { return }
-                // The reply is fanned out only into a live sitting, and the
-                // client's `conversationActive` for this message may not have
-                // been sent yet — the tag doesn't wait on it.
+                // The reply only fans out into a live sitting, and the
+                // client's `conversationActive` may not have arrived yet.
                 if !conversation.isGroup {
                     try await sittings.open(
                         conversationID, participants: conversation.participants, at: Date())
@@ -352,18 +319,14 @@ struct GatewayController {
                 botDispatcher.dispatch(body: body, from: userID, sessionID: conversationID,
                                        context: context)
 
-            // A peer link that wouldn't come up is the client's evidence; the
-            // server's own ping is the judgement, exactly as it was when the
-            // server relayed the message itself.
+            // The client's report is evidence; the server's ping is the judgement.
             case .unreachable(let peerID):
                 guard try await areAcceptedBuddies(userID, peerID),
                       await !connections.verifyAlive(peerID)
                 else { return }
                 await markUnreachable(peerID)
 
-            // Traffic opens the pair's sitting; its death on either party's
-            // sign-off is what tells the peer to drop the conversation's
-            // live ephemera. A group's sitting was opened by creating it.
+            // Traffic opens a pair's sitting. A group's was opened by creating it.
             case .conversationActive(let conversationID):
                 guard let conversation = try await usableConversation(conversationID, by: userID),
                       !conversation.isGroup
@@ -377,26 +340,15 @@ struct GatewayController {
         }
     }
 
-    /// A bot's answer, fanned out to everyone in the conversation — the person
-    /// who tagged it included, unlike a relayed human message, since the bot's
-    /// reply is new to them too.
-    ///
-    /// Each recipient gets it keyed the way they render the conversation: the
-    /// session ID in a group, the other party's user ID in a 1:1. A bot isn't a
-    /// participant, so clients can't infer that from the sender the way they do
-    /// for `message`.
+    /// Fans a bot's answer out to everyone in the conversation, the tagger
+    /// included, keyed by the conversation ID that clients render by.
     private func sendBotMessage(botID: UUID, sessionID: UUID, text: String) async {
-        // Everyone may have signed off during the round trip, which ends the
-        // sitting. Nobody is listening, so there is nothing to say.
+        // Everyone may have signed off during the round trip, ending the sitting.
         guard let conversation = try? await ConversationModel.find(sessionID, on: db),
               (try? await sittings.get(sessionID)) != nil
         else { return }
         let message = ChatMessage(
             id: UUID(), sessionID: sessionID, senderID: botID, body: text, sentAt: Date())
-        // One key for every recipient: the conversation's own ID, which is
-        // what clients render by. No per-recipient computation — the shape
-        // that leaked a 1:1 bot reply to a whole group when the session
-        // lookup went wrong.
         for participant in conversation.participants {
             await connections.send(
                 .botMessage(conversationID: sessionID, message: message), to: participant)
@@ -413,13 +365,10 @@ struct GatewayController {
             participants: users.map(\.dto))
     }
 
-    /// A conversation this sender may act in right now — the membership check
-    /// behind every frame that names a conversation ID, since a derived ID is
-    /// computable by anyone and is therefore not a capability. A group needs
-    /// its sitting live — a dead group is over for everyone. A pair needs
-    /// only the buddyship: its ephemera (audio, a stage) can precede any
-    /// message traffic, so there may be no sitting yet to check. A miss is
-    /// only reported, never answered with an error frame.
+    /// The membership check behind every frame naming a conversation ID, since
+    /// a derived ID is computable by anyone and so is not a capability. A group
+    /// also needs a live sitting; a pair needs only the buddyship, because its
+    /// ephemera can precede any message traffic.
     private func usableConversation(_ id: UUID, by userID: UUID) async throws -> ConversationModel? {
         guard let conversation = try await ConversationModel.find(id, on: db),
               conversation.includes(userID)
@@ -440,8 +389,8 @@ struct GatewayController {
         await announceViewing(of: userID, from: previous, to: nil)
     }
 
-    /// The peer they left hears the dot go out before the peer they joined
-    /// hears it come on; a resend of the same target says nothing.
+    /// The peer being left is told before the peer being joined; a resend of
+    /// the same target says nothing.
     private func announceViewing(of userID: UUID, from previous: ConnectionManager.Viewing?,
                                  to current: ConnectionManager.Viewing?) async {
         guard previous != current else { return }
@@ -459,8 +408,7 @@ struct GatewayController {
 
     // MARK: - Conversations
 
-    /// Find-or-create for the combination's one permanent row. A lost create
-    /// race is indistinguishable from the row having existed all along.
+    /// Find-or-create for the combination's one permanent row.
     func conversation(for participants: [UUID]) async throws -> ConversationModel {
         let id = ConversationID.derive(participants)
         if let existing = try await ConversationModel.find(id, on: db) {
@@ -499,8 +447,8 @@ struct GatewayController {
         }
     }
 
-    /// Everyone who renders this user right now: accepted buddies plus
-    /// co-participants of live group sittings, who may not be buddies at all.
+    /// Everyone who renders this user: accepted buddies plus co-participants of
+    /// live group sittings, who need not be buddies.
     private func renderers(of userID: UUID) async -> Set<UUID> {
         var recipients = Set((try? await acceptedBuddyIDs(of: userID)) ?? [])
         for (_, sitting) in (try? await sittings.all()) ?? [:]

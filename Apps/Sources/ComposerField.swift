@@ -6,17 +6,13 @@ import UIKit
 import AppKit
 #endif
 
-/// The message composer's text field, with one job SwiftUI's `TextField` can't
-/// do on these deployment targets: bold a bot tag as it's typed, so the sender
-/// sees the same emphasis the sent bubble will carry.
-///
-/// Storage stays a plain `String` — the styling is presentation, re-derived on
-/// every edit, never part of the message body.
+/// The message composer's text field. Unlike SwiftUI's `TextField` on these
+/// deployment targets, it bolds a bot tag as it's typed. Storage stays a plain
+/// `String`; the styling is re-derived on every edit.
 struct ComposerField: View {
     @Binding var text: String
     var placeholder: String
-    /// Every registered bot tag. Empty means no bolding, and the field behaves
-    /// exactly as it did before bots existed.
+    /// Every registered bot tag. Empty means no bolding.
     var aliases: [String]
     var onSubmit: () -> Void
 
@@ -39,8 +35,7 @@ struct ComposerField: View {
 
     private static var minHeight: CGFloat { 22 }
 
-    /// Bolds the leading bot tag and leaves everything else at the body font.
-    /// Shared by both platforms, and matched to what `MessageRow` renders.
+    /// Bolds the leading bot tag, matching what `MessageRow` renders.
     static func styled(_ text: String, aliases: [String],
                        font: PlatformFont, bold: PlatformFont,
                        color: PlatformColor) -> NSAttributedString {
@@ -71,8 +66,7 @@ private struct TextViewRepresentable: UIViewRepresentable {
     var aliases: [String]
     var onSubmit: () -> Void
 
-    /// Five lines, matching the `lineLimit(1...5)` this replaced; past that it
-    /// scrolls rather than pushing the transcript off screen.
+    /// Five lines, then it scrolls rather than pushing the transcript away.
     private var maxHeight: CGFloat { UIFont.preferredFont(forTextStyle: .body).lineHeight * 5 }
 
     func makeUIView(context: Context) -> UITextView {
@@ -90,8 +84,8 @@ private struct TextViewRepresentable: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.parent = self
         if view.text != text {
-            // Restoring the selection keeps the caret from jumping to the end
-            // on every keystroke, since restyling replaces the whole string.
+            // Restyling replaces the whole string, so the selection has to be
+            // restored or the caret jumps to the end on every keystroke.
             let selection = view.selectedRange
             view.attributedText = ComposerField.styled(
                 text, aliases: aliases, font: .preferredFont(forTextStyle: .body),
@@ -131,7 +125,6 @@ private struct TextViewRepresentable: UIViewRepresentable {
 }
 
 private extension UIFont {
-    /// Bold at the body text style's size, so the tag matches its line.
     static var boldBody: UIFont {
         let body = UIFont.preferredFont(forTextStyle: .body)
         guard let descriptor = body.fontDescriptor.withSymbolicTraits(.traitBold) else { return body }
@@ -195,7 +188,7 @@ private struct TextViewRepresentable: NSViewRepresentable {
             view.setSelectedRange(selection)
         }
 
-        /// Return sends, matching the single-line field this replaced.
+        /// Return sends.
         func textView(_ view: NSTextView, doCommandBy selector: Selector) -> Bool {
             guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
             parent.onSubmit()

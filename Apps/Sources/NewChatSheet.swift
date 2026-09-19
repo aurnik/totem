@@ -1,9 +1,8 @@
 import SwiftUI
 import TotemKit
 
-/// "New chat with…" composer: search over friends (fuzzy), one-tap chat open,
-/// checkbox multi-select for groups, and an inline "Add friend" row when the
-/// typed text isn't an existing friend's handle.
+/// Fuzzy search over friends, with multi-select for groups and an inline
+/// "Add friend" row when the typed text isn't an existing friend's handle.
 struct NewChatSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -19,8 +18,7 @@ struct NewChatSheet: View {
         query.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
-    /// Show "Add friend" whenever the typed text isn't an existing friend's
-    /// exact handle (or a Recents row already offering the same add).
+    /// True unless the typed text is a friend's handle or a Recents row.
     private var showsAddFriendRow: Bool {
         trimmedQuery.count >= 3 && !model.acceptedBuddies.contains {
             $0.user.handle.lowercased() == trimmedQuery
@@ -29,8 +27,7 @@ struct NewChatSheet: View {
         }
     }
 
-    /// Best fuzzy matches for the query, most relevant first; everything when
-    /// the query is empty.
+    /// Best fuzzy matches, most relevant first; everything for an empty query.
     private func ranked<T>(_ items: [T], by handle: (T) -> String) -> [T] {
         guard !trimmedQuery.isEmpty else { return items }
         return items
@@ -46,8 +43,7 @@ struct NewChatSheet: View {
         ranked(model.acceptedBuddies) { $0.user.handle }
     }
 
-    /// Group-chat co-participants who aren't friends yet — one tap sends the
-    /// request.
+    /// Group-chat co-participants who aren't friends yet.
     private var recentResults: [User] {
         ranked(model.recentNonFriends) { $0.handle }
     }
@@ -149,9 +145,8 @@ struct NewChatSheet: View {
     private func friendRow(_ buddy: Buddy) -> some View {
         let isSelected = selected.contains(buddy.user.id)
         let offline = model.presence(of: buddy).state == .offline
-        // Row tap only selects; the chat opens from the Chat button.
-        // Offline friends stay visible (the greyscale avatar says why) but
-        // can't be chatted — the server refuses delivery to them.
+        // The row only selects; the chat opens from the Chat button. Offline
+        // friends stay visible but can't be chatted.
         return Button {
             toggle(buddy.user.id)
         } label: {
@@ -172,8 +167,7 @@ struct NewChatSheet: View {
         .disabled(offline)
     }
 
-    /// From group chats together but not friends: the whole row is the
-    /// one-tap "add friend".
+    /// The whole row is a one-tap "add friend".
     private func recentRow(_ user: User) -> some View {
         Button {
             sendRequest(to: user.handle)
@@ -239,8 +233,8 @@ struct NewChatSheet: View {
     }
 }
 
-/// Subsequence fuzzy match: every needle character must appear in order.
-/// Contiguous runs and prefix matches score higher.
+/// Subsequence match: every needle character must appear in order. Contiguous
+/// runs and prefix matches score higher. Nil when there's no match.
 func fuzzyScore(needle: String, in haystack: String) -> Int? {
     guard !needle.isEmpty else { return 0 }
     var score = 0

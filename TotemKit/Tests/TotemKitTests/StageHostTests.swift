@@ -48,8 +48,7 @@ final class StageHostTests: XCTestCase {
         XCTAssertEqual(effects, [.forward(video("two"), expectedVersion: nil, to: owner)])
     }
 
-    /// Putting on a new video doesn't take the stage away from whoever holds
-    /// it — ownership changes hands only through emptiness.
+    /// A new video does not change ownership; only emptying the stage does.
     func testOwnerKeepsTheStageWhenSomeoneElseReplacesTheVideo() {
         let stage = broadcast(StageHost.act(video("one"), on: nil, by: owner, at: t0))!
         let replaced = broadcast(StageHost.receive(video("two"), expectedVersion: nil, from: second,
@@ -60,9 +59,7 @@ final class StageHostTests: XCTestCase {
 
     // MARK: - The join race
 
-    /// Two people tap Join at once. The owner applies whichever arrives
-    /// first and broadcasts it; the second is refused and re-synced alone,
-    /// so they see the board with someone else in the seat.
+    /// The owner applies the first join and re-syncs the second sender alone.
     func testSecondJoinIsRefusedAndResyncedToTheLoser() {
         let empty = broadcast(StageHost.act(.four(.start), on: nil, by: owner, at: t0))!
 
@@ -121,9 +118,7 @@ final class StageHostTests: XCTestCase {
                        "nothing to clear")
     }
 
-    /// Both started something at once from empty. Everyone — the two
-    /// claimants included — keeps the lower ID's stage, so all copies agree
-    /// without another message.
+    /// Two claims from empty: everyone keeps the lower ID's stage.
     func testSimultaneousClaimsConvergeOnTheLowerID() {
         let ids = [UUID(), UUID()].sorted { $0.uuidString < $1.uuidString }
         let (low, high) = (ids[0], ids[1])
@@ -158,8 +153,7 @@ final class StageHostTests: XCTestCase {
         XCTAssertEqual(StageHost.close(on: nil, by: owner), [])
     }
 
-    /// Everyone's countdown fires; the owner's reducer clears once and the
-    /// rest are refused against an empty stage, exactly as on the server.
+    /// The owner clears once and refuses the rest against an empty stage.
     func testExpiryClearsOnceAndUnattributed() {
         let empty = broadcast(StageHost.act(.four(.start), on: nil, by: owner, at: t0))!
         var stage = broadcast(StageHost.receive(.four(.join), expectedVersion: empty.version,

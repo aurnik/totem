@@ -1,14 +1,10 @@
 import Vapor
 
-/// Hosts the stage's YouTube player page.
-///
-/// This exists because YouTube refuses to embed into a page that has no real
-/// HTTP origin: a `WKWebView` fed HTML via `loadHTMLString` fails with player
-/// error 152/153 no matter what `baseURL` it claims. Serving the page from the
-/// Totem server gives the embed a genuine origin and Referer, which is the only
-/// arrangement that plays. Unauthenticated by necessity — a web view carries no
-/// bearer token — and harmless, since the page is static and takes only a video
-/// ID that the client already had.
+/// Hosts the stage's YouTube player page. YouTube refuses to embed into a page
+/// with no real HTTP origin, so `loadHTMLString` fails with player error
+/// 152/153 whatever `baseURL` it claims; serving the page here gives the embed
+/// a genuine origin and Referer. Unauthenticated, since a web view carries no
+/// bearer token, and static apart from a video ID the client already had.
 struct PlayerPageController: RouteCollection {
 
     func boot(routes: RoutesBuilder) throws {
@@ -25,8 +21,8 @@ struct PlayerPageController: RouteCollection {
             start: max(0, start),
             autoplay: autoplay)))
         response.headers.contentType = .html
-        // The page is per-video and trivially cheap; never let a proxy pin a
-        // stale one in front of a client that just changed videos.
+        // The page is per-video and cheap; a cached copy would be stale as
+        // soon as the video changes.
         response.headers.cacheControl = .init(noStore: true)
         return response
     }

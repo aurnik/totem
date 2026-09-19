@@ -2,17 +2,16 @@ import AVFoundation
 import SwiftUI
 
 /// Minimal spectrum analysis of one codec frame: Goertzel magnitude at
-/// log-spaced frequencies, one per display band. Not a real FFT power
-/// spectrum — just enough to draw a live equalizer.
+/// log-spaced frequencies, one per display band. Not an FFT power spectrum,
+/// only enough to draw a live equalizer.
 enum AudioAnalyzer {
     static let bandCount = 4
     /// Log-spaced probe frequencies across the speech range.
     private static let frequencies: [Double] = (0..<bandCount).map { band in
         150 * pow(3_600 / 150, Double(band) / Double(bandCount - 1))
     }
-    /// Speech rolls off ~6 dB/octave above the fundamentals, so without
-    /// compensation only the low bands ever move. Tilt the higher bands up
-    /// by the same slope.
+    /// Speech rolls off ~6 dB/octave above the fundamentals, so the higher bands
+    /// are tilted up by the same slope or only the low ones would ever move.
     private static let tiltDecibels: [Float] = frequencies.map { frequency in
         Float(6 * log2(frequency / frequencies[0]))
     }
@@ -39,9 +38,8 @@ enum AudioAnalyzer {
     }
 }
 
-/// Equalizer-style bars for one spectrum frame: spaced vertical bars,
-/// vertically centered, expanding outward with gain. Levels are squared so
-/// the noise floor stays flat and actual speech visibly jumps.
+/// Equalizer-style bars for one spectrum frame. Levels are squared so the noise
+/// floor stays flat and speech visibly jumps.
 struct AudioMeterView: View {
     let spectrum: [Float]
 

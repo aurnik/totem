@@ -1,11 +1,9 @@
-// Client-only: the Linux (containerized server) build has no
-// URLSessionWebSocketTask and never opens client sockets.
+// URLSessionWebSocketTask is unavailable on Linux, where the server builds.
 #if canImport(Darwin)
 import Foundation
 
-/// Live channel to the presence gateway over URLSessionWebSocketTask (spec §4).
-/// Emits decoded server frames and connection lifecycle events; owns the 30s
-/// heartbeat and reconnect backoff. Presence decisions stay in the state machine.
+/// Live channel to the presence gateway. Emits decoded server frames and
+/// connection lifecycle events, and owns the heartbeat and reconnect backoff.
 public actor SocketClient {
 
     public enum ConnectionEvent: Sendable {
@@ -30,8 +28,8 @@ public actor SocketClient {
         self.token = token
     }
 
-    /// Connect and stream events until `close()` is called. Reconnects
-    /// automatically with exponential backoff on non-deliberate drops.
+    /// Connects and streams events until `close()`, reconnecting with backoff
+    /// on non-deliberate drops.
     public func events() -> AsyncStream<ConnectionEvent> {
         AsyncStream { continuation in
             self.continuation = continuation
@@ -40,14 +38,14 @@ public actor SocketClient {
     }
 
     public func send(_ frame: ClientFrame) async throws {
-        // Between reconnect attempts there is no task; optional chaining
-        // would make the send silently succeed while doing nothing.
+        // Between reconnect attempts there is no task, and optional chaining
+        // would make the send succeed while doing nothing.
         guard let task else { throw URLError(.networkConnectionLost) }
         let data = try WireCoder.encoder().encode(frame)
         try await task.send(.data(data))
     }
 
-    /// Deliberate sign-off: sends the frame, closes the socket, no reconnect.
+    /// Sign-off: sends the frame, closes the socket, does not reconnect.
     public func close() async {
         deliberatelyClosed = true
         try? await send(.signOff)
@@ -63,8 +61,7 @@ public actor SocketClient {
         self.task = task
         task.resume()
 
-        // The handshake has no explicit callback here; the first successful
-        // receive confirms the connection.
+        // The first successful receive confirms the connection.
         receiveTask = Task { await self.receiveLoop(task) }
         heartbeatTask = Task { await self.heartbeatLoop() }
     }

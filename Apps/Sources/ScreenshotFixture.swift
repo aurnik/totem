@@ -1,9 +1,8 @@
 import Foundation
 import TotemKit
 
-/// Seeds the app with a made-up account for marketing screenshots, chosen by a
-/// launch argument (`--screenshot friends|chat|voice|four`). Debug builds only;
-/// `Apps/screenshots.sh` drives it on the simulator.
+/// Seeds the app with a made-up account for marketing screenshots, selected by
+/// `--screenshot friends|chat|voice|four`. Debug builds only.
 enum ScreenshotFixture {
     enum Scene: String {
         case friends, chat, voice, four
@@ -31,7 +30,6 @@ enum ScreenshotFixture {
 
     private static let me = user(1, "sk8rboi", Avatar(skinTone: 0.35, hair: 0.2))
 
-    // The group's three members, then the rest of the list.
     private static let bobaboy = user(2, "BoBaBoY", Avatar(skinTone: 0.6, hair: 0.85, glasses: true))
     private static let pixiedust = user(3, "pixiedust", Avatar(skinTone: 0.1, hair: 0.05))
     private static let surfnturf = user(4, "surfnturf88", Avatar(skinTone: 0.8, hair: 0.65, cigarette: true))
@@ -108,7 +106,7 @@ enum ScreenshotFixture {
         }
     }
 
-    /// A transcript from a script: a nil speaker is a centered notice.
+    /// A nil speaker is a centered notice.
     private static func transcript(_ lines: [(User?, String)]) -> [AppModel.TranscriptItem] {
         let start = Date().addingTimeInterval(-Double(lines.count) * 40)
         return lines.enumerated().map { index, line in

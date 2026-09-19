@@ -1,9 +1,8 @@
 import Foundation
 
-/// Extensions that can occupy a conversation's stage — the shared area at the
-/// top of a chat that every participant sees. Closed list: adding one means a
-/// case here plus cases in `StageState` and `StageAction`, so the compiler
-/// finds every site that has to handle it.
+/// Extensions that can occupy a conversation's stage, the shared area at the
+/// top of a chat. Adding one means a case here plus cases in `StageState` and
+/// `StageAction`, so the compiler finds every site that has to handle it.
 public enum ChatExtensionID: String, Codable, Sendable, CaseIterable {
     case youtube
     case four
@@ -16,9 +15,8 @@ public struct YouTubeState: Codable, Hashable, Sendable {
     public var title: String
     public var thumbnailURL: URL?
     public var isPlaying: Bool
-    /// Playback position as of `positionAt`, which the server stamps. Clients
-    /// derive the live position from these two rather than reporting their own
-    /// clock, so a late joiner lands where everyone else already is.
+    /// Playback position as of `positionAt`. Clients derive the live position
+    /// from the pair rather than reporting their own clock.
     public var positionSeconds: Double
     public var positionAt: Date
 
@@ -41,15 +39,12 @@ public struct YouTubeState: Codable, Hashable, Sendable {
 public enum YouTubeAction: Codable, Hashable, Sendable {
     /// Puts a video on the stage, replacing whatever was playing.
     case setVideo(videoID: String, title: String, thumbnailURL: URL?)
-    /// Absolute, never a toggle: two people pausing at the same moment must
-    /// converge on paused rather than undoing each other.
+    /// Absolute rather than a toggle, so concurrent identical intents converge.
     case setPlaying(Bool, positionSeconds: Double)
-    /// Moves everyone's playhead, leaving the play state alone. Distinct from
-    /// `setPlaying` because that one is a no-op when the play state already
-    /// matches, which is exactly the case a skip needs to survive.
+    /// Moves the playhead, leaving the play state alone. Separate from
+    /// `setPlaying`, which no-ops when the play state already matches.
     case seek(positionSeconds: Double)
-    /// The video reached its end, so the stage goes away. Every client
-    /// watching reports this; the version check keeps only the first.
+    /// The video ended. Every client reports this; the version check keeps the first.
     case ended
 
     public static let skipInterval: Double = 15
@@ -61,8 +56,7 @@ public enum FourDisc: String, Codable, Hashable, Sendable {
     case red, yellow
 }
 
-/// A cell on the board. `row` counts up from the bottom, the direction pieces
-/// stack in.
+/// A cell on the board. `row` counts up from the bottom.
 public struct FourSlot: Codable, Hashable, Sendable {
     public var column: Int
     public var row: Int
@@ -74,9 +68,8 @@ public struct FourSlot: Codable, Hashable, Sendable {
 }
 
 public enum FourOutcome: Codable, Hashable, Sendable {
-    /// `line` is the whole run that won — four cells, or more when the winning
-    /// drop extended a longer one — so clients draw it rather than re-deriving
-    /// it and risking a different answer than the server got.
+    /// `line` is the whole winning run, four cells or more, so clients draw it
+    /// rather than re-deriving it.
     case won(disc: FourDisc, line: [FourSlot])
     case draw
 }
@@ -88,15 +81,14 @@ public struct FourState: Codable, Hashable, Sendable {
     /// How long a finished board stays up before it clears itself.
     public static let lingerSeconds: Double = 30
 
-    /// Column-major, each entry a bottom-up stack. Stacks rather than a flat
-    /// grid because a floating piece is then unrepresentable.
+    /// Column-major bottom-up stacks, so a floating piece is unrepresentable.
     public var stacks: [[FourDisc]]
-    /// Whoever started the game, and always red.
+    /// Whoever started the game, always red.
     public var red: UUID
     /// Nil until someone takes the second seat.
     public var yellow: UUID?
     public var outcome: FourOutcome?
-    /// Stamped when `outcome` is set; the countdown to clearing runs off it.
+    /// Stamped when `outcome` is set; the clearing countdown runs off it.
     public var finishedAt: Date?
 
     public init(red: UUID) {
@@ -113,8 +105,8 @@ public struct FourState: Codable, Hashable, Sendable {
         self.finishedAt = finishedAt
     }
 
-    /// Derived from the board rather than stored, so it can never disagree with
-    /// it. Red starts, so an even number of pieces means red is up.
+    /// Derived from the board so it cannot disagree with it. Red starts, so an
+    /// even piece count means red is up.
     public var turn: FourDisc {
         stacks.reduce(0) { $0 + $1.count }.isMultiple(of: 2) ? .red : .yellow
     }
@@ -137,8 +129,8 @@ public struct FourState: Codable, Hashable, Sendable {
         stacks.allSatisfy { $0.count >= Self.rows }
     }
 
-    /// Four axes, each walked in both directions from the slot just filled —
-    /// which is the only cell that can have completed a line.
+    /// Walked in both directions from the slot just filled, the only cell that
+    /// can have completed a line.
     private static let axes = [(1, 0), (0, 1), (1, 1), (1, -1)]
 
     public func winningLine(from slot: FourSlot) -> [FourSlot]? {
@@ -156,8 +148,7 @@ public struct FourState: Codable, Hashable, Sendable {
                 }
             }
             guard line.count >= Self.winLength else { continue }
-            // Sorted so the ends of the run are the ends of the array, which is
-            // all a client needs to stroke a line through it.
+            // Sorted so the ends of the run are the ends of the array.
             return line.sorted { ($0.column, $0.row) < ($1.column, $1.row) }
         }
         return nil
@@ -167,11 +158,11 @@ public struct FourState: Codable, Hashable, Sendable {
 public enum FourAction: Codable, Hashable, Sendable {
     /// Puts an empty board on the stage with the sender as red.
     case start
-    /// Takes the second seat, which only stays open until someone does.
+    /// Takes the second seat.
     case join
     case drop(column: Int)
-    /// The finished board's time is up. Every client with the chat open reports
-    /// this; the version check keeps only the first.
+    /// The finished board's time is up. Every client reports this; the version
+    /// check keeps the first.
     case expire
 }
 
@@ -188,11 +179,9 @@ public enum StageState: Codable, Hashable, Sendable {
         }
     }
 
-    /// Whether losing this stage would destroy something the participants can't
-    /// trivially recreate, so another extension may not claim it. Depends on the
-    /// state and not just the extension: a video can be put back on in two taps,
-    /// a game in progress can't — but a game that has already been won is as
-    /// disposable as a video.
+    /// Whether losing this stage would destroy something the participants
+    /// cannot recreate, so another extension may not claim it. It depends on
+    /// the state, not the extension: a finished game is as disposable as a video.
     public var preservesState: Bool {
         switch self {
         case .youtube: false
@@ -212,12 +201,8 @@ public enum StageAction: Codable, Hashable, Sendable {
         }
     }
 
-    /// Conditional actions change what the sender was looking at, so they carry
-    /// the version they saw and are dropped if it has moved on — a pause aimed
-    /// at one video can never land on the video someone just swapped in, and a
-    /// drop aimed at one board can never land on the next game.
-    /// Claiming the stage is unconditional: "put this on now" doesn't depend on
-    /// what was playing before.
+    /// A conditional action carries the version it targeted and is dropped if
+    /// the stage has moved on. Claiming the stage is unconditional.
     public var isConditional: Bool {
         switch self {
         case .youtube(.setVideo), .four(.start): false
@@ -231,9 +216,8 @@ public enum StageAction: Codable, Hashable, Sendable {
 public struct Stage: Codable, Hashable, Sendable {
     public var version: Int
     public var state: StageState
-    /// Whoever claimed the stage from empty, and has held it since — the
-    /// stage changes hands only by emptying. Their device runs the reducer
-    /// for everyone else's actions and is the one party whose broadcast of
+    /// Whoever claimed the stage from empty; only emptying it changes hands.
+    /// Their device runs the reducer and is the only party whose broadcast of
     /// the stage counts (`StageHost`).
     public var ownerID: UUID
 
@@ -244,27 +228,24 @@ public struct Stage: Codable, Hashable, Sendable {
     }
 }
 
-/// Pure and shared: the stage's owner runs this for everyone's actions, and
-/// every client carries the identical code so all agree on what an action
-/// means.
+/// The stage owner runs this for everyone's actions; every client carries the
+/// same code so all agree on what an action means.
 public enum StageReducer {
     public enum Outcome: Sendable, Equatable {
-        /// Store it and broadcast to every participant, including the sender.
+        /// Store and broadcast to every participant, including the sender.
         case updated(Stage)
-        /// A no-op — don't broadcast, or N clients reporting the same thing
-        /// would make everyone re-seek.
+        /// A no-op. Broadcasting would make everyone re-seek when several
+        /// clients report the same thing.
         case unchanged
-        /// The stage is finished and should be emptied. Nobody chose this, so
-        /// it goes out unattributed and posts no notice.
+        /// The stage is finished. Sent unattributed, so it posts no notice.
         case cleared
-        /// Stale version, or a takeover of a stage worth preserving. Re-sync
-        /// the sender only.
+        /// Stale version, or a takeover of a stage that preserves state.
+        /// Re-sync the sender alone.
         case rejected
     }
 
-    /// `actorID` is whoever sent the action, authenticated by the caller. It is
-    /// a parameter rather than part of the action payload because a client that
-    /// named its own identity could name someone else's and move for them.
+    /// `actorID` is authenticated by the caller. It is a parameter rather than
+    /// part of the action payload so a client cannot act as someone else.
     public static func reduce(_ current: Stage?, _ action: StageAction, by actorID: UUID,
                               expectedVersion: Int?, at now: Date) -> Outcome {
         if action.isConditional {
@@ -282,9 +263,8 @@ public enum StageReducer {
         }
     }
 
-    /// The next version of the stage. Ownership is settled here and nowhere
-    /// else: an empty stage goes to whoever fills it, and a held one stays
-    /// with its owner whatever is put on it.
+    /// The next version of the stage, and the only place ownership is assigned:
+    /// an empty stage goes to whoever fills it, a held one keeps its owner.
     private static func next(_ current: Stage?, _ state: StageState, by actorID: UUID) -> Stage {
         Stage(version: (current?.version ?? 0) + 1, state: state,
               ownerID: current?.ownerID ?? actorID)
@@ -313,9 +293,7 @@ public enum StageReducer {
             return .updated(next(current, .youtube(state), by: actorID))
 
         case .ended:
-            // The version check above already dropped every report but the
-            // first, and once the stage is gone the stragglers find nothing to
-            // act on and are refused.
+            // The version check above dropped every report but the first.
             return .cleared
         }
     }
@@ -324,10 +302,8 @@ public enum StageReducer {
                               to current: Stage?, at now: Date) -> Outcome {
         switch action {
         case .start:
-            // Starting is unconditional, so nothing above stops it landing on a
-            // board that's already up — and a game in progress must not be
-            // reset by anyone watching. A finished one is fair game: that's
-            // "play again".
+            // Starting is unconditional, so guard a live game here. A finished
+            // board may be replaced: that is "play again".
             if let current, case .four(let game) = current.state, game.outcome == nil {
                 return .rejected
             }
@@ -343,7 +319,7 @@ public enum StageReducer {
         case .drop(let column):
             guard let current, case .four(var game) = current.state,
                   game.outcome == nil,
-                  // Nobody moves until there's someone to move against.
+                  // Nobody moves until there is someone to move against.
                   game.yellow != nil,
                   game.player(game.turn) == actorID,
                   game.stacks.indices.contains(column),
@@ -363,9 +339,8 @@ public enum StageReducer {
             return .updated(next(current, .four(game), by: actorID))
 
         case .expire:
-            // A win leaves the board up so everyone sees the line; this is what
-            // takes it down afterwards. Refused while the game is live so a
-            // stray frame can't end one.
+            // A win leaves the board up so everyone sees the line; this takes
+            // it down. Refused while the game is live.
             guard let current, case .four(let game) = current.state,
                   game.outcome != nil
             else { return .rejected }
@@ -374,7 +349,7 @@ public enum StageReducer {
     }
 }
 
-/// A search hit from the server's YouTube proxy, and what the picker shows.
+/// A search hit from the server's YouTube proxy.
 public struct YouTubeVideo: Codable, Hashable, Sendable, Identifiable {
     public var id: String
     public var title: String
