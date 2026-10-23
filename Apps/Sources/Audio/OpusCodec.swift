@@ -42,11 +42,23 @@ final class OpusCodec {
     }
 
     func decode(_ packet: Data) throws -> AVAudioPCMBuffer {
+        try decodePacket(packet)
+    }
+
+    /// One frame for a packet that never arrived: the codec extrapolates from
+    /// the last one, fading over repeats (measured: an empty packet does this
+    /// through the system converter too).
+    func conceal() throws -> AVAudioPCMBuffer {
+        try decodePacket(Data())
+    }
+
+    private func decodePacket(_ packet: Data) throws -> AVAudioPCMBuffer {
         guard let decoder else { throw Unavailable() }
         let input = AVAudioCompressedBuffer(
-            format: Self.opusFormat, packetCapacity: 1, maximumPacketSize: packet.count)
+            format: Self.opusFormat, packetCapacity: 1, maximumPacketSize: max(packet.count, 1))
         packet.withUnsafeBytes { raw in
-            input.data.copyMemory(from: raw.baseAddress!, byteCount: packet.count)
+            guard let base = raw.baseAddress else { return }
+            input.data.copyMemory(from: base, byteCount: packet.count)
         }
         input.byteLength = UInt32(packet.count)
         input.packetCount = 1

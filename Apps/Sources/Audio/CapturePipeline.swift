@@ -1,37 +1,7 @@
 import AVFoundation
 
-/// Releases encoded packets one per frame interval on a strict timer. One-shot
-/// dispatch delays get coalesced by tens of milliseconds, and bunched arrivals
-/// are what a short receive buffer cannot absorb.
-final class PacketPacer: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "voice.pacer", qos: .userInteractive)
-    private var timer: DispatchSourceTimer?
-    private var pending: [(Data, [Float])] = []
-
-    func start(_ sink: @escaping @Sendable (Data, [Float]) -> Void) {
-        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(1))
-        timer.setEventHandler { [weak self] in
-            guard let self, !self.pending.isEmpty else { return }
-            let (packet, spectrum) = self.pending.removeFirst()
-            sink(packet, spectrum)
-        }
-        self.timer = timer
-        timer.activate()
-    }
-
-    func enqueue(_ packet: Data, _ spectrum: [Float]) {
-        queue.async { self.pending.append((packet, spectrum)) }
-    }
-
-    func stop() {
-        timer?.cancel()
-        timer = nil
-    }
-}
-
-/// Re-cuts the tap's arbitrary buffers into exact codec frames, normalizing
-/// gain on the way out. Used only from the serial tap.
+/// Re-cuts the mic's buffers into exact codec frames, normalizing gain on
+/// the way out. Used only from the audio queue.
 final class FrameAssembler {
     private var pending: [Float] = []
     private let normalizer = AudioNormalizer()

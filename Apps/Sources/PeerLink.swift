@@ -16,6 +16,8 @@ final class PeerLink: @unchecked Sendable {
     struct AudioFrame: Sendable {
         let senderID: UUID
         let conversationID: UUID
+        /// Per sender, so the receiver can tell a short gap from a pause.
+        let sequence: UInt32
         let packet: Data
     }
 
@@ -474,7 +476,7 @@ final class PeerLink: @unchecked Sendable {
             return true
         }
         guard inOrder else { return }
-        onAudio(AudioFrame(senderID: userID, conversationID: conversationID,
+        onAudio(AudioFrame(senderID: userID, conversationID: conversationID, sequence: sequence,
                            packet: datagram.suffix(from: Self.headerBytes)))
     }
 }

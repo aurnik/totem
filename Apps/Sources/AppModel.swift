@@ -79,7 +79,6 @@ final class AppModel {
     /// the reducer; everyone else renders what the owner broadcasts back.
     var stages: [UUID: Stage] = [:]
     private var playbackFailureNoticed: Set<UUID> = []
-    private var speakingExpiry: [UUID: Task<Void, Never>] = [:]
     private var captureTask: Task<Void, Never>?
     /// The conversation the mic is transcribed into, one at a time.
     var dictationConversation: UUID?
@@ -187,6 +186,10 @@ final class AppModel {
     init() {
         NotificationManager.shared.activate()
         audio.onOutputVolumeChange = { [weak self] in self?.outputVolumeChanged() }
+        audio.onMeters = { [weak self] report in self?.applyMeters(report) }
+        audio.onPlaybackFailure = { [weak self] conversationID, reason in
+            self?.noticePlaybackFailure(in: conversationID, reason: reason)
+        }
         pruneUnreadableSamples()
         #if os(macOS)
         observeSystemSleep()
@@ -325,6 +328,7 @@ final class AppModel {
         pairPeers = Dictionary(uniqueKeysWithValues: buddies.map {
             (ConversationID.derive([selfID, $0.user.id]), $0.user.id)
         })
+        syncAllowedSenders()
     }
 
     /// Ascending by open-request count, so broad requesters sort last.
@@ -380,15 +384,14 @@ final class AppModel {
         refreshPushSettings()
         let socket = SocketClient(url: api.socketURL, token: token)
         self.socket = socket
+        let audio = self.audio
         let peers = PeerLink(
             onTicket: { [weak self] ticket in
                 Task { @MainActor in self?.fire(.announceEndpoint(ticket: ticket)) }
             },
-            onAudio: { [weak self] frame in
-                Task { @MainActor in
-                    self?.receiveAudio(conversationID: frame.conversationID,
-                                       senderID: frame.senderID, packet: frame.packet)
-                }
+            onAudio: { frame in
+                audio.receive(frame.packet, sequence: frame.sequence,
+                              from: frame.senderID, in: frame.conversationID)
             },
             onFrame: { [weak self] inbound in
                 Task { @MainActor in self?.handle(inbound) }
@@ -447,8 +450,6 @@ final class AppModel {
         speakingUsers = [:]
         speakerSpectrum = [:]
         playbackFailureNoticed = []
-        speakingExpiry.values.forEach { $0.cancel() }
-        speakingExpiry = [:]
     }
 
     // MARK: - Chat
@@ -679,7 +680,7 @@ final class AppModel {
         stopMic()
         sampleRecordingPackets = []
         sampleRecordingSeconds = 0
-        let started = await audio.startMic(onPacket: { [weak self] packet, _ in
+        let started = await audio.startMic(onPacket: { [weak self] packet in
             Task { @MainActor in self?.appendSamplePacket(packet) }
         })
         isRecordingSample = started
@@ -742,10 +743,11 @@ final class AppModel {
         let packets = OpusPacketFile.decode(data)
         guard !packets.isEmpty else { return }
         peers.setRecipients(participants(in: conversationID), of: conversationID)
-        Task { [weak self] in
+        let audio = self.audio
+        Task {
             for packet in packets {
                 peers.send(packet, in: conversationID)
-                self?.receiveAudio(conversationID: conversationID, senderID: selfID, packet: packet)
+                audio.receive(packet, sequence: nil, from: selfID, in: conversationID)
                 try? await Task.sleep(for: AudioStreamer.frameDuration)
             }
         }
@@ -792,8 +794,6 @@ final class AppModel {
         guard let selfID = currentUser?.id else { return }
         speakingUsers[conversationID]?.remove(selfID)
         speakerSpectrum[selfID] = nil
-        speakingExpiry[selfID]?.cancel()
-        speakingExpiry[selfID] = nil
     }
 
     func stopMic() {
@@ -850,23 +850,16 @@ final class AppModel {
             return
         }
 
-        var packetSink: (@Sendable (Data, [Float]) -> Void)?
+        var packetSink: (@Sendable (Data) -> Void)?
+        var monitor: AudioStreamer.Speaker?
         if broadcasting, let peers {
             peers.setRecipients(participants(in: conversationID), of: conversationID)
-            let selfID = currentUser?.id
-            packetSink = { [weak self] packet, spectrum in
-                // Off the audio thread: datagrams don't block.
-                peers.send(packet, in: conversationID)
-                // Meter-only self monitor; playing it back would echo.
-                guard let selfID else { return }
-                Task { @MainActor in
-                    guard let self, self.liveMicConversation == conversationID else { return }
-                    self.markSpeaking(selfID, in: conversationID, spectrum: spectrum)
-                }
-            }
+            packetSink = { packet in peers.send(packet, in: conversationID) }
+            // Meter-only self monitor; playing it back would echo.
+            monitor = currentUser.map { AudioStreamer.Speaker(conversationID: conversationID, userID: $0.id) }
         }
 
-        guard await audio.startMic(onPacket: packetSink, onBuffer: dictationSink) else {
+        guard await audio.startMic(onPacket: packetSink, onBuffer: dictationSink, monitor: monitor) else {
             stopMic()
             return
         }
@@ -887,13 +880,22 @@ final class AppModel {
         return peer(of: conversationID) != nil || !endedGroups.contains(conversationID)
     }
 
-    /// Keeps links warm to everyone in an open chat.
+    /// Keeps links warm to everyone in an open chat, and tells the audio
+    /// queue who it may hear there.
     private func refreshWarmLinks() {
         var wanted = Set<UUID>()
         for conversationID in activeConversations {
             wanted.formUnion(participants(in: conversationID))
         }
         peers?.keepWarm(wanted)
+        syncAllowedSenders()
+    }
+
+    private func syncAllowedSenders() {
+        let allowed = Dictionary(uniqueKeysWithValues: activeConversations.map {
+            ($0, participants(in: $0))
+        })
+        audio.setAllowedSenders(allowed, localUserID: currentUser?.id)
     }
 
     // MARK: - Dictation
@@ -940,11 +942,10 @@ final class AppModel {
         if micConversation == conversationID { stopMic() }
         mutedListeners[conversationID] = nil
         mutedConversations.remove(conversationID)
+        audio.setMuted(false, in: conversationID)
         reportedMutedConversations.remove(conversationID)
         for senderID in speakingUsers.removeValue(forKey: conversationID) ?? [] {
             audio.stopSpeaker(senderID)
-            speakingExpiry[senderID]?.cancel()
-            speakingExpiry[senderID] = nil
             speakerSpectrum[senderID] = nil
         }
     }
@@ -969,10 +970,12 @@ final class AppModel {
     func toggleVoiceMute(in conversationID: UUID) {
         if mutedConversations.remove(conversationID) == nil {
             mutedConversations.insert(conversationID)
+            audio.setMuted(true, in: conversationID)
             if !(speakingUsers[conversationID] ?? []).isEmpty {
                 reportMutedIfNeeded(in: conversationID)
             }
         } else {
+            audio.setMuted(false, in: conversationID)
             reportHearingIfRestored(in: conversationID)
         }
     }
@@ -1518,41 +1521,32 @@ final class AppModel {
         }
     }
 
-    /// The link vouches for the sender, not the conversation they named.
-    private func receiveAudio(conversationID: UUID, senderID: UUID, packet: Data) {
-        guard activeConversations.contains(conversationID),
-              senderID == currentUser?.id || participants(in: conversationID).contains(senderID)
-        else { return }
-        let spectrum: [Float]
-        switch audio.play(packet, from: senderID,
-                          audible: !mutedConversations.contains(conversationID)) {
-        case .heard(let heard):
-            spectrum = heard
-        case .silent(let reason):
-            spectrum = Array(repeating: 0, count: AudioAnalyzer.bandCount)
-            if !playbackFailureNoticed.contains(conversationID) {
-                playbackFailureNoticed.insert(conversationID)
-                append(.notice(id: UUID(), text: "Can't play live audio — \(reason)", at: Date()),
-                       to: conversationID)
+    /// Levels arrive coalesced from the audio queue, which has already
+    /// checked the sender against the conversation. A speaker appears on
+    /// their first level and leaves when their packets stop.
+    private func applyMeters(_ report: AudioStreamer.MeterReport) {
+        for (speaker, spectrum) in report.levels {
+            guard activeConversations.contains(speaker.conversationID) else { continue }
+            // The self monitor ends with the mic, whatever is still in flight.
+            if speaker.userID == currentUser?.id, liveMicConversation != speaker.conversationID { continue }
+            // A silent chat just became audible: tell speakers we can't hear.
+            if (speakingUsers[speaker.conversationID] ?? []).isEmpty {
+                reportMutedIfNeeded(in: speaker.conversationID)
             }
+            speakingUsers[speaker.conversationID, default: []].insert(speaker.userID)
+            speakerSpectrum[speaker.userID] = spectrum
         }
-        // A silent chat just became audible: tell speakers we can't hear.
-        if (speakingUsers[conversationID] ?? []).isEmpty {
-            reportMutedIfNeeded(in: conversationID)
+        for speaker in report.stopped {
+            speakingUsers[speaker.conversationID]?.remove(speaker.userID)
+            speakerSpectrum[speaker.userID] = nil
         }
-        markSpeaking(senderID, in: conversationID, spectrum: spectrum)
     }
 
-    private func markSpeaking(_ senderID: UUID, in conversationID: UUID, spectrum: [Float]) {
-        speakingUsers[conversationID, default: []].insert(senderID)
-        speakerSpectrum[senderID] = spectrum
-        speakingExpiry[senderID]?.cancel()
-        speakingExpiry[senderID] = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.2))
-            guard !Task.isCancelled, let self else { return }
-            self.speakingUsers[conversationID]?.remove(senderID)
-            self.speakerSpectrum[senderID] = nil
-            self.audio.stopSpeaker(senderID)
-        }
+    private func noticePlaybackFailure(in conversationID: UUID, reason: String) {
+        guard activeConversations.contains(conversationID),
+              !playbackFailureNoticed.contains(conversationID)
+        else { return }
+        playbackFailureNoticed.insert(conversationID)
+        append(.notice(id: UUID(), text: "Can't play live audio — \(reason)", at: Date()), to: conversationID)
     }
 }
