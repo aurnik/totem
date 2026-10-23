@@ -2,7 +2,8 @@
 
     testflight_submit.py --status
     testflight_submit.py --commits <build-number>
-    testflight_submit.py --submit <build-number> [--notes-file <path>] [--dry-run] [--notify]
+    testflight_submit.py --submit <build-number> [--notes-file <path>] [--dry-run]
+    testflight_submit.py --release <build-number>
     testflight_submit.py --expire-previous <build-number> [--dry-run]
 
 Uploading a build only puts it in App Store Connect. External testers see
@@ -111,6 +112,9 @@ def status():
         print(f"  expired:           {a.get('expired')}")
         print(f"  usesNonExempt:     {a.get('usesNonExemptEncryption')}")
         print(f"  expirationDate:    {a.get('expirationDate')}")
+        detail = api("GET", f"builds/{build['id']}/buildBetaDetail")["data"]["attributes"]
+        print(f"  external state:    {detail.get('externalBuildState')}  "
+              f"(autoNotify={detail.get('autoNotifyEnabled')})")
         loc = api("GET", f"builds/{build['id']}/betaBuildLocalizations")["data"]
         print(f"  whatsNew:          {[l['attributes'].get('whatsNew') for l in loc] or 'NONE'}")
         sub = api("GET", f"builds/{build['id']}/betaAppReviewSubmission",
@@ -175,18 +179,30 @@ def add_to_group(group_id, build_id):
     return "already attached" if result and "error" in result else "attached"
 
 
-def set_auto_notify(build_id, enabled):
-    """Whether TestFlight emails every tester when the build goes live.
+def set_auto_notify(build_id):
+    """Release the build to testers the moment Beta App Review approves it.
 
-    Off unless asked for; testers get the build either way, and the in-app
-    banner tells anyone who falls behind. Must run before the build reaches an
-    external group, which is what sends the mail.
+    Without this, an approved build sits in "Approved" forever: it never reaches
+    the external group, TestFlight shows testers no update, and the public
+    link answers "not accepting new testers". That is what happened to every
+    build from 2026-08-12 to 2026-09-19. The notification is the release; the
+    in-app banner only helps someone who could already install.
     """
     detail = api("GET", f"builds/{build_id}/buildBetaDetail")["data"]["id"]
     api("PATCH", f"buildBetaDetails/{detail}",
         {"data": {"id": detail, "type": "buildBetaDetails",
-                  "attributes": {"autoNotifyEnabled": enabled}}})
-    return "testers emailed" if enabled else "silent"
+                  "attributes": {"autoNotifyEnabled": True}}})
+    return "on"
+
+
+def release(version):
+    """Notify Testers for a build that was approved while auto-notify was off."""
+    build = latest_build(app_id(), version)
+    api("POST", "buildBetaNotifications",
+        {"data": {"type": "buildBetaNotifications",
+                  "relationships": {"build": {"data": {"type": "builds", "id": build["id"]}}}}})
+    state = api("GET", f"builds/{build['id']}/buildBetaDetail")["data"]["attributes"]
+    print(f"release {version}: externalBuildState={state['externalBuildState']}")
 
 
 def submit_for_review(build_id):
@@ -257,7 +273,7 @@ def notes_for(app, version):
     return previous, "\n".join(titles)
 
 
-def submit(version, notes=None, dry_run=False, notify=False):
+def submit(version, notes=None, dry_run=False):
     app = app_id()
     build = latest_build(app, version)
     build_id = build["id"]
@@ -273,14 +289,13 @@ def submit(version, notes=None, dry_run=False, notify=False):
     print(f"build {version} ({build_id}) is VALID; {origin}\n")
     print(notes)
     if dry_run:
-        print(f"\nnotification: {'testers emailed' if notify else 'silent'}")
         expire_previous(app, version, dry_run=True)
         print(f"announce: would set LATEST_CLIENT_BUILD={version} on Railway")
         print("\n(dry run — nothing submitted)")
         return
 
     print(f"\nwhats-new: {set_whats_new(build_id, notes)}")
-    print(f"notification: {set_auto_notify(build_id, notify)}")
+    print(f"auto-notify: {set_auto_notify(build_id)}")
     for group in external_groups(app):
         name = group["attributes"]["name"]
         print(f"group {name}: {add_to_group(group['id'], build_id)}")
@@ -301,8 +316,9 @@ if __name__ == "__main__":
             supplied = open(path).read().strip()
             if not supplied:
                 sys.exit(f"{path} is empty — review rejects a build with no notes")
-        submit(version, notes=supplied, dry_run="--dry-run" in sys.argv,
-               notify="--notify" in sys.argv)
+        submit(version, notes=supplied, dry_run="--dry-run" in sys.argv)
+    elif "--release" in sys.argv:
+        release(sys.argv[sys.argv.index("--release") + 1])
     elif "--expire-previous" in sys.argv:
         version = sys.argv[sys.argv.index("--expire-previous") + 1]
         expire_previous(app_id(), version, dry_run="--dry-run" in sys.argv)
@@ -315,4 +331,5 @@ if __name__ == "__main__":
         sys.exit("usage: testflight_submit.py --status "
                  "| --commits <build-number> "
                  "| --submit <build-number> [--notes-file <path>] [--dry-run] "
+                 "| --release <build-number> "
                  "| --expire-previous <build-number> [--dry-run]")
