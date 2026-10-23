@@ -262,7 +262,7 @@ struct GatewayController {
     private func handleFrame(buffer: Data, from userID: UUID) async {
         await connections.noteActivity(userID)
         guard let frame = try? WireCoder.decoder().decode(ClientFrame.self, from: buffer) else {
-            await connections.send(.error("Unrecognized frame."), to: userID)
+            await connections.send(.error("This version of Totem is out of date. Update it in TestFlight."), to: userID)
             return
         }
         do {
