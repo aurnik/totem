@@ -137,9 +137,8 @@ final class AudioStreamer {
     }
 
     private func startCaptureEngine() -> Bool {
-        captureEngine.prepare()
         do {
-            try captureEngine.start()
+            try start(captureEngine)
         } catch {
             lastError = "capture: \(error.localizedDescription)"
             Log.audio.error("capture engine failed to start: \(error)")
@@ -250,10 +249,8 @@ final class AudioStreamer {
     }
 
     private func startPlaybackEngine() -> Bool {
-        guard !playbackEngine.isRunning else { return true }
-        playbackEngine.prepare()
         do {
-            try playbackEngine.start()
+            try start(playbackEngine)
             lastError = nil
             return true
         } catch {
@@ -261,6 +258,24 @@ final class AudioStreamer {
             Log.audio.error("playback engine failed to start: \(error)")
             return false
         }
+    }
+
+    /// Every engine start goes through here. A node that was playing when
+    /// its engine stopped still reports `isPlaying` after the restart but
+    /// renders nothing, and `play()` alone does not revive it (measured: only
+    /// `stop()` then `play()` does). Stopping the pool here lets the
+    /// `isPlaying` checks re-arm each node on its next packet; the jitter
+    /// buffers go too, since the stopped node's completions would otherwise
+    /// count against the fresh queue.
+    private func start(_ engine: AVAudioEngine) throws {
+        guard !engine.isRunning else { return }
+        engine.prepare()
+        try engine.start()
+        guard engine === playbackEngine else { return }
+        for node in players.values {
+            node.stop()
+        }
+        jitterBuffers = [:]
     }
 
     // MARK: - Session
